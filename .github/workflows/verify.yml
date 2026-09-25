@@ -1,0 +1,70 @@
+name: Verify agent phase
+on:
+  push:
+    branches: [main, codex/agent-phase]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: verify-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_USER: moolai
+          POSTGRES_PASSWORD: moolai
+          POSTGRES_DB: moolai
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U moolai -d moolai"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install local-search and audio test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ripgrep ffmpeg
+          rg --version
+          ffmpeg -version
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run check
+      - name: Install isolated harness experiment dependencies
+        run: npm ci --prefix experiments/harness-comparison --ignore-scripts --no-audit --no-fund
+      - name: Verify harness integrations without providers
+        run: |
+          npm run typecheck --prefix experiments/harness-comparison
+          npm test --prefix experiments/harness-comparison
+          ./node_modules/.bin/tsc --ignoreConfig --noEmit --strict --noUncheckedIndexedAccess --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck scripts/validate-agent-harness.ts
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13.5"
+          cache: pip
+          cache-dependency-path: backend/constraints.txt
+      - run: python -m pip install -r backend/requirements-dev.txt -c backend/constraints.txt
+      - run: python -m pytest -q
+        working-directory: backend
+        env:
+          TEST_DATABASE_URL: postgresql://moolai:moolai@127.0.0.1:5432/moolai
+      - run: docker build --tag moolai-backend:verify ./backend
+      - name: Container health and configuration
+        run: |
+          cp backend/.env.example backend/.env
+          docker compose config --quiet
+          docker run --detach --name moolai-verify --network host -e MOOLAI_BACKEND_TOKEN=ci-fixture-token -e DATABASE_URL=postgresql://moolai:moolai@127.0.0.1:5432/moolai moolai-backend:verify
+          python scripts/smoke-container.py
+      - if: failure()
+        run: docker logs moolai-verify || true
+      - if: always()
+        run: docker rm --force moolai-verify || true

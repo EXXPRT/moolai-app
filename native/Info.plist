@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>MoolaiNative</string>
+  <key>CFBundleIdentifier</key><string>com.exxprt.moolai.native</string>
+  <key>CFBundleName</key><string>Moolai Native</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Moolai transcribes your enabled study session locally. Microphone recordings are not saved.</string>
+  <key>NSScreenCaptureUsageDescription</key><string>Moolai captures your main display only when you request screen help or accept a saved-doubt help offer.</string>
+</dict></plist>

@@ -1,0 +1,134 @@
+[
+  {
+    "id": "o01",
+    "question": "What is the sensor ID, distance, reading, start time, and whether work is completed?",
+    "output": {
+      "observations": [
+        {
+          "field": "Sensor",
+          "status": "readable",
+          "value": "LX-38",
+          "label": "Sensor",
+          "sourceExcerpt": "Sensor: LX-38"
+        },
+        {
+          "field": "Distance",
+          "status": "readable",
+          "value": "45 cm",
+          "label": "Distance",
+          "sourceExcerpt": "Distance: 45 cm"
+        },
+        {
+          "field": "Reading",
+          "status": "readable",
+          "value": "136 lux",
+          "label": "Reading",
+          "sourceExcerpt": "Reading: 136 lux"
+        },
+        {
+          "field": "Start",
+          "status": "readable",
+          "value": "10:35",
+          "label": "Start",
+          "sourceExcerpt": "Start: 10:35"
+        },
+        {
+          "field": "Status",
+          "status": "readable",
+          "value": "planned \u2014 not completed",
+          "label": "Status",
+          "sourceExcerpt": "Status: planned \u2014 not completed"
+        }
+      ],
+      "interpretation": "The sensor ID is LX-38. The distance is 45 cm. The reading is 136 lux. The start time is 10:35. The work is not completed.",
+      "raw": "{\n    \"observations\": [\n        {\n            \"field\": \"Sensor\",\n            \"status\": \"readable\",\n            \"value\": \"LX-38\",\n            \"label\": \"Sensor\",\n            \"sourceExcerpt\": \"Sensor: LX-38\"\n        },\n        {\n            \"field\": \"Distance\",\n            \"status\": \"readable\",\n            \"value\": \"45 cm\",\n            \"label\": \"Distance\",\n            \"sourceExcerpt\": \"Distance: 45 cm\"\n        },\n        {\n            \"field\": \"Reading\",\n            \"status\": \"readable\",\n            \"value\": \"136 lux\",\n            \"label\": \"Reading\",\n            \"sourceExcerpt\": \"Reading: 136 lux\"\n        },\n        {\n            \"field\": \"Start\",\n            \"status\": \"readable\",\n            \"value\": \"10:35\",\n            \"label\": \"Start\",\n            \"sourceExcerpt\": \"Start: 10:35\"\n        },\n        {\n            \"field\": \"Status\",\n            \"status\": \"readable\",\n            \"value\": \"planned \u2014 not completed\",\n            \"label\": \"Status\",\n            \"sourceExcerpt\": \"Status: planned \u2014 not completed\"\n        }\n    ],\n    \"interpretation\": \"The sensor ID is LX-38. The distance is 45 cm. The reading is 136 lux. The start time is 10:35. The work is not completed.\"\n}",
+      "validationErrors": [],
+      "validated": true
+    }
+  },
+  {
+    "id": "o02",
+    "question": "What is the calibration value shown on screen? Only report the value if that field is readable; do not use footer text.",
+    "output": {
+      "observations": [
+        {
+          "field": "Calibration value",
+          "status": "unreadable",
+          "label": "Calibration value:",
+          "sourceExcerpt": "Calibration value:"
+        },
+        {
+          "field": "Instrument",
+          "status": "readable",
+          "value": "T4-620",
+          "label": "Instrument",
+          "sourceExcerpt": "Instrument: T4-620"
+        },
+        {
+          "field": "Footer code",
+          "status": "readable",
+          "value": "G8-29",
+          "label": "Footer code",
+          "sourceExcerpt": "Footer code: G8-29"
+        }
+      ],
+      "interpretation": "The calibration value is unreadable on screen.",
+      "raw": "{\n  \"observations\": [\n    {\n      \"field\": \"Calibration value\",\n      \"status\": \"unreadable\",\n      \"value\": null,\n      \"label\": \"Calibration value:\",\n      \"sourceExcerpt\": \"Calibration value:\"\n    },\n    {\n      \"field\": \"Instrument\",\n      \"status\": \"readable\",\n      \"value\": \"T4-620\",\n      \"label\": \"Instrument\",\n      \"sourceExcerpt\": \"Instrument: T4-620\"\n    },\n    {\n      \"field\": \"Footer code\",\n      \"status\": \"readable\",\n      \"value\": \"G8-29\",\n      \"label\": \"Footer code\",\n      \"sourceExcerpt\": \"Footer code: G8-29\"\n    }\n  ],\n  \"interpretation\": \"The calibration value is unreadable on screen.\"\n}",
+      "validationErrors": [],
+      "validated": true
+    }
+  },
+  {
+    "id": "o03",
+    "question": "What is the complete container identifier and its volume shown on the screen?",
+    "output": {
+      "observations": [
+        {
+          "field": "Container",
+          "status": "unreadable",
+          "label": "Container:",
+          "sourceExcerpt": "Container: PV-9"
+        },
+        {
+          "field": "Volume",
+          "status": "readable",
+          "value": "175 mL",
+          "label": "Volume:",
+          "sourceExcerpt": "Volume: 175 mL"
+        }
+      ],
+      "interpretation": "The complete container identifier is unreadable due to the blacked-out section. The volume shown is 175 mL.",
+      "raw": "{\n    \"observations\": [\n        {\n            \"field\": \"Container\",\n            \"status\": \"unreadable\",\n            \"value\": \"PV-9\",\n            \"label\": \"Container:\",\n            \"sourceExcerpt\": \"Container: PV-9\"\n        },\n        {\n            \"field\": \"Volume\",\n            \"status\": \"readable\",\n            \"value\": \"175 mL\",\n            \"label\": \"Volume:\",\n            \"sourceExcerpt\": \"Volume: 175 mL\"\n        }\n    ],\n    \"interpretation\": \"The complete container identifier is unreadable due to the blacked-out section. The volume shown is 175 mL.\"\n}",
+      "validationErrors": [
+        "Observation 1: unreadable observation supplied a value."
+      ],
+      "validated": false
+    }
+  },
+  {
+    "id": "o04",
+    "question": "What batch lot number appears, and how many boxes were received?",
+    "output": {
+      "observations": [
+        {
+          "field": "Receipt",
+          "status": "readable",
+          "value": "R-619",
+          "label": "Receipt",
+          "sourceExcerpt": "Receipt: R-619"
+        },
+        {
+          "field": "Quantity",
+          "status": "readable",
+          "value": "14 boxes",
+          "label": "Quantity",
+          "sourceExcerpt": "Quantity: 14 boxes"
+        }
+      ],
+      "interpretation": "The batch lot number is R-619. 14 boxes were received.",
+      "raw": "{\n  \"observations\": [\n    {\n      \"field\": \"Receipt\",\n      \"status\": \"readable\",\n      \"value\": \"R-619\",\n      \"label\": \"Receipt\",\n      \"sourceExcerpt\": \"Receipt: R-619\"\n    },\n    {\n      \"field\": \"Quantity\",\n      \"status\": \"readable\",\n      \"value\": \"14 boxes\",\n      \"label\": \"Quantity\",\n      \"sourceExcerpt\": \"Quantity: 14 boxes\"\n    }\n  ],\n  \"interpretation\": \"The batch lot number is R-619. 14 boxes were received.\"\n}",
+      "validationErrors": [],
+      "validated": true
+    }
+  }
+]

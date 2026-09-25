@@ -1,0 +1,340 @@
+{
+  "version": "j1-confirmation-v1",
+  "scope": "Frozen synthetic dialogue corpus for a test-only comparison of current J1, confirmation followed by J1, and confirmation assessed independently by Super and J1. No microphone, agent task execution or production-default change.",
+  "threshold": 0.8,
+  "confirmationQuestions": {
+    "start": "Would you like me to help with that request?",
+    "end": "Would you like me to end this conversation?"
+  },
+  "scoringNotes": [
+    "All three methods receive identical original input, source identity/revision and conversation state for each case. Expected labels and notes are never sent to providers.",
+    "The current-J1 baseline acts on the original utterance only and cannot see a hypothetical future confirmation reply. Score its initial action against originalIntendedAction; report final-intent alignment separately without calling a later change of mind an initial false positive.",
+    "Confirmation replies are supplied only when a method actually proposes start/end and asks its fixed question, including tentative candidates. Do not force a candidate that the first J1 did not propose.",
+    "The original and final intended actions describe whether a start/end is authorized at each point, not whether arbitrary content should be discarded. Every source and reply remains retained.",
+    "A no-transition result does not imply that a request was fulfilled. Report intended transitions that remain unresolved, unnecessary questions and provider/parse failures separately.",
+    "For pending work, an accepted close plus finish waits for work completion; cancel explicitly cancels before closing; continue retracts the proposed close. The harness must not execute the task.",
+    "The two cases sharing Can you explain this? differ in visible preceding context. The quoted-title cases include both explicit quotation and a natural answer to the assistant's title question. Case IDs, group labels and expected outcomes are evaluation metadata, never provider context."
+  ],
+  "cases": [
+    {
+      "id": "start-01",
+      "group": "start",
+      "input": {
+        "text": "Can you explain this?",
+        "recentContext": "user: Two attempts with the same setup produced different results. I have saved notes describing both attempts.",
+        "activeConversation": false
+      },
+      "source": { "turnId": "start-01-original", "revision": 1 },
+      "conversation": { "id": null, "active": false, "pendingWork": false },
+      "confirmationReply": { "text": "Yes, use only my notes.", "turnId": "start-01-reply", "revision": 1 },
+      "originalIntendedAction": "start",
+      "finalIntendedAction": "start",
+      "expectedInitialRoute": "start_agent",
+      "expectedConfirmationVerdict": "confirmed",
+      "replyEffect": "confirm",
+      "expectedPendingWorkAction": "none",
+      "expectedConstraints": ["notes_only"],
+      "notes": "Starting must carry the complete original question, its context and the added notes-only constraint."
+    },
+    {
+      "id": "start-02",
+      "group": "start",
+      "input": {
+        "text": "Can you explain this?",
+        "recentContext": "user: I am dictating questions for a worksheet. Save the next sentence as a question on the worksheet; do not answer it.",
+        "activeConversation": false
+      },
+      "source": { "turnId": "start-02-original", "revision": 1 },
+      "conversation": { "id": null, "active": false, "pendingWork": false },
+      "confirmationReply": { "text": "No, I was dictating the question.", "turnId": "start-02-reply", "revision": 1 },
+      "originalIntendedAction": "none",
+      "finalIntendedAction": "none",
+      "expectedInitialRoute": "dictate",
+      "expectedConfirmationVerdict": "rejected",
+      "replyEffect": "clarify",
+      "expectedPendingWorkAction": "none",
+      "expectedConstraints": [],
+      "notes": "The preceding dictation instruction is available to every method before the first decision; this is not a hidden-intent negative."
+    },
+    {
+      "id": "start-03",
+      "group": "start",
+      "input": {
+        "text": "Write this question down: ‘Can you explain this?’",
+        "recentContext": "user: I am speaking content to retain in my notes. Questions quoted within that content are not addressed to you.",
+        "activeConversation": false
+      },
+      "source": { "turnId": "start-03-original", "revision": 1 },
+      "conversation": { "id": null, "active": false, "pendingWork": false },
+      "confirmationReply": { "text": "No, save those words as the question.", "turnId": "start-03-reply", "revision": 1 },
+      "originalIntendedAction": "none",
+      "finalIntendedAction": "none",
+      "expectedInitialRoute": "dictate",
+      "expectedConfirmationVerdict": "rejected",
+      "replyEffect": "clarify",
+      "expectedPendingWorkAction": "none",
+      "expectedConstraints": [],
+      "notes": "Passive transcript retention satisfies the user's established dictation mode; the quoted question is not a request for an explanation."
+    },
+    {
+      "id": "start-04",
+      "group": "start",
+      "input": {
+        "text": "Could you help me compare these two explanations?",
+        "recentContext": "user: One explanation attributes the change to temperature; the other attributes it to time. Both are in my notes.",
+        "activeConversation": false
+      },
+      "source": { "turnId": "start-04-original", "revision": 1 },
+      "conversation": { "id": null, "active": false, "pendingWork": false },
+      "confirmationReply": { "text": "Yes—actually, no, just save the question.", "turnId": "start-04-reply", "revision": 1 },
+      "originalIntendedAction": "start",
+      "finalIntendedAction": "none",
+      "expectedInitialRoute": "start_agent",
+      "expectedConfirmationVerdict": "rejected",
+      "replyEffect": "retract",
+      "expectedPendingWorkAction": "none",
+      "expectedConstraints": [],
+      "notes": "The original request authorizes starting. The later reply changes that intent; a baseline start is not an initial false positive. The final no overrides the leading yes."
+    },
+    {
+      "id": "start-05",
+      "group": "start",
+      "input": {
+        "text": "Don’t answer yet; I am only thinking aloud about how this happened.",
+        "recentContext": "user: I am recording some reflections before deciding what to ask.",
+        "activeConversation": false
+      },
+      "source": { "turnId": "start-05-original", "revision": 1 },
+      "conversation": { "id": null, "active": false, "pendingWork": false },
+      "confirmationReply": { "text": "No, keep saving my thoughts.", "turnId": "start-05-reply", "revision": 1 },
+      "originalIntendedAction": "none",
+      "finalIntendedAction": "none",
+      "expectedInitialRoute": "dictate",
+      "expectedConfirmationVerdict": "rejected",
+      "replyEffect": "clarify",
+      "expectedPendingWorkAction": "none",
+      "expectedConstraints": [],
+      "notes": "The explicit negation and thinking-aloud context do not authorize starting an answer."
+    },
+    {
+      "id": "start-06",
+      "group": "start",
+      "input": {
+        "text": "Please help me understand this diagram.",
+        "recentContext": "user: The diagram I described in my notes has three boxes joined by arrows. I do not know what the arrow directions mean.",
+        "activeConversation": false
+      },
+      "source": { "turnId": "start-06-original", "revision": 1 },
+      "conversation": { "id": null, "active": false, "pendingWork": false },
+      "confirmationReply": { "text": "Yes, explain the arrows first.", "turnId": "start-06-reply", "revision": 1 },
+      "originalIntendedAction": "start",
+      "finalIntendedAction": "start",
+      "expectedInitialRoute": "start_agent",
+      "expectedConfirmationVerdict": "confirmed",
+      "replyEffect": "confirm",
+      "expectedPendingWorkAction": "none",
+      "expectedConstraints": ["explain_arrows_first"],
+      "notes": "A missing diagram is an answer-context issue, not a missing request for assistance. No screenshot is requested or captured in this comparison."
+    },
+    {
+      "id": "start-07",
+      "group": "start",
+      "input": {
+        "text": "Can you tell me how this happened?",
+        "recentContext": "user: The first attempt worked and the second failed. My saved notes describe the setup and each step in both attempts.",
+        "activeConversation": false
+      },
+      "source": { "turnId": "start-07-original", "revision": 1 },
+      "conversation": { "id": null, "active": false, "pendingWork": false },
+      "confirmationReply": { "text": "Yes, and focus on what changed between the two attempts.", "turnId": "start-07-reply", "revision": 1 },
+      "originalIntendedAction": "start",
+      "finalIntendedAction": "start",
+      "expectedInitialRoute": "start_agent",
+      "expectedConfirmationVerdict": "confirmed",
+      "replyEffect": "confirm",
+      "expectedPendingWorkAction": "none",
+      "expectedConstraints": ["focus_on_changes_between_attempts"],
+      "notes": "This request starts without an activation name, and its extra comparison constraint must survive confirmation."
+    },
+    {
+      "id": "start-08",
+      "group": "start",
+      "input": {
+        "text": "Maybe explain it, or just save it; I haven’t decided.",
+        "recentContext": "user: I have an observation about the two results, but I am deciding whether to ask for help.",
+        "activeConversation": false
+      },
+      "source": { "turnId": "start-08-original", "revision": 1 },
+      "conversation": { "id": null, "active": false, "pendingWork": false },
+      "confirmationReply": { "text": "I still haven’t decided.", "turnId": "start-08-reply", "revision": 1 },
+      "originalIntendedAction": "none",
+      "finalIntendedAction": "none",
+      "expectedInitialRoute": "unclear",
+      "expectedConfirmationVerdict": "unclear",
+      "replyEffect": "unclear",
+      "expectedPendingWorkAction": "none",
+      "expectedConstraints": [],
+      "notes": "Unresolved alternatives do not authorize starting. This is retained uncertainty, not a fulfilled request."
+    },
+    {
+      "id": "end-01",
+      "group": "end",
+      "input": {
+        "text": "That’s all.",
+        "recentContext": "assistant: We have finished the explanation. Is there anything else you would like help with?",
+        "activeConversation": true
+      },
+      "source": { "turnId": "end-01-original", "revision": 1 },
+      "conversation": { "id": "end-01-conversation", "active": true, "pendingWork": false },
+      "confirmationReply": { "text": "Yes, finish.", "turnId": "end-01-reply", "revision": 1 },
+      "originalIntendedAction": "end",
+      "finalIntendedAction": "end",
+      "expectedInitialRoute": "end_agent",
+      "expectedConfirmationVerdict": "confirmed",
+      "replyEffect": "confirm",
+      "expectedPendingWorkAction": "none",
+      "expectedConstraints": [],
+      "notes": "Natural closure needs no activation name or exact command. No work remains."
+    },
+    {
+      "id": "end-02",
+      "group": "end",
+      "input": {
+        "text": "The note title is ‘That’s all’.",
+        "recentContext": "assistant: Tell me the title you would like for this note. We can discuss the body afterward.",
+        "activeConversation": true
+      },
+      "source": { "turnId": "end-02-original", "revision": 1 },
+      "conversation": { "id": "end-02-conversation", "active": true, "pendingWork": false },
+      "confirmationReply": { "text": "No, that’s the name.", "turnId": "end-02-reply", "revision": 1 },
+      "originalIntendedAction": "none",
+      "finalIntendedAction": "none",
+      "expectedInitialRoute": "continue_agent",
+      "expectedConfirmationVerdict": "rejected",
+      "replyEffect": "clarify",
+      "expectedPendingWorkAction": "none",
+      "expectedConstraints": [],
+      "notes": "Quoted note content is not a conversation control. No note task executes in this test."
+    },
+    {
+      "id": "end-03",
+      "group": "end",
+      "input": {
+        "text": "That’s all.",
+        "recentContext": "assistant: What exact title should I use for the note? Please say the title now; we will discuss its contents next.",
+        "activeConversation": true
+      },
+      "source": { "turnId": "end-03-original", "revision": 1 },
+      "conversation": { "id": "end-03-conversation", "active": true, "pendingWork": false },
+      "confirmationReply": { "text": "Yes, that’s the note title.", "turnId": "end-03-reply", "revision": 1 },
+      "originalIntendedAction": "none",
+      "finalIntendedAction": "none",
+      "expectedInitialRoute": "continue_agent",
+      "expectedConfirmationVerdict": "rejected",
+      "replyEffect": "clarify",
+      "expectedPendingWorkAction": "none",
+      "expectedConstraints": [],
+      "notes": "The leading yes acknowledges title content; the complete reply does not affirm the pending close action."
+    },
+    {
+      "id": "end-04",
+      "group": "end",
+      "input": {
+        "text": "That’s all.",
+        "recentContext": "assistant: We have finished the explanation. Is there anything else you would like help with?",
+        "activeConversation": true
+      },
+      "source": { "turnId": "end-04-original", "revision": 1 },
+      "conversation": { "id": "end-04-conversation", "active": true, "pendingWork": false },
+      "confirmationReply": { "text": "Yes—actually, no, keep going.", "turnId": "end-04-reply", "revision": 1 },
+      "originalIntendedAction": "end",
+      "finalIntendedAction": "none",
+      "expectedInitialRoute": "end_agent",
+      "expectedConfirmationVerdict": "rejected",
+      "replyEffect": "retract",
+      "expectedPendingWorkAction": "none",
+      "expectedConstraints": [],
+      "notes": "The original utterance authorizes closing, so a baseline close is not an initial false positive. The revised choice in the confirmation reply keeps the conversation open."
+    },
+    {
+      "id": "end-05",
+      "group": "end",
+      "input": {
+        "text": "Don’t end the conversation; explain the next step.",
+        "recentContext": "assistant: That completes the first step. We can continue to the next step if you want.",
+        "activeConversation": true
+      },
+      "source": { "turnId": "end-05-original", "revision": 1 },
+      "conversation": { "id": "end-05-conversation", "active": true, "pendingWork": false },
+      "confirmationReply": { "text": "No, keep explaining.", "turnId": "end-05-reply", "revision": 1 },
+      "originalIntendedAction": "none",
+      "finalIntendedAction": "none",
+      "expectedInitialRoute": "continue_agent",
+      "expectedConfirmationVerdict": "rejected",
+      "replyEffect": "clarify",
+      "expectedPendingWorkAction": "none",
+      "expectedConstraints": [],
+      "notes": "A negated ending followed by a new request keeps the active conversation."
+    },
+    {
+      "id": "end-06",
+      "group": "end",
+      "input": {
+        "text": "We can stop here.",
+        "recentContext": "assistant: I am still preparing the comparison you requested. The work has not completed.",
+        "activeConversation": true
+      },
+      "source": { "turnId": "end-06-original", "revision": 1 },
+      "conversation": { "id": "end-06-conversation", "active": true, "pendingWork": true },
+      "confirmationReply": { "text": "Yes, finish the current work, then close.", "turnId": "end-06-reply", "revision": 1 },
+      "originalIntendedAction": "end",
+      "finalIntendedAction": "end",
+      "expectedInitialRoute": "end_agent",
+      "expectedConfirmationVerdict": "confirmed",
+      "replyEffect": "confirm",
+      "expectedPendingWorkAction": "finish",
+      "expectedConstraints": [],
+      "notes": "The baseline can only request an end-work decision from the original utterance. Confirmed finish must wait for simulated work completion before closing; no task executes."
+    },
+    {
+      "id": "end-07",
+      "group": "end",
+      "input": {
+        "text": "I don’t need any more help.",
+        "recentContext": "assistant: I am still preparing the comparison you requested. The work has not completed.",
+        "activeConversation": true
+      },
+      "source": { "turnId": "end-07-original", "revision": 1 },
+      "conversation": { "id": "end-07-conversation", "active": true, "pendingWork": true },
+      "confirmationReply": { "text": "Yes, cancel the pending work and close.", "turnId": "end-07-reply", "revision": 1 },
+      "originalIntendedAction": "end",
+      "finalIntendedAction": "end",
+      "expectedInitialRoute": "end_agent",
+      "expectedConfirmationVerdict": "confirmed",
+      "replyEffect": "confirm",
+      "expectedPendingWorkAction": "cancel",
+      "expectedConstraints": [],
+      "notes": "Cancel is authorized only by the reply. Record the simulated cancellation before closing; never silently cancel from the original ending alone."
+    },
+    {
+      "id": "end-08",
+      "group": "end",
+      "input": {
+        "text": "That’s all for now.",
+        "recentContext": "assistant: I am still preparing the comparison you requested. The work has not completed.",
+        "activeConversation": true
+      },
+      "source": { "turnId": "end-08-original", "revision": 1 },
+      "conversation": { "id": "end-08-conversation", "active": true, "pendingWork": true },
+      "confirmationReply": { "text": "No, continue the conversation and keep working.", "turnId": "end-08-reply", "revision": 1 },
+      "originalIntendedAction": "end",
+      "finalIntendedAction": "none",
+      "expectedInitialRoute": "end_agent",
+      "expectedConfirmationVerdict": "rejected",
+      "replyEffect": "retract",
+      "expectedPendingWorkAction": "continue",
+      "expectedConstraints": [],
+      "notes": "The reply withdraws the original closing intent. Keep the conversation and simulated pending work; do not conflate the baseline's legitimate initial end-work offer with accidental closing."
+    }
+  ]
+}

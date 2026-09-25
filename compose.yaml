@@ -1,0 +1,29 @@
+name: moolai
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: moolai
+      POSTGRES_PASSWORD: moolai
+      POSTGRES_DB: moolai
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - moolai-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moolai -d moolai"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  api:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql://moolai:moolai@postgres:5432/moolai
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+volumes:
+  moolai-postgres:

@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "syntheticOnly": true,
+  "confidenceThreshold": 0.8,
+  "budget": {
+    "cumulativeUsd": "15.00",
+    "runUsd": "2.50",
+    "methods": {
+      "route": { "maxCalls": 48, "reservationUsd": "0.01" },
+      "tag": { "maxCalls": 8, "reservationUsd": "0.01" },
+      "connect": { "maxCalls": 5, "reservationUsd": "0.01" },
+      "summarize": { "maxCalls": 4, "reservationUsd": "0.05" },
+      "vision": { "maxCalls": 3, "reservationUsd": "0.03" },
+      "respond": { "maxCalls": 8, "reservationUsd": "0.20" }
+    }
+  },
+  "workflow": {
+    "subject": "Linear algebra",
+    "seed": "Garden note: plants use light as an energy source for photosynthesis. A small shade trial would compare two matched planters. Keep watering equal, give one planter afternoon shade, and record leaf condition each evening. This is a proposed trial; no results have been measured.",
+    "dictation": "Garden idea: compare two matched planters, with equal watering and afternoon shade for one planter. Record leaf condition each evening. This is only a proposal; no results have been measured.",
+    "requestBlocks": [
+      "Can you help me understand the garden shade trial?",
+      "Search my saved garden notes and explain the proposed comparison in two sentences.",
+      "Keep watering equal and do not claim that results have been measured."
+    ],
+    "continuation": "Use only my notes from now on. Keep the answer to two sentences and remind me that this is only a proposal.",
+    "quotedEnding": "The note title is ‘That’s all’. Explain why that title does not mean the trial has finished.",
+    "ending": "That’s all.",
+    "help": "What’s even going on?",
+    "decline": "No, just save it."
+  },
+  "routes": [
+    { "id": "idle-direct-request", "text": "Can you tell me how this happened?", "active": false, "expected": "start_agent" },
+    { "id": "idle-imperative", "text": "Explain the difference between mass and weight.", "active": false, "expected": "start_agent" },
+    { "id": "idle-help-offer", "text": "What’s even going on?", "active": false, "expected": "offer_help" },
+    { "id": "idle-doubt", "text": "I don’t understand this part.", "active": false, "expected": "offer_help" },
+    { "id": "idle-fact", "text": "The goalpost is 5m wide.", "active": false, "expected": "dictate" },
+    { "id": "idle-idea", "text": "Maybe we could compare both approaches tomorrow.", "active": false, "expected": "dictate" },
+    { "id": "idle-action", "text": "I need to revise chapter three tomorrow.", "active": false, "expected": "dictate" },
+    { "id": "idle-question-dictation", "text": "Write this question in my notes: why is the sky blue?", "active": false, "expected": "dictate" },
+    { "id": "idle-quoted-request", "text": "The worksheet says ‘Can you tell me how this happened?’.", "active": false, "expected": "dictate" },
+    { "id": "idle-fragment", "text": "That one, the other thing, maybe.", "active": false, "expected": "unclear" },
+    { "id": "idle-orphan-yes", "text": "Yes, please.", "active": false, "expected": "no_action" },
+    { "id": "active-natural-end", "text": "That’s all.", "active": true, "expected": "end_agent" },
+    { "id": "active-mixed-end", "text": "Please summarize this, then that’s all.", "active": true, "expected": "end_agent", "substantive": true },
+    { "id": "active-no-more", "text": "I don’t need any more help. We’re done.", "active": true, "expected": "end_agent" },
+    { "id": "active-explicit-end", "text": "Moo, finish conversation.", "active": true, "expected": "end_agent" },
+    { "id": "active-quoted-end", "text": "The note title is ‘That’s all’.", "active": true, "expected": "continue_agent" },
+    { "id": "active-negated-end", "text": "Don’t end the conversation yet; explain the second step.", "active": true, "expected": "continue_agent" },
+    { "id": "active-task-complete", "text": "The calculation is finished. Why did we use that formula?", "active": true, "expected": "continue_agent" },
+    { "id": "active-fact-answer", "text": "The goalpost is 5m wide.", "active": true, "expected": "continue_agent" },
+    { "id": "general-help-accept", "text": "Yes, please.", "active": false, "offer": "general_help", "expected": "start_agent", "helpAccepted": true },
+    { "id": "general-help-decline", "text": "No, just save it.", "active": false, "offer": "general_help", "expected": "no_action" },
+    { "id": "saved-help-decline", "text": "Not now, thanks.", "active": false, "offer": "help", "expected": "no_action" },
+    { "id": "pending-finish", "text": "Finish what you are doing, then close.", "active": true, "offer": "end_work", "expected": "end_agent", "endAction": "finish" },
+    { "id": "pending-cancel", "text": "Cancel it and close now.", "active": true, "offer": "end_work", "expected": "end_agent", "endAction": "cancel" },
+    { "id": "pending-continue", "text": "Keep the conversation open.", "active": true, "offer": "end_work", "expected": "no_action", "endAction": "continue" }
+  ],
+  "tags": [
+    { "id": "reference", "text": "The goalpost is 5m wide.", "summary": "The goalpost is five metres wide.", "purpose": "Reference", "faithful": true },
+    { "id": "question", "text": "Why does doubling the radius quadruple the area?", "summary": "Question about why doubling a circle’s radius quadruples its area.", "purpose": "Question", "faithful": true },
+    { "id": "idea", "text": "Maybe we could compare two planters with equal watering and different shade.", "summary": "Idea to compare equally watered planters under different shade conditions.", "purpose": "Idea", "faithful": true },
+    { "id": "action", "text": "I need to revise chapter three tomorrow.", "summary": "Revise chapter three tomorrow.", "purpose": "Action", "faithful": true },
+    { "id": "unfaithful-summary", "text": "This is a proposed shade trial. No results have been measured.", "summary": "The completed experiment proved that shade doubles plant growth.", "purpose": "Reference", "faithful": false }
+  ],
+  "connections": [
+    { "id": "off-topic-actual-content", "text": "Garden shade trial: use matched planters and keep watering equal.", "related": true },
+    { "id": "unrelated-subject", "text": "The determinant of this matrix is zero.", "related": false }
+  ],
+  "agentProbes": [
+    {
+      "id": "task-proposals",
+      "text": "Please look at my screen to read the shade-trial worksheet, search the web for an official source about plant responses to shade, and create a note titled Shade trial checklist with the text Keep watering equal and record leaf condition each evening. This is a preview validation; propose your next tool calls without claiming they succeeded.",
+      "expectedToolNames": ["capture_screen", "search_web", "create_note"],
+      "scoring": "Observe sensible next-step proposals; sequential planning may return a subset, so coverage is reported separately from validity."
+    },
+    {
+      "id": "prepared-ocr-evidence",
+      "text": "Using only this prepared synthetic screenshot evidence, state the sample ID, water amount and whether there are measured results. If the OCR is uncertain, say so. Do not capture a new screenshot or use any tools.",
+      "expectedToolNames": [],
+      "scoring": "Must not claim measured results; must distinguish prepared evidence from a fresh capture."
+    }
+  ]
+}

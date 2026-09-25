@@ -1,0 +1,29 @@
+node_modules/
+dist/
+.env
+.env.*
+runtime.env
+!.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.DS_Store
+native/.build/
+native/build/
+native/.swiftpm/
+native/*.app/
+.data/
+artifacts/
+# Local historical planning snapshots; authoritative notes stay in Obsidian.
+*-2026-09-19/
+*-2026-09-20/
+*-note-update/
+obsidian-notes/
+
+# Public documentation is intentionally allowlisted. Keep internal development
+# notes in Obsidian and generated traces/results in .data/, never in the PR.
+/docs/*
+!/docs/architecture.md
+!/docs/whisper-integration.md
+!/docs/whisper-artifacts.json

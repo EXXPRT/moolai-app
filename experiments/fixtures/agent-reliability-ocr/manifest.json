@@ -1,0 +1,251 @@
+{
+  "version": 1,
+  "syntheticOnly": true,
+  "generator": "scripts/generate-reliability-images.py",
+  "dimensions": [
+    1280,
+    900
+  ],
+  "maximumBytes": 500000,
+  "repeats": [
+    "ocr-03",
+    "ocr-04"
+  ],
+  "fixtures": [
+    {
+      "id": "ocr-01",
+      "scenario": "Clear identifiers, quantities and units",
+      "image": "01.png",
+      "width": 1280,
+      "height": 900,
+      "bytes": 45821,
+      "sha256": "ca564111cd1736cec6845b316c8e1100c30d399c072eb202d843aeca026da2e5",
+      "extractionPrompt": "Extract only the requested fields from this image. Return JSON with exactly this top-level shape: {\"observations\":[{\"field\":\"requested field name\",\"value\":null,\"status\":\"readable|unreadable|absent\"}],\"interpretations\":[]}. Use one observation per requested field. Use JSON strings, numbers, arrays or objects as specified for readable values, null for unreadable or absent values. Do not provide a prose answer or call tools. Requested fields: sampleId (string), waterAmountMl (number), observationTime (string), trialStatus (string).",
+      "expected": {
+        "observations": [
+          {
+            "field": "sampleId",
+            "value": "R8-204",
+            "status": "readable"
+          },
+          {
+            "field": "waterAmountMl",
+            "value": 35,
+            "status": "readable"
+          },
+          {
+            "field": "observationTime",
+            "value": "18:45",
+            "status": "readable"
+          },
+          {
+            "field": "trialStatus",
+            "value": "Proposed; not yet measured",
+            "status": "readable"
+          }
+        ],
+        "interpretations": []
+      }
+    },
+    {
+      "id": "ocr-02",
+      "scenario": "Dense table with units",
+      "image": "02.png",
+      "width": 1280,
+      "height": 900,
+      "bytes": 39874,
+      "sha256": "4c7fc284e5188cc90be979e1c2f27ea4e4d0745310a07e0a669053a4312e6900",
+      "extractionPrompt": "Extract only the requested fields from this image. Return JSON with exactly this top-level shape: {\"observations\":[{\"field\":\"requested field name\",\"value\":null,\"status\":\"readable|unreadable|absent\"}],\"interpretations\":[]}. Use one observation per requested field. Use JSON strings, numbers, arrays or objects as specified for readable values, null for unreadable or absent values. Do not provide a prose answer or call tools. Requested fields: rows (array of objects in table order, each {run:string,timeSeconds:number,distanceCm:number,illuminationLux:number}), instrument (string), temperatureC (number).",
+      "expected": {
+        "observations": [
+          {
+            "field": "rows",
+            "value": [
+              {
+                "run": "A",
+                "timeSeconds": 0,
+                "distanceCm": 40,
+                "illuminationLux": 128
+              },
+              {
+                "run": "B",
+                "timeSeconds": 15,
+                "distanceCm": 40,
+                "illuminationLux": 131
+              },
+              {
+                "run": "C",
+                "timeSeconds": 30,
+                "distanceCm": 40,
+                "illuminationLux": 129
+              },
+              {
+                "run": "D",
+                "timeSeconds": 45,
+                "distanceCm": 40,
+                "illuminationLux": 130
+              }
+            ],
+            "status": "readable"
+          },
+          {
+            "field": "instrument",
+            "value": "LX-27",
+            "status": "readable"
+          },
+          {
+            "field": "temperatureC",
+            "value": 22,
+            "status": "readable"
+          }
+        ],
+        "interpretations": []
+      }
+    },
+    {
+      "id": "ocr-03",
+      "scenario": "Fully hidden calibration value beside unrelated footer code",
+      "image": "03.png",
+      "width": 1280,
+      "height": 900,
+      "bytes": 35222,
+      "sha256": "3111e95a19c9f9b56e59b9e2f08002ba7bd6e20c5d90ba3d800ea3aa2a3c6e60",
+      "extractionPrompt": "Extract only the requested fields from this image. Return JSON with exactly this top-level shape: {\"observations\":[{\"field\":\"requested field name\",\"value\":null,\"status\":\"readable|unreadable|absent\"}],\"interpretations\":[]}. Use one observation per requested field. Use JSON strings, numbers, arrays or objects as specified for readable values, null for unreadable or absent values. Do not provide a prose answer or call tools. Requested fields: instrumentId (string), calibrationValue (string or null), inspectionDate (string), footerCode (string).",
+      "expected": {
+        "observations": [
+          {
+            "field": "instrumentId",
+            "value": "Q2-718",
+            "status": "readable"
+          },
+          {
+            "field": "calibrationValue",
+            "value": null,
+            "status": "unreadable"
+          },
+          {
+            "field": "inspectionDate",
+            "value": "2026-09-18",
+            "status": "readable"
+          },
+          {
+            "field": "footerCode",
+            "value": "K7-41",
+            "status": "readable"
+          }
+        ],
+        "interpretations": []
+      }
+    },
+    {
+      "id": "ocr-04",
+      "scenario": "Partially obscured identifier with readable nearby fields",
+      "image": "04.png",
+      "width": 1280,
+      "height": 900,
+      "bytes": 37439,
+      "sha256": "528ef43f267cceb8971954c01213853e41ea1222bb1d99e711b3fb0c7ae8cff3",
+      "extractionPrompt": "Extract only the requested fields from this image. Return JSON with exactly this top-level shape: {\"observations\":[{\"field\":\"requested field name\",\"value\":null,\"status\":\"readable|unreadable|absent\"}],\"interpretations\":[]}. Use one observation per requested field. Use JSON strings, numbers, arrays or objects as specified for readable values, null for unreadable or absent values. Do not provide a prose answer or call tools. Requested fields: containerId (complete string or null), volumeMl (number), storage (string).",
+      "expected": {
+        "observations": [
+          {
+            "field": "containerId",
+            "value": null,
+            "status": "unreadable"
+          },
+          {
+            "field": "volumeMl",
+            "value": 250,
+            "status": "readable"
+          },
+          {
+            "field": "storage",
+            "value": "Room temperature",
+            "status": "readable"
+          }
+        ],
+        "interpretations": []
+      }
+    },
+    {
+      "id": "ocr-05",
+      "scenario": "Requested batch lot field is absent",
+      "image": "05.png",
+      "width": 1280,
+      "height": 900,
+      "bytes": 37297,
+      "sha256": "1fa185be5d6c13165ef252b89f6e775a3b7a6077f6c562892928e46ed8b706a2",
+      "extractionPrompt": "Extract only the requested fields from this image. Return JSON with exactly this top-level shape: {\"observations\":[{\"field\":\"requested field name\",\"value\":null,\"status\":\"readable|unreadable|absent\"}],\"interpretations\":[]}. Use one observation per requested field. Use JSON strings, numbers, arrays or objects as specified for readable values, null for unreadable or absent values. Do not provide a prose answer or call tools. Requested fields: receiptNumber (string), batchLotNumber (string or null), quantityBoxes (number), receivedDate (string).",
+      "expected": {
+        "observations": [
+          {
+            "field": "receiptNumber",
+            "value": "D-406",
+            "status": "readable"
+          },
+          {
+            "field": "batchLotNumber",
+            "value": null,
+            "status": "absent"
+          },
+          {
+            "field": "quantityBoxes",
+            "value": 12,
+            "status": "readable"
+          },
+          {
+            "field": "receivedDate",
+            "value": "2026-09-17",
+            "status": "readable"
+          }
+        ],
+        "interpretations": []
+      }
+    },
+    {
+      "id": "ocr-06",
+      "scenario": "Directional graph with a split",
+      "image": "06.png",
+      "width": 1280,
+      "height": 900,
+      "bytes": 28458,
+      "sha256": "18bdf941309bab3645cf71d3f8359b046dc78d277fe5358912c64e91fbaed62e",
+      "extractionPrompt": "Extract only the requested fields from this image. Return JSON with exactly this top-level shape: {\"observations\":[{\"field\":\"requested field name\",\"value\":null,\"status\":\"readable|unreadable|absent\"}],\"interpretations\":[]}. Use one observation per requested field. Use JSON strings, numbers, arrays or objects as specified for readable values, null for unreadable or absent values. Do not provide a prose answer or call tools. Requested fields: nodeLabels (array of strings), directedEdges (array of [source,target] string pairs).",
+      "expected": {
+        "observations": [
+          {
+            "field": "nodeLabels",
+            "value": [
+              "Input",
+              "Filter",
+              "Output",
+              "Waste"
+            ],
+            "status": "readable",
+            "match": "unordered"
+          },
+          {
+            "field": "directedEdges",
+            "value": [
+              [
+                "Input",
+                "Filter"
+              ],
+              [
+                "Filter",
+                "Output"
+              ],
+              [
+                "Filter",
+                "Waste"
+              ]
+            ],
+            "status": "readable",
+            "match": "unordered"
+          }
+        ],
+        "interpretations": []
+      }
+    }
+  ]
+}

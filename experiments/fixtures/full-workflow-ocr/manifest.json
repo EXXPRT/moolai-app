@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "syntheticOnly": true,
+  "generator": "Pillow",
+  "fonts": {
+    "/System/Library/Fonts/Supplemental/Arial.ttf": "525979822591a3447cfc49d943d6f7683508e25543407871c0ed8fed05fd2bd9",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf": "d72db21f9242aedd6b917d8549ad5921766b24d5f8d0becfda2ff4c620b3c2e0"
+  },
+  "fixtures": [
+    {
+      "id": "01-clear-text",
+      "description": "Clear text, identifier, time, quantity, explicit proposal/no-results status.",
+      "image": "01-clear-text.png",
+      "sha256": "0057de9b5d06d9fe60f026a03da300ccd0ac78bec6c036070a4afb3a5ff8d474",
+      "width": 1280,
+      "height": 900,
+      "bytes": 51627,
+      "expected": {
+        "title": "Small shade trial",
+        "sample_id": "FERN-204",
+        "status": "Proposal only",
+        "water_ml": 150,
+        "review_time": "18:30 UTC",
+        "constraint": "keep watering equal",
+        "measured_results": false
+      },
+      "question": "Read only this screenshot. Return one JSON object with these keys: title (string), sample_id (string), status (string), water_ml (number), review_time (string), constraint (string), measured_results (boolean). Preserve exact identifiers and values. Use null for unreadable fields; do not infer unseen facts. No prose outside the JSON."
+    },
+    {
+      "id": "02-math-table",
+      "description": "Subscripts, case-sensitive concentration/volume notation, table row alignment, no inferred answer.",
+      "image": "02-math-table.png",
+      "sha256": "9e7b162771b014554d4d3ad1ab22616371eec73f987a45770505ffc63ae03544",
+      "width": 1280,
+      "height": 900,
+      "bytes": 46853,
+      "expected": {
+        "equation_ascii": "c1*V1=c2*V2",
+        "target_c2_mol_l": 0.5,
+        "rows": [
+          {
+            "trial": "A",
+            "c1_mol_l": 2.5,
+            "v1_ml": 40.0
+          },
+          {
+            "trial": "B",
+            "c1_mol_l": 1.2,
+            "v1_ml": 25.0
+          }
+        ],
+        "v2_value_visible": false,
+        "v2_value": null
+      },
+      "question": "Transcribe evidence from this screenshot without solving the exercise. Return one JSON object: equation_ascii (use c1, V1, c2, V2 and * for multiplication), target_c2_mol_l (number), rows (array of objects with trial, c1_mol_l, v1_ml), v2_value_visible (boolean), v2_value (number or null). Use null for values not supplied. No prose outside JSON."
+    },
+    {
+      "id": "03-diagram-uncertainty",
+      "description": "Directed graph with branch labels and a fully masked value; no recoverable value exists.",
+      "image": "03-diagram-uncertainty.png",
+      "sha256": "4b5a06d39b6886a6ea6036853ed6f3e683355cffceb913f5679b38def3b5dc29",
+      "width": 1280,
+      "height": 900,
+      "bytes": 40126,
+      "expected": {
+        "nodes": {
+          "A": "SENSOR",
+          "B": "FILTER",
+          "C": "LOGGER",
+          "D": "ALARM"
+        },
+        "edges": [
+          [
+            "A",
+            "B"
+          ],
+          [
+            "B",
+            "C"
+          ],
+          [
+            "B",
+            "D"
+          ]
+        ],
+        "pass_destination": "C",
+        "reject_destination": "D",
+        "calibration_value": null,
+        "calibration_readable": false
+      },
+      "question": "Read the diagram as evidence. Return one JSON object: nodes (object mapping letter IDs to visible labels), edges (array of [source ID, target ID] pairs following arrow direction), pass_destination (ID), reject_destination (ID), calibration_value (string or null), calibration_readable (boolean). The patterned region may be unreadable; do not guess hidden content. No prose outside JSON."
+    }
+  ]
+}

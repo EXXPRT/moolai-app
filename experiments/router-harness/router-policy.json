@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "threshold": 0.8,
+  "fallback": "super",
+  "models": {"low":"lightning","medium":"super","high":"glm"},
+  "criteria": {
+    "low": "A specific lookup, extraction, formatting or brief summary supported by one note or a single supplied passage. Long wording, requesting a current revision or a prior failed search does not by itself make the reasoning complex.",
+    "medium": "A clear request to combine or compare two or more relevant notes with straightforward synthesis and ordinary constraints. No substantial causal reasoning, unresolved conflict or dependent plan is needed.",
+    "high": "A clear request requiring multi-step reasoning or calculation, careful causal explanation, reconciliation of conflicting current evidence, or a plan with dependent steps and tradeoffs. More text alone is not enough. A known stale revision should be refreshed, not treated as an unresolved current conflict.",
+    "clarify": "The intended request or its referent cannot be established from the available conversation. Ask a clarification before doing agent work. Missing answer evidence for an otherwise clear question is not ambiguous user intent.",
+    "unsupported": "The user explicitly requests an action outside the available tools, such as sending email or controlling another application. Explain the missing capability. Choosing a larger model does not add tools. Reading information about such actions from notes is still supported."
+  },
+  "decisionRules": "Confidence below 0.8 uses Super with the original request and a routing-uncertainty flag. Confident clarify or unsupported produces a fixed clarification/limitation without a task call. Provider failure produces an unresolved saved request, without an automatic retry or paid fallback. All notes-only constraints remain authoritative."
+}

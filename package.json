@@ -1,0 +1,39 @@
+{
+  "name": "moolai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test packages/agent/test/*.test.ts packages/brain/test/*.test.ts apps/runtime/test/*.test.ts scripts/*.test.mjs scripts/*.test.ts",
+    "dev:runtime": "node --env-file-if-exists=runtime.env --import tsx apps/runtime/src/main.ts",
+    "dev": "npm run dev:runtime",
+    "build:desktop": "vite build --config apps/desktop/vite.config.ts",
+    "desktop": "electron apps/desktop/electron.cjs",
+    "test:desktop": "electron scripts/smoke-desktop.cjs",
+    "check": "npm run typecheck && npm test && npm run build:desktop",
+    "demo": "MOOLAI_MODE=fixture node --env-file-if-exists=runtime.env --import tsx apps/runtime/src/main.ts",
+    "build:native": "bash native/build.sh",
+    "setup:asr": "python3 scripts/setup-asr.py",
+    "asr": "bash scripts/start-asr.sh",
+    "test:asr": "node scripts/smoke-asr.mjs .data/validation/whisper-asr-smoke.json"
+  },
+  "dependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "electron": "44.4.3",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "vite": "8.3.0"
+  }
+}

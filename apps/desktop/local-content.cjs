@@ -1,0 +1,58 @@
+const { resolve, relative, isAbsolute } = require("node:path");
+
+// Only the built UI can be served by the desktop's private protocol.
+function localContentPath(url, directory) {
+  try {
+    const parsed = new URL(url);
+    if (
+      parsed.protocol !== "moolai:" ||
+      parsed.hostname !== "app" ||
+      parsed.port ||
+      parsed.username ||
+      parsed.password
+    )
+      return null;
+    const pathname = decodeURIComponent(parsed.pathname);
+    if (pathname.includes("\\") || pathname.includes("\0")) return null;
+    const root = resolve(directory);
+    const file = resolve(
+      root,
+      `.${pathname === "/" ? "/index.html" : pathname}`,
+    );
+    const within = relative(root, file);
+    return within && !within.startsWith("..") && !isAbsolute(within)
+      ? file
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function trustedFrame(event, contents, documentURL) {
+  return Boolean(
+    contents &&
+      event.sender === contents &&
+      event.senderFrame === contents.mainFrame &&
+      event.senderFrame?.url === documentURL,
+  );
+}
+
+// Paths selected by the user are granted through a separate native dialog IPC.
+// In particular, the renderer cannot grant an arbitrary local path.
+function allowedRequest(method, path) {
+  if (method === "GET")
+    return (
+      ["/api/state", "/api/native", "/api/local-folders"].includes(path) ||
+      /^\/api\/export\/[a-zA-Z0-9_-]+$/.test(path)
+    );
+  if (method !== "POST") return false;
+  return (
+    [
+      "/api/session", "/api/input", "/api/end", "/api/end/resolve",
+      "/api/subject", "/api/retry", "/api/speech/stop", "/api/voice",
+      "/api/local-folders/revoke",
+    ].includes(path) || /^\/api\/record\/[a-zA-Z0-9_-]+$/.test(path)
+  );
+}
+
+module.exports = { localContentPath, trustedFrame, allowedRequest };

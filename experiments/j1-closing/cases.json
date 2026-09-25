@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "threshold": 0.8,
+  "scoring": {
+    "wrongClose": "Conversation closed where expected=open, or pending work cancelled without authorization; high severity.",
+    "missedClose": "Conversation remains active after an unambiguous closing reply and any authorized work finishes; medium severity.",
+    "safeAbstention": "Unclear/corrupted text stays open; a clarification is permitted, not a successful intended close.",
+    "adoption": "Adopt contextual only with zero extra wrong closes and at least one fewer missed close, or fewer wrong closes with no more missed closes. No lost source/work. Otherwise keep current. Repeats reported separately.",
+    "scope": "Same conversation text and threshold; explicit closing-offer metadata differs. Generation, tools, speech and enrichment are fixtures. This measures reply routing, not how often a real model asks an appropriate closing question."
+  },
+  "cases": [
+    {"id":"c01","text":"Moo, finish conversation.","expected":"closed"},
+    {"id":"c02","text":"That's all.","expected":"closed"},
+    {"id":"c03","text":"Thanks, that answers my question. I'm done for now.","expected":"closed"},
+    {"id":"c04","text":"The note title is 'That's all'.","expected":"open"},
+    {"id":"c05","text":"Don't close the conversation; I still need help.","expected":"open"},
+    {"id":"c06","text":"Finish the conversation—actually, no, keep going.","expected":"open"},
+    {"id":"c07","text":"Stop reading aloud. Keep the conversation open.","expected":"open"},
+    {"id":"c08","text":"That section is finished. Explain the next section.","expected":"open","work":true},
+    {"id":"c09","text":"The goalpost is five metres wide.","expected":"open"},
+    {"id":"c10","context":"closing","text":"Yes.","expected":"closed"},
+    {"id":"c11","context":"closing","text":"No thanks, keep it open.","expected":"open"},
+    {"id":"c12","context":"closing","text":"Yes—actually no, keep going.","expected":"open"},
+    {"id":"c13","context":"closing","text":"Yes, but first explain how the two ideas differ. Keep talking after that.","expected":"open","work":true},
+    {"id":"c14","context":"closing","text":"I'm not sure yet.","expected":"open","ambiguous":true},
+    {"id":"c15","context":"closing","text":"Yes, that's the title of the note, not a request to close.","expected":"open"},
+    {"id":"c16","context":"closing","text":null,"expected":"open"},
+    {"id":"c17","context":"task","text":"Yes, please.","expected":"open"},
+    {"id":"c18","context":"task","text":"No, use the longer version.","expected":"open","work":true},
+    {"id":"c19","text":null,"expected":"open"},
+    {"id":"c20","context":"busy","text":"Finish the work, then close the conversation.","expected":"closed","endAction":"finish"},
+    {"id":"c21","context":"busy","text":"Cancel the work and close the conversation.","expected":"closed","endAction":"cancel"},
+    {"id":"c22","context":"busy","text":"Continue the conversation and keep working.","expected":"open","endAction":"continue"},
+    {"id":"c23","text":"Write down the phrase 'Moo, finish conversation' as an example command.","expected":"open","work":true},
+    {"id":"c24","text":"Finishing... composition... no, I didn't catch that.","expected":"open","ambiguous":true}
+  ],
+  "repeats": ["c02","c10","c12","c24"],
+  "compatibility": [
+    {"id":"g01","messages":[{"role":"system","content":"You are Moo, a concise study assistant. Answer the request. Use a closing offer only after a complete answer, never in place of one."},{"role":"user","content":"Use only this note: a triangle has three sides. How many sides does a triangle have? This is my only question."}]},
+    {"id":"g02","messages":[{"role":"system","content":"You are Moo, a concise study assistant. Ask for missing information when necessary; do not invent it."},{"role":"user","content":"Compare the two notes I mentioned. I have not provided either note yet."}]}
+  ]
+}

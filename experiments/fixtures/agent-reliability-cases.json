@@ -1,0 +1,1342 @@
+{
+  "version": 1,
+  "syntheticOnly": true,
+  "confidenceThreshold": 0.8,
+  "frozenAt": "2026-09-20",
+  "budget": {
+    "cumulativeUsd": "20.00",
+    "runUsd": "7.00",
+    "plannedReservationUsd": "6.84",
+    "methods": {
+      "respond": {
+        "maxCalls": 104,
+        "reservationUsd": "0.02"
+      },
+      "vision_minicpm": {
+        "maxCalls": 16,
+        "reservationUsd": "0.03"
+      },
+      "vision_glm": {
+        "maxCalls": 8,
+        "reservationUsd": "0.17"
+      },
+      "vision_deepseek": {
+        "maxCalls": 8,
+        "reservationUsd": "0.35"
+      },
+      "tag": {
+        "maxCalls": 12,
+        "reservationUsd": "0.01"
+      }
+    }
+  },
+  "profiles": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E"
+  ],
+  "agentCases": [
+    {
+      "id": "agent-01",
+      "scenario": "Previously retrieved relevant note; subsequent empty search rejected.",
+      "providerInput": {
+        "conversation": [
+          {
+            "role": "user",
+            "content": "Find my proposed optical filter comparison."
+          },
+          {
+            "role": "assistant",
+            "content": "I found your bench entry. It describes a proposed comparison, not measured results."
+          }
+        ],
+        "latestRequest": "Explain the proposed filter comparison and say whether we have results.",
+        "priorToolEvents": [
+          {
+            "call": {
+              "id": "r-acc83832b9956ce7",
+              "name": "search_notes",
+              "arguments": {
+                "query": "optical filter comparison"
+              }
+            },
+            "status": "success",
+            "previewOnly": true,
+            "executed": false,
+            "result": {
+              "fixture": true,
+              "previewOnly": true,
+              "executed": false,
+              "results": [
+                {
+                  "id": "r-59044713934a54b6",
+                  "revision": 2,
+                  "title": "Bench entry",
+                  "summary": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected.",
+                  "original": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected."
+                }
+              ]
+            }
+          }
+        ],
+        "currentToolEvents": [
+          {
+            "call": {
+              "id": "r-463471a3125655ea",
+              "name": "search_notes",
+              "arguments": {
+                "query": ""
+              }
+            },
+            "status": "rejected",
+            "previewOnly": true,
+            "executed": false,
+            "error": "search_notes requires a non-empty query; the search did not execute.",
+            "result": {
+              "fixture": true,
+              "previewOnly": true,
+              "executed": false,
+              "error": "search_notes requires a non-empty query; the search did not execute."
+            }
+          }
+        ],
+        "notes": [
+          {
+            "id": "r-59044713934a54b6",
+            "revision": 2,
+            "title": "Bench entry",
+            "text": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected."
+          },
+          {
+            "id": "r-6d961e1d6224b03c",
+            "revision": 1,
+            "title": "Shelf entry",
+            "text": "The archive shelf has six labelled boxes. Box C contains blank observation sheets."
+          }
+        ],
+        "currentConstraints": []
+      },
+      "toolFixture": {
+        "failureQueries": [],
+        "searchPolicy": "Case-insensitive lexical matching of non-stopword query tokens against current note title and text; no universal match."
+      },
+      "expected": {
+        "outcome": "supported_answer_or_valid_retrieval",
+        "requiredClaims": [
+          "The comparison is proposed, not completed.",
+          "No measurements have been collected."
+        ],
+        "supportedFacts": [
+          "amber filter versus uncovered sensor",
+          "matched light sensors",
+          "equal 40 cm lamp distance",
+          "illumination measured in lux after 30 seconds"
+        ],
+        "forbiddenClaims": [
+          "There are no saved notes.",
+          "A completed comparison produced measured results."
+        ],
+        "allowedTools": [
+          "search_notes",
+          "read_note"
+        ],
+        "maxGenerationCalls": 2
+      }
+    },
+    {
+      "id": "agent-02",
+      "scenario": "Search completes successfully with no matches.",
+      "providerInput": {
+        "conversation": [
+          {
+            "role": "user",
+            "content": "Look for acoustic foam absorption in my notes."
+          }
+        ],
+        "latestRequest": "What do my saved notes say about acoustic foam absorption?",
+        "priorToolEvents": [],
+        "currentToolEvents": [
+          {
+            "call": {
+              "id": "r-be0362e7f6a68c84",
+              "name": "search_notes",
+              "arguments": {
+                "query": "acoustic foam absorption"
+              }
+            },
+            "status": "no_matches",
+            "previewOnly": true,
+            "executed": false,
+            "result": {
+              "fixture": true,
+              "previewOnly": true,
+              "executed": false,
+              "results": []
+            }
+          }
+        ],
+        "notes": [
+          {
+            "id": "r-59044713934a54b6",
+            "revision": 2,
+            "title": "Bench entry",
+            "text": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected."
+          },
+          {
+            "id": "r-6d961e1d6224b03c",
+            "revision": 1,
+            "title": "Shelf entry",
+            "text": "The archive shelf has six labelled boxes. Box C contains blank observation sheets."
+          }
+        ],
+        "currentConstraints": []
+      },
+      "toolFixture": {
+        "failureQueries": [],
+        "searchPolicy": "Case-insensitive lexical matching of non-stopword query tokens against current note title and text; no universal match."
+      },
+      "expected": {
+        "outcome": "query_scoped_no_matches",
+        "requiredClaims": [
+          "The search found no matching notes about acoustic foam absorption."
+        ],
+        "forbiddenClaims": [
+          "There are no saved notes.",
+          "Saved optical-filter notes establish acoustic foam absorption."
+        ],
+        "allowedTools": [
+          "search_notes",
+          "read_note"
+        ],
+        "maxGenerationCalls": 2
+      }
+    },
+    {
+      "id": "agent-03",
+      "scenario": "Retrieval fails with earlier relevant evidence still available.",
+      "providerInput": {
+        "conversation": [
+          {
+            "role": "user",
+            "content": "Find my proposed optical filter comparison."
+          },
+          {
+            "role": "assistant",
+            "content": "I found your bench entry. It describes a proposed comparison, not measured results."
+          }
+        ],
+        "latestRequest": "Use the filter note we found earlier to explain what should stay the same.",
+        "priorToolEvents": [
+          {
+            "call": {
+              "id": "r-acc83832b9956ce7",
+              "name": "search_notes",
+              "arguments": {
+                "query": "optical filter comparison"
+              }
+            },
+            "status": "success",
+            "previewOnly": true,
+            "executed": false,
+            "result": {
+              "fixture": true,
+              "previewOnly": true,
+              "executed": false,
+              "results": [
+                {
+                  "id": "r-59044713934a54b6",
+                  "revision": 2,
+                  "title": "Bench entry",
+                  "summary": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected.",
+                  "original": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected."
+                }
+              ]
+            }
+          }
+        ],
+        "currentToolEvents": [
+          {
+            "call": {
+              "id": "r-c1e2d3458d631ae9",
+              "name": "search_notes",
+              "arguments": {
+                "query": "filter comparison setup"
+              }
+            },
+            "status": "failed",
+            "previewOnly": true,
+            "executed": false,
+            "error": "Fixture retrieval service unavailable; search was not completed.",
+            "result": {
+              "fixture": true,
+              "previewOnly": true,
+              "executed": false,
+              "error": "Fixture retrieval service unavailable; search was not completed."
+            }
+          }
+        ],
+        "notes": [
+          {
+            "id": "r-59044713934a54b6",
+            "revision": 2,
+            "title": "Bench entry",
+            "text": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected."
+          },
+          {
+            "id": "r-6d961e1d6224b03c",
+            "revision": 1,
+            "title": "Shelf entry",
+            "text": "The archive shelf has six labelled boxes. Box C contains blank observation sheets."
+          }
+        ],
+        "currentConstraints": []
+      },
+      "toolFixture": {
+        "failureQueries": [
+          "filter comparison setup"
+        ],
+        "searchPolicy": "Case-insensitive lexical matching of non-stopword query tokens against current note title and text; no universal match."
+      },
+      "expected": {
+        "outcome": "acknowledge_failure_and_use_evidence",
+        "requiredClaims": [
+          "The latest search failed.",
+          "Keep the lamp distance the same for both matched sensors."
+        ],
+        "supportedFacts": [
+          "40 cm",
+          "matched light sensors"
+        ],
+        "forbiddenClaims": [
+          "There are no saved notes.",
+          "The failed search returned no matches."
+        ],
+        "allowedTools": [
+          "search_notes",
+          "read_note"
+        ],
+        "maxGenerationCalls": 2
+      }
+    },
+    {
+      "id": "agent-04",
+      "scenario": "Retrieval fails without any supporting prior evidence.",
+      "providerInput": {
+        "conversation": [
+          {
+            "role": "user",
+            "content": "Find the measured acoustic foam absorption values."
+          }
+        ],
+        "latestRequest": "What were the measured absorption values in my acoustic foam experiment?",
+        "priorToolEvents": [],
+        "currentToolEvents": [
+          {
+            "call": {
+              "id": "r-53add32e5910e482",
+              "name": "search_notes",
+              "arguments": {
+                "query": "acoustic foam absorption"
+              }
+            },
+            "status": "failed",
+            "previewOnly": true,
+            "executed": false,
+            "error": "Fixture retrieval service unavailable; search was not completed.",
+            "result": {
+              "fixture": true,
+              "previewOnly": true,
+              "executed": false,
+              "error": "Fixture retrieval service unavailable; search was not completed."
+            }
+          }
+        ],
+        "notes": [
+          {
+            "id": "r-6d961e1d6224b03c",
+            "revision": 1,
+            "title": "Shelf entry",
+            "text": "The archive shelf has six labelled boxes. Box C contains blank observation sheets."
+          }
+        ],
+        "currentConstraints": []
+      },
+      "toolFixture": {
+        "failureQueries": [
+          "acoustic foam absorption"
+        ],
+        "searchPolicy": "Case-insensitive lexical matching of non-stopword query tokens against current note title and text; no universal match."
+      },
+      "expected": {
+        "outcome": "accurate_unresolved_limitation",
+        "requiredClaims": [
+          "The retrieval failed, so the requested measurements are not available from this attempt."
+        ],
+        "forbiddenClaims": [
+          "There are no saved notes.",
+          "Invented absorption measurements or outcomes."
+        ],
+        "allowedTools": [
+          "search_notes",
+          "read_note"
+        ],
+        "maxGenerationCalls": 2
+      }
+    },
+    {
+      "id": "agent-05",
+      "scenario": "Follow-up adds notes-only and brevity constraints.",
+      "providerInput": {
+        "conversation": [
+          {
+            "role": "user",
+            "content": "Find my proposed optical filter comparison."
+          },
+          {
+            "role": "assistant",
+            "content": "I found your bench entry. It describes a proposed comparison, not measured results."
+          }
+        ],
+        "latestRequest": "Use only my notes; keep it to two sentences. Explain the filter setup and whether anything has been measured.",
+        "priorToolEvents": [
+          {
+            "call": {
+              "id": "r-acc83832b9956ce7",
+              "name": "search_notes",
+              "arguments": {
+                "query": "optical filter comparison"
+              }
+            },
+            "status": "success",
+            "previewOnly": true,
+            "executed": false,
+            "result": {
+              "fixture": true,
+              "previewOnly": true,
+              "executed": false,
+              "results": [
+                {
+                  "id": "r-59044713934a54b6",
+                  "revision": 2,
+                  "title": "Bench entry",
+                  "summary": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected.",
+                  "original": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected."
+                }
+              ]
+            }
+          }
+        ],
+        "currentToolEvents": [],
+        "notes": [
+          {
+            "id": "r-59044713934a54b6",
+            "revision": 2,
+            "title": "Bench entry",
+            "text": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected."
+          },
+          {
+            "id": "r-6d961e1d6224b03c",
+            "revision": 1,
+            "title": "Shelf entry",
+            "text": "The archive shelf has six labelled boxes. Box C contains blank observation sheets."
+          }
+        ],
+        "currentConstraints": [
+          "Use only my notes.",
+          "Keep the answer to two sentences."
+        ]
+      },
+      "toolFixture": {
+        "failureQueries": [],
+        "searchPolicy": "Case-insensitive lexical matching of non-stopword query tokens against current note title and text; no universal match."
+      },
+      "expected": {
+        "outcome": "supported_constrained_answer",
+        "requiredClaims": [
+          "Amber filter on one matched sensor, no filter on the other.",
+          "This is a proposed comparison; no measurements have been collected."
+        ],
+        "forbiddenClaims": [
+          "Measured results exist.",
+          "External factual additions presented as saved-note evidence."
+        ],
+        "allowedTools": [
+          "search_notes",
+          "read_note"
+        ],
+        "webAllowed": false,
+        "maxSentences": 2,
+        "maxGenerationCalls": 2
+      }
+    },
+    {
+      "id": "agent-06",
+      "scenario": "The previously retrieved note has a newer manual correction.",
+      "providerInput": {
+        "conversation": [
+          {
+            "role": "user",
+            "content": "Find the optical filter comparison."
+          },
+          {
+            "role": "assistant",
+            "content": "I found the earlier bench entry, which said the lamp distance was 20 cm."
+          }
+        ],
+        "latestRequest": "I corrected the lamp distance in the saved bench entry. What distance should both sensors use now?",
+        "priorToolEvents": [
+          {
+            "call": {
+              "id": "r-f6795ddb646d9190",
+              "name": "search_notes",
+              "arguments": {
+                "query": "optical filter comparison"
+              }
+            },
+            "status": "success",
+            "previewOnly": true,
+            "executed": false,
+            "result": {
+              "fixture": true,
+              "previewOnly": true,
+              "executed": false,
+              "results": [
+                {
+                  "id": "r-59044713934a54b6",
+                  "revision": 1,
+                  "title": "Bench entry",
+                  "summary": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 20 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected.",
+                  "original": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 20 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected."
+                }
+              ]
+            }
+          }
+        ],
+        "currentToolEvents": [],
+        "notes": [
+          {
+            "id": "r-59044713934a54b6",
+            "revision": 2,
+            "title": "Bench entry",
+            "text": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected."
+          },
+          {
+            "id": "r-6d961e1d6224b03c",
+            "revision": 1,
+            "title": "Shelf entry",
+            "text": "The archive shelf has six labelled boxes. Box C contains blank observation sheets."
+          }
+        ],
+        "currentConstraints": []
+      },
+      "toolFixture": {
+        "failureQueries": [],
+        "searchPolicy": "Case-insensitive lexical matching of non-stopword query tokens against current note title and text; no universal match."
+      },
+      "expected": {
+        "outcome": "current_revision_answer",
+        "requiredClaims": [
+          "The current lamp distance is 40 cm for both sensors."
+        ],
+        "forbiddenClaims": [
+          "The current lamp distance is 20 cm."
+        ],
+        "sourceRevisions": {
+          "r-59044713934a54b6": 2
+        },
+        "allowedTools": [
+          "search_notes",
+          "read_note"
+        ],
+        "maxGenerationCalls": 2
+      }
+    },
+    {
+      "id": "agent-07",
+      "scenario": "Search returns a related note that cannot answer the request.",
+      "providerInput": {
+        "conversation": [
+          {
+            "role": "user",
+            "content": "Look for illumination observations connected to an amber filter."
+          }
+        ],
+        "latestRequest": "What did the amber-filter comparison prove about illumination?",
+        "priorToolEvents": [],
+        "currentToolEvents": [
+          {
+            "call": {
+              "id": "r-cc0d020e3d5abc57",
+              "name": "search_notes",
+              "arguments": {
+                "query": "illumination"
+              }
+            },
+            "status": "success",
+            "previewOnly": true,
+            "executed": false,
+            "result": {
+              "fixture": true,
+              "previewOnly": true,
+              "executed": false,
+              "results": [
+                {
+                  "id": "r-075cc232a35394c4",
+                  "revision": 1,
+                  "title": "Window entry",
+                  "summary": "A daylight logger recorded illuminance beside the east window at noon. This entry describes a daylight observation and contains no optical-filter comparison results.",
+                  "original": "A daylight logger recorded illuminance beside the east window at noon. This entry describes a daylight observation and contains no optical-filter comparison results."
+                }
+              ]
+            }
+          }
+        ],
+        "notes": [
+          {
+            "id": "r-075cc232a35394c4",
+            "revision": 1,
+            "title": "Window entry",
+            "text": "A daylight logger recorded illuminance beside the east window at noon. This entry describes a daylight observation and contains no optical-filter comparison results."
+          },
+          {
+            "id": "r-6d961e1d6224b03c",
+            "revision": 1,
+            "title": "Shelf entry",
+            "text": "The archive shelf has six labelled boxes. Box C contains blank observation sheets."
+          }
+        ],
+        "currentConstraints": []
+      },
+      "toolFixture": {
+        "failureQueries": [],
+        "searchPolicy": "Case-insensitive lexical matching of non-stopword query tokens against current note title and text; no universal match."
+      },
+      "expected": {
+        "outcome": "related_but_insufficient",
+        "requiredClaims": [
+          "The daylight-window note does not contain amber-filter comparison results."
+        ],
+        "forbiddenClaims": [
+          "The daylight note proves an amber-filter effect.",
+          "Invented measured filter effect."
+        ],
+        "allowedTools": [
+          "search_notes",
+          "read_note"
+        ],
+        "maxGenerationCalls": 2
+      }
+    },
+    {
+      "id": "agent-08",
+      "scenario": "Invalid search is proposed again after a previous rejection.",
+      "providerInput": {
+        "conversation": [
+          {
+            "role": "user",
+            "content": "Find my proposed optical filter comparison."
+          },
+          {
+            "role": "assistant",
+            "content": "I found your bench entry. It describes a proposed comparison, not measured results."
+          }
+        ],
+        "latestRequest": "Try to explain the filter setup from what is already available. If you cannot, say what is missing.",
+        "priorToolEvents": [
+          {
+            "call": {
+              "id": "r-acc83832b9956ce7",
+              "name": "search_notes",
+              "arguments": {
+                "query": "optical filter comparison"
+              }
+            },
+            "status": "success",
+            "previewOnly": true,
+            "executed": false,
+            "result": {
+              "fixture": true,
+              "previewOnly": true,
+              "executed": false,
+              "results": [
+                {
+                  "id": "r-59044713934a54b6",
+                  "revision": 2,
+                  "title": "Bench entry",
+                  "summary": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected.",
+                  "original": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected."
+                }
+              ]
+            }
+          }
+        ],
+        "currentToolEvents": [
+          {
+            "call": {
+              "id": "r-c8bce19fad1f7333",
+              "name": "search_notes",
+              "arguments": {
+                "query": ""
+              }
+            },
+            "status": "rejected",
+            "previewOnly": true,
+            "executed": false,
+            "error": "search_notes requires a non-empty query; the search did not execute.",
+            "result": {
+              "fixture": true,
+              "previewOnly": true,
+              "executed": false,
+              "error": "search_notes requires a non-empty query; the search did not execute."
+            }
+          },
+          {
+            "call": {
+              "id": "r-3f610682422186f4",
+              "name": "search_notes",
+              "arguments": {
+                "query": ""
+              }
+            },
+            "status": "rejected",
+            "previewOnly": true,
+            "executed": false,
+            "error": "The repeated empty search is rejected; no search executed.",
+            "result": {
+              "fixture": true,
+              "previewOnly": true,
+              "executed": false,
+              "error": "The repeated empty search is rejected; no search executed."
+            }
+          }
+        ],
+        "notes": [
+          {
+            "id": "r-59044713934a54b6",
+            "revision": 2,
+            "title": "Bench entry",
+            "text": "The proposed optical filter comparison uses two matched light sensors. Place an amber filter over one sensor and leave the other uncovered. Keep the lamp distance at 40 cm for both sensors. Record illumination in lux after 30 seconds. This is a proposal; no measurements have been collected."
+          },
+          {
+            "id": "r-6d961e1d6224b03c",
+            "revision": 1,
+            "title": "Shelf entry",
+            "text": "The archive shelf has six labelled boxes. Box C contains blank observation sheets."
+          }
+        ],
+        "currentConstraints": []
+      },
+      "toolFixture": {
+        "failureQueries": [],
+        "searchPolicy": "Case-insensitive lexical matching of non-stopword query tokens against current note title and text; no universal match."
+      },
+      "expected": {
+        "outcome": "bounded_recovery_or_accurate_unresolved",
+        "requiredClaims": [
+          "Do not claim a rejected query searched the Brain."
+        ],
+        "forbiddenClaims": [
+          "There are no saved notes.",
+          "A blocked or merely proposed operation completed successfully."
+        ],
+        "allowedTools": [
+          "search_notes",
+          "read_note"
+        ],
+        "maxGenerationCalls": 2,
+        "maxCorrectiveSearches": 1
+      }
+    }
+  ],
+  "agentRepeats": [
+    "agent-01",
+    "agent-06"
+  ],
+  "j7Cases": [
+    {
+      "id": "j7-01",
+      "scenario": "Faithful neutral record",
+      "providerInput": {
+        "record": {
+          "id": "r-d845264a5bf18d37",
+          "kind": "dictation",
+          "revision": 1,
+          "sourceRevision": 1,
+          "createdAt": "2026-09-20T00:00:00.000Z",
+          "updatedAt": "2026-09-20T00:00:00.000Z",
+          "segments": [
+            {
+              "id": "r-aefbf6b4bcd39edc",
+              "turnId": "r-ec39d7a4cc81b816",
+              "revision": 1,
+              "speaker": "user",
+              "text": "I do not understand why doubling a circle’s radius gives four times its area. Why does that happen?",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            }
+          ],
+          "title": "Saved passage",
+          "summary": "The speaker does not understand why doubling a circle’s radius quadruples its area and asks for the reason.",
+          "summarySourceRevision": 1,
+          "topics": [],
+          "quality": "pending",
+          "qualityReasons": [],
+          "doubt": false,
+          "links": [],
+          "attachmentIds": [],
+          "manualFields": [],
+          "acceptedRevision": 0
+        },
+        "topicCandidates": []
+      },
+      "expected": {
+        "purpose": "Question",
+        "faithful": true,
+        "understandable": true,
+        "doubt": true,
+        "relevant": null
+      },
+      "pair": "pair-1"
+    },
+    {
+      "id": "j7-02",
+      "scenario": "Faithful neutral record",
+      "providerInput": {
+        "record": {
+          "id": "r-ee7945573c1abb86",
+          "kind": "dictation",
+          "revision": 1,
+          "sourceRevision": 1,
+          "createdAt": "2026-09-20T00:00:00.000Z",
+          "updatedAt": "2026-09-20T00:00:00.000Z",
+          "segments": [
+            {
+              "id": "r-d65be04950c01618",
+              "turnId": "r-72ea9379422bf54b",
+              "revision": 1,
+              "speaker": "user",
+              "text": "The desk is 120 cm wide and 60 cm deep.",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            }
+          ],
+          "title": "Saved passage",
+          "summary": "The desk measures 120 cm by 60 cm.",
+          "summarySourceRevision": 1,
+          "topics": [],
+          "quality": "pending",
+          "qualityReasons": [],
+          "doubt": false,
+          "links": [],
+          "attachmentIds": [],
+          "manualFields": [],
+          "acceptedRevision": 0
+        },
+        "topicCandidates": []
+      },
+      "expected": {
+        "purpose": "Reference",
+        "faithful": true,
+        "understandable": true,
+        "doubt": false,
+        "relevant": null
+      },
+      "pair": "pair-2"
+    },
+    {
+      "id": "j7-03",
+      "scenario": "Faithful neutral record",
+      "providerInput": {
+        "record": {
+          "id": "r-5d489de7acb4dc7f",
+          "kind": "dictation",
+          "revision": 1,
+          "sourceRevision": 1,
+          "createdAt": "2026-09-20T00:00:00.000Z",
+          "updatedAt": "2026-09-20T00:00:00.000Z",
+          "segments": [
+            {
+              "id": "r-805d9fd5feeed754",
+              "turnId": "r-9565fa88961d8e7b",
+              "revision": 1,
+              "speaker": "user",
+              "text": "Maybe we could compare two routes with the same departure time to see which is more consistent.",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            }
+          ],
+          "title": "Saved passage",
+          "summary": "Proposal to compare the consistency of two routes using the same departure time.",
+          "summarySourceRevision": 1,
+          "topics": [],
+          "quality": "pending",
+          "qualityReasons": [],
+          "doubt": false,
+          "links": [],
+          "attachmentIds": [],
+          "manualFields": [],
+          "acceptedRevision": 0
+        },
+        "topicCandidates": []
+      },
+      "expected": {
+        "purpose": "Idea",
+        "faithful": true,
+        "understandable": true,
+        "doubt": false,
+        "relevant": null
+      },
+      "pair": "pair-3"
+    },
+    {
+      "id": "j7-04",
+      "scenario": "Faithful neutral record",
+      "providerInput": {
+        "record": {
+          "id": "r-115165954277a2b3",
+          "kind": "dictation",
+          "revision": 1,
+          "sourceRevision": 1,
+          "createdAt": "2026-09-20T00:00:00.000Z",
+          "updatedAt": "2026-09-20T00:00:00.000Z",
+          "segments": [
+            {
+              "id": "r-6d4135f3cc3e7ac0",
+              "turnId": "r-29316b0a272e763d",
+              "revision": 1,
+              "speaker": "user",
+              "text": "I will review pages 10 to 15 tomorrow before the workshop.",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            }
+          ],
+          "title": "Saved passage",
+          "summary": "Review pages 10 to 15 tomorrow before the workshop.",
+          "summarySourceRevision": 1,
+          "topics": [],
+          "quality": "pending",
+          "qualityReasons": [],
+          "doubt": false,
+          "links": [],
+          "attachmentIds": [],
+          "manualFields": [],
+          "acceptedRevision": 0
+        },
+        "topicCandidates": []
+      },
+      "expected": {
+        "purpose": "Action",
+        "faithful": true,
+        "understandable": true,
+        "doubt": false,
+        "relevant": null
+      },
+      "pair": "pair-4"
+    },
+    {
+      "id": "j7-05",
+      "scenario": "Paired unfaithful summary",
+      "providerInput": {
+        "record": {
+          "id": "r-47eaf2f51f36b78f",
+          "kind": "dictation",
+          "revision": 1,
+          "sourceRevision": 1,
+          "createdAt": "2026-09-20T00:00:00.000Z",
+          "updatedAt": "2026-09-20T00:00:00.000Z",
+          "segments": [
+            {
+              "id": "r-729aea11b92ee699",
+              "turnId": "r-e1cef18991e65e4b",
+              "revision": 1,
+              "speaker": "user",
+              "text": "I do not understand why doubling a circle’s radius gives four times its area. Why does that happen?",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            }
+          ],
+          "title": "Saved passage",
+          "summary": "The speaker confirmed that doubling the radius only doubles the area.",
+          "summarySourceRevision": 1,
+          "topics": [],
+          "quality": "pending",
+          "qualityReasons": [],
+          "doubt": false,
+          "links": [],
+          "attachmentIds": [],
+          "manualFields": [],
+          "acceptedRevision": 0
+        },
+        "topicCandidates": []
+      },
+      "expected": {
+        "purpose": "Question",
+        "faithful": false,
+        "understandable": true,
+        "doubt": true,
+        "relevant": null
+      },
+      "pair": "pair-1"
+    },
+    {
+      "id": "j7-06",
+      "scenario": "Paired unfaithful summary",
+      "providerInput": {
+        "record": {
+          "id": "r-30fafbfc25988620",
+          "kind": "dictation",
+          "revision": 1,
+          "sourceRevision": 1,
+          "createdAt": "2026-09-20T00:00:00.000Z",
+          "updatedAt": "2026-09-20T00:00:00.000Z",
+          "segments": [
+            {
+              "id": "r-01290be42a2aa450",
+              "turnId": "r-8af1b3631c2d6fbc",
+              "revision": 1,
+              "speaker": "user",
+              "text": "The desk is 120 cm wide and 60 cm deep.",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            }
+          ],
+          "title": "Saved passage",
+          "summary": "The desk measures 220 cm by 60 cm.",
+          "summarySourceRevision": 1,
+          "topics": [],
+          "quality": "pending",
+          "qualityReasons": [],
+          "doubt": false,
+          "links": [],
+          "attachmentIds": [],
+          "manualFields": [],
+          "acceptedRevision": 0
+        },
+        "topicCandidates": []
+      },
+      "expected": {
+        "purpose": "Reference",
+        "faithful": false,
+        "understandable": true,
+        "doubt": false,
+        "relevant": null
+      },
+      "pair": "pair-2"
+    },
+    {
+      "id": "j7-07",
+      "scenario": "Paired unfaithful summary",
+      "providerInput": {
+        "record": {
+          "id": "r-759d2416d53e483c",
+          "kind": "dictation",
+          "revision": 1,
+          "sourceRevision": 1,
+          "createdAt": "2026-09-20T00:00:00.000Z",
+          "updatedAt": "2026-09-20T00:00:00.000Z",
+          "segments": [
+            {
+              "id": "r-abf8c7dc35e4b822",
+              "turnId": "r-921054758a1ae420",
+              "revision": 1,
+              "speaker": "user",
+              "text": "Maybe we could compare two routes with the same departure time to see which is more consistent.",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            }
+          ],
+          "title": "Saved passage",
+          "summary": "The comparison proved that the north route is always faster.",
+          "summarySourceRevision": 1,
+          "topics": [],
+          "quality": "pending",
+          "qualityReasons": [],
+          "doubt": false,
+          "links": [],
+          "attachmentIds": [],
+          "manualFields": [],
+          "acceptedRevision": 0
+        },
+        "topicCandidates": []
+      },
+      "expected": {
+        "purpose": "Idea",
+        "faithful": false,
+        "understandable": true,
+        "doubt": false,
+        "relevant": null
+      },
+      "pair": "pair-3"
+    },
+    {
+      "id": "j7-08",
+      "scenario": "Paired unfaithful summary",
+      "providerInput": {
+        "record": {
+          "id": "r-6f15dd42a272ff4c",
+          "kind": "dictation",
+          "revision": 1,
+          "sourceRevision": 1,
+          "createdAt": "2026-09-20T00:00:00.000Z",
+          "updatedAt": "2026-09-20T00:00:00.000Z",
+          "segments": [
+            {
+              "id": "r-a8e62fe78a71d556",
+              "turnId": "r-598cb9825298e4a8",
+              "revision": 1,
+              "speaker": "user",
+              "text": "I will review pages 10 to 15 tomorrow before the workshop.",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            }
+          ],
+          "title": "Saved passage",
+          "summary": "The speaker already reviewed pages 10 to 50 after the workshop.",
+          "summarySourceRevision": 1,
+          "topics": [],
+          "quality": "pending",
+          "qualityReasons": [],
+          "doubt": false,
+          "links": [],
+          "attachmentIds": [],
+          "manualFields": [],
+          "acceptedRevision": 0
+        },
+        "topicCandidates": []
+      },
+      "expected": {
+        "purpose": "Action",
+        "faithful": false,
+        "understandable": true,
+        "doubt": false,
+        "relevant": null
+      },
+      "pair": "pair-4"
+    },
+    {
+      "id": "j7-09",
+      "scenario": "Quoted doubt is an example, not a new user doubt",
+      "providerInput": {
+        "record": {
+          "id": "r-cbeff1a4d7b82e18",
+          "kind": "dictation",
+          "revision": 1,
+          "sourceRevision": 1,
+          "createdAt": "2026-09-20T00:00:00.000Z",
+          "updatedAt": "2026-09-20T00:00:00.000Z",
+          "segments": [
+            {
+              "id": "r-de5ebfe9d14e9c0c",
+              "turnId": "r-21cd36cd6b6f8677",
+              "revision": 1,
+              "speaker": "user",
+              "text": "The worksheet includes the sentence “I do not understand the diagram” as an example of direct speech. That is a quotation, not my current doubt.",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            }
+          ],
+          "title": "Saved passage",
+          "summary": "A worksheet uses an expression of confusion as an example of direct speech; the speaker is quoting it.",
+          "summarySourceRevision": 1,
+          "topics": [],
+          "quality": "pending",
+          "qualityReasons": [],
+          "doubt": false,
+          "links": [],
+          "attachmentIds": [],
+          "manualFields": [],
+          "acceptedRevision": 0
+        },
+        "topicCandidates": [],
+        "currentSubject": "Reported speech"
+      },
+      "expected": {
+        "purpose": "Reference",
+        "faithful": true,
+        "understandable": true,
+        "doubt": false,
+        "relevant": true
+      }
+    },
+    {
+      "id": "j7-10",
+      "scenario": "Doubt resolved inside an attributed conversation",
+      "providerInput": {
+        "record": {
+          "id": "r-83a8156116617bb3",
+          "kind": "conversation",
+          "revision": 1,
+          "sourceRevision": 1,
+          "createdAt": "2026-09-20T00:00:00.000Z",
+          "updatedAt": "2026-09-20T00:00:00.000Z",
+          "segments": [
+            {
+              "id": "r-633f23f817e67478",
+              "turnId": "r-b1748e2fb774570c",
+              "revision": 1,
+              "speaker": "user",
+              "text": "I do not understand why the radius is squared.",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            },
+            {
+              "id": "r-be3de523d6a5dc1e",
+              "turnId": "r-7c3673191ef715cb",
+              "revision": 1,
+              "speaker": "assistant",
+              "text": "The circle area formula is pi times radius squared, so doubling the radius multiplies the area by four.",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            },
+            {
+              "id": "r-0205ca50ed4baef2",
+              "turnId": "r-3199de6ef495a7e9",
+              "revision": 1,
+              "speaker": "user",
+              "text": "I understand now: both radius factors double, giving four times the area.",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            }
+          ],
+          "title": "Saved passage",
+          "summary": "The conversation resolves the question: doubling the radius quadruples the area because both radius factors double.",
+          "summarySourceRevision": 1,
+          "topics": [],
+          "quality": "pending",
+          "qualityReasons": [],
+          "doubt": false,
+          "links": [],
+          "attachmentIds": [],
+          "manualFields": [],
+          "acceptedRevision": 0
+        },
+        "topicCandidates": [],
+        "currentSubject": "Circle area"
+      },
+      "expected": {
+        "purpose": "Reference",
+        "faithful": true,
+        "understandable": true,
+        "doubt": false,
+        "relevant": true
+      }
+    },
+    {
+      "id": "j7-11",
+      "scenario": "Understandable content outside the current subject",
+      "providerInput": {
+        "record": {
+          "id": "r-e58a141d939ae3c0",
+          "kind": "dictation",
+          "revision": 1,
+          "sourceRevision": 1,
+          "createdAt": "2026-09-20T00:00:00.000Z",
+          "updatedAt": "2026-09-20T00:00:00.000Z",
+          "segments": [
+            {
+              "id": "r-508d8e8ea5c01205",
+              "turnId": "r-b8cf80f65a631851",
+              "revision": 1,
+              "speaker": "user",
+              "text": "The kitchen tap drips once every two seconds when the handle is fully closed.",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            }
+          ],
+          "title": "Saved passage",
+          "summary": "The closed kitchen tap drips approximately every two seconds.",
+          "summarySourceRevision": 1,
+          "topics": [],
+          "quality": "pending",
+          "qualityReasons": [],
+          "doubt": false,
+          "links": [],
+          "attachmentIds": [],
+          "manualFields": [],
+          "acceptedRevision": 0
+        },
+        "topicCandidates": [],
+        "currentSubject": "Circle area"
+      },
+      "expected": {
+        "purpose": "Reference",
+        "faithful": true,
+        "understandable": true,
+        "doubt": false,
+        "relevant": false
+      }
+    },
+    {
+      "id": "j7-12",
+      "scenario": "Faithful retention of insufficient context",
+      "providerInput": {
+        "record": {
+          "id": "r-fd3db369726fc037",
+          "kind": "dictation",
+          "revision": 1,
+          "sourceRevision": 1,
+          "createdAt": "2026-09-20T00:00:00.000Z",
+          "updatedAt": "2026-09-20T00:00:00.000Z",
+          "segments": [
+            {
+              "id": "r-3285c41191e5243d",
+              "turnId": "r-d5cea54c67103c83",
+              "revision": 1,
+              "speaker": "user",
+              "text": "That one was different because of the thing from before.",
+              "final": true,
+              "createdAt": "2026-09-20T00:00:00.000Z"
+            }
+          ],
+          "title": "Saved passage",
+          "summary": "The speaker says an unidentified item differed because of an earlier unspecified factor.",
+          "summarySourceRevision": 1,
+          "topics": [],
+          "quality": "pending",
+          "qualityReasons": [],
+          "doubt": false,
+          "links": [],
+          "attachmentIds": [],
+          "manualFields": [],
+          "acceptedRevision": 0
+        },
+        "topicCandidates": []
+      },
+      "expected": {
+        "purpose": "Reference",
+        "faithful": true,
+        "understandable": false,
+        "doubt": false,
+        "relevant": null
+      }
+    }
+  ],
+  "scoringPolicy": {
+    "expectationsNeverProviderInput": true,
+    "unsupportedClaimsRequireIndependentReview": true,
+    "repeatsAreConsistencyChecksNotIndependentExamples": true,
+    "rawOcrAndValidatedEvidenceScoredSeparately": true,
+    "correctiveGenerationLimit": 2,
+    "defaultThresholdUnchanged": 0.8
+  },
+  "ocrFollowThrough": [
+    {
+      "imageId": "ocr-03",
+      "question": "What is the calibration value, and what text, if any, supports it? Use only this supplied image evidence; do not guess or call tools.",
+      "variants": [
+        "raw",
+        "validated"
+      ]
+    },
+    {
+      "imageId": "ocr-05",
+      "question": "What is the batch lot number? Use only this supplied image evidence; say if the field is absent and do not guess or call tools.",
+      "variants": [
+        "raw",
+        "validated"
+      ]
+    }
+  ]
+}

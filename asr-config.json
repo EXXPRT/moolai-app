@@ -1,0 +1,11 @@
+{
+  "model": "large-v3-turbo",
+  "language": "en",
+  "initialPrompt": "Moo.",
+  "port": 8178,
+  "inferencePort": 8177,
+  "endpointSilenceMs": 1200,
+  "maxUtteranceSeconds": 60,
+  "rmsThreshold": 0.008,
+  "preRollMs": 500
+}

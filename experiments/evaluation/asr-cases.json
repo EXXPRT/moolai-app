@@ -1,0 +1,189 @@
+{
+  "version": 1,
+  "id": "canary-qwen-comparison-v1",
+  "modelCandidate": "nvidia/canary-qwen-2.5b",
+  "baseline": "whisper-large-v3-turbo",
+  "audioPolicy": "Same temporary synthetic WAV bytes for every model; no microphone. Remove audio after scoring.",
+  "normalization": "NFKC, lowercase, punctuation boundaries; no number expansion or Moo/Move/end/and rewriting. WER is null for silence; report insertions separately.",
+  "limitations": [
+    "Synthetic TTS cannot establish AirPods or personal-accent acceptance.",
+    "No inferred J1 success from exact phrase retention; observed routing is a separate measurement.",
+    "Whole-clip inference time is not streaming or end-of-speech latency."
+  ],
+  "cases": [
+    {
+      "id": "s01",
+      "reference": "Moo, explain the filter comparison.",
+      "criticalPhrases": [
+        "Moo",
+        "explain the filter comparison"
+      ],
+      "finalWord": "comparison",
+      "expectedRoute": "start_agent",
+      "conversationActive": false,
+      "audioKind": "speech",
+      "voice": "Samantha",
+      "rate": 155,
+      "silenceSeconds": 0
+    },
+    {
+      "id": "s02",
+      "reference": "Can you explain why this happened?",
+      "criticalPhrases": [
+        "explain why this happened"
+      ],
+      "finalWord": "happened",
+      "expectedRoute": "start_agent",
+      "conversationActive": false,
+      "audioKind": "speech",
+      "voice": "Samantha",
+      "rate": 155,
+      "silenceSeconds": 0
+    },
+    {
+      "id": "s03",
+      "reference": "What is even going on?",
+      "criticalPhrases": [
+        "what is even going on"
+      ],
+      "finalWord": "on",
+      "expectedRoute": "offer_help",
+      "conversationActive": false,
+      "audioKind": "speech",
+      "voice": "Samantha",
+      "rate": 155,
+      "silenceSeconds": 0
+    },
+    {
+      "id": "s04",
+      "reference": "Moo, finish conversation.",
+      "criticalPhrases": [
+        "Moo",
+        "finish conversation"
+      ],
+      "finalWord": "conversation",
+      "expectedRoute": "end_agent",
+      "conversationActive": true,
+      "audioKind": "speech",
+      "voice": "Samantha",
+      "rate": 155,
+      "silenceSeconds": 0
+    },
+    {
+      "id": "s05",
+      "reference": "The note title is that's all.",
+      "criticalPhrases": [
+        "the note title is that's all"
+      ],
+      "finalWord": "all",
+      "expectedRoute": "continue_agent",
+      "conversationActive": true,
+      "audioKind": "speech",
+      "voice": "Samantha",
+      "rate": 155,
+      "silenceSeconds": 0
+    },
+    {
+      "id": "s06",
+      "reference": "Do not finish the conversation. Keep going.",
+      "criticalPhrases": [
+        "do not finish",
+        "keep going"
+      ],
+      "finalWord": "going",
+      "expectedRoute": "continue_agent",
+      "conversationActive": true,
+      "audioKind": "speech",
+      "voice": "Samantha",
+      "rate": 155,
+      "silenceSeconds": 0
+    },
+    {
+      "id": "s07",
+      "reference": "Use only my notes. Do not search the web.",
+      "criticalPhrases": [
+        "only my notes",
+        "do not search the web"
+      ],
+      "finalWord": "web",
+      "expectedRoute": "continue_agent",
+      "conversationActive": true,
+      "audioKind": "speech",
+      "voice": "Samantha",
+      "rate": 155,
+      "silenceSeconds": 0
+    },
+    {
+      "id": "s08",
+      "reference": "The note says move the goalpost five meters to the left.",
+      "criticalPhrases": [
+        "Move",
+        "five meters",
+        "left"
+      ],
+      "finalWord": "left",
+      "expectedRoute": "dictate",
+      "conversationActive": false,
+      "audioKind": "speech",
+      "voice": "Samantha",
+      "rate": 155,
+      "silenceSeconds": 0
+    },
+    {
+      "id": "s09",
+      "reference": "The distance is forty centimeters, not twenty centimeters.",
+      "criticalPhrases": [
+        "forty centimeters",
+        "not twenty centimeters"
+      ],
+      "finalWord": "centimeters",
+      "expectedRoute": "dictate",
+      "conversationActive": false,
+      "audioKind": "speech",
+      "voice": "Samantha",
+      "rate": 155,
+      "silenceSeconds": 0
+    },
+    {
+      "id": "s10",
+      "reference": "That's all.",
+      "criticalPhrases": [
+        "that's all"
+      ],
+      "finalWord": "all",
+      "expectedRoute": "end_agent",
+      "conversationActive": true,
+      "audioKind": "speech",
+      "voice": "Samantha",
+      "rate": 155,
+      "silenceSeconds": 0
+    },
+    {
+      "id": "s11",
+      "reference": "Include an example and remember the final word telescope.",
+      "criticalPhrases": [
+        "include an example",
+        "telescope"
+      ],
+      "finalWord": "telescope",
+      "expectedRoute": "continue_agent",
+      "conversationActive": true,
+      "audioKind": "speech",
+      "voice": "Samantha",
+      "rate": 155,
+      "silenceSeconds": 0
+    },
+    {
+      "id": "s12",
+      "reference": "",
+      "criticalPhrases": [],
+      "finalWord": null,
+      "expectedRoute": null,
+      "conversationActive": false,
+      "audioKind": "silence",
+      "voice": null,
+      "rate": null,
+      "silenceSeconds": 3
+    }
+  ]
+}

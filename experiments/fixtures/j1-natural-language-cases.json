@@ -1,0 +1,324 @@
+{
+  "version": 1,
+  "scope": "Keyword-free intent policy proposal, separate from the former explicit-Moo policy. All phrases shown to the user before dispatch. Idle speech is user study input, not arbitrary overheard speech.",
+  "cases": [
+    {
+      "id": "request-how",
+      "category": "start",
+      "input": {
+        "text": "Can you tell me how this happened?",
+        "recentContext": "user: Two attempts with the same setup produced different results.\nuser: Can you tell me how this happened?",
+        "activeConversation": false
+      },
+      "expectedRoute": "start_agent",
+      "baselineComparison": true
+    },
+    {
+      "id": "request-explain",
+      "category": "start",
+      "input": {
+        "text": "Could you explain why these results differ?",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: Could you explain why these results differ?",
+        "activeConversation": false
+      },
+      "expectedRoute": "start_agent",
+      "baselineComparison": false
+    },
+    {
+      "id": "request-compare",
+      "category": "start",
+      "input": {
+        "text": "Help me compare these two ideas.",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: Help me compare these two ideas.",
+        "activeConversation": false
+      },
+      "expectedRoute": "start_agent",
+      "baselineComparison": false
+    },
+    {
+      "id": "request-term",
+      "category": "start",
+      "input": {
+        "text": "What does this term mean?",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: What does this term mean?",
+        "activeConversation": false
+      },
+      "expectedRoute": "start_agent",
+      "baselineComparison": false
+    },
+    {
+      "id": "request-summary",
+      "category": "start",
+      "input": {
+        "text": "Can you summarize the main point?",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: Can you summarize the main point?",
+        "activeConversation": false
+      },
+      "expectedRoute": "start_agent",
+      "baselineComparison": false
+    },
+    {
+      "id": "confusion-question",
+      "category": "offer_help",
+      "input": {
+        "text": "What’s even going on?",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: What’s even going on?",
+        "activeConversation": false
+      },
+      "expectedRoute": "offer_help",
+      "baselineComparison": true
+    },
+    {
+      "id": "confusion-lost",
+      "category": "offer_help",
+      "input": {
+        "text": "I’m lost here.",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: I’m lost here.",
+        "activeConversation": false
+      },
+      "expectedRoute": "offer_help",
+      "baselineComparison": false
+    },
+    {
+      "id": "confusion-understand",
+      "category": "offer_help",
+      "input": {
+        "text": "I can’t make sense of this.",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: I can’t make sense of this.",
+        "activeConversation": false
+      },
+      "expectedRoute": "offer_help",
+      "baselineComparison": false
+    },
+    {
+      "id": "fact-goalpost",
+      "category": "dictate",
+      "input": {
+        "text": "The goalpost is 5m wide.",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: The goalpost is 5m wide.",
+        "activeConversation": false
+      },
+      "expectedRoute": "dictate",
+      "baselineComparison": true
+    },
+    {
+      "id": "fact-gap",
+      "category": "dictate",
+      "input": {
+        "text": "There is a five-metre gap between the posts.",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: There is a five-metre gap between the posts.",
+        "activeConversation": false
+      },
+      "expectedRoute": "dictate",
+      "baselineComparison": false
+    },
+    {
+      "id": "self-plan",
+      "category": "dictate",
+      "input": {
+        "text": "I should review this chapter tomorrow.",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: I should review this chapter tomorrow.",
+        "activeConversation": false
+      },
+      "expectedRoute": "dictate",
+      "baselineComparison": false
+    },
+    {
+      "id": "reported-request",
+      "category": "dictate",
+      "input": {
+        "text": "She asked, ‘Can you tell me how this happened?’",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: She asked, ‘Can you tell me how this happened?’",
+        "activeConversation": false
+      },
+      "expectedRoute": "dictate",
+      "baselineComparison": false
+    },
+    {
+      "id": "title-question",
+      "category": "dictate",
+      "input": {
+        "text": "The section title is ‘What’s even going on?’",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: The section title is ‘What’s even going on?’",
+        "activeConversation": false
+      },
+      "expectedRoute": "dictate",
+      "baselineComparison": false
+    },
+    {
+      "id": "close-all",
+      "category": "end",
+      "input": {
+        "text": "That’s all.",
+        "recentContext": "user: Help me work through these notes.\nassistant: Here is the explanation. There is no unfinished task.\nuser: That’s all.",
+        "activeConversation": true
+      },
+      "expectedRoute": "end_agent",
+      "baselineComparison": true
+    },
+    {
+      "id": "close-done",
+      "category": "end",
+      "input": {
+        "text": "I’m done for now, thanks.",
+        "recentContext": "user: Help me work through these notes.\nassistant: Here is the explanation. There is no unfinished task.\nuser: I’m done for now, thanks.",
+        "activeConversation": true
+      },
+      "expectedRoute": "end_agent",
+      "baselineComparison": false
+    },
+    {
+      "id": "close-leave",
+      "category": "end",
+      "input": {
+        "text": "We can leave it there.",
+        "recentContext": "user: Help me work through these notes.\nassistant: Here is the explanation. There is no unfinished task.\nuser: We can leave it there.",
+        "activeConversation": true
+      },
+      "expectedRoute": "end_agent",
+      "baselineComparison": false
+    },
+    {
+      "id": "close-no-questions",
+      "category": "end",
+      "input": {
+        "text": "No more questions, thanks.",
+        "recentContext": "user: Help me work through these notes.\nassistant: Here is the explanation. There is no unfinished task.\nuser: No more questions, thanks.",
+        "activeConversation": true
+      },
+      "expectedRoute": "end_agent",
+      "baselineComparison": false
+    },
+    {
+      "id": "continue-after-all",
+      "category": "continue",
+      "input": {
+        "text": "That’s all the data; now compare the results.",
+        "recentContext": "user: Help me work through these notes.\nassistant: Here is the explanation. There is no unfinished task.\nuser: That’s all the data; now compare the results.",
+        "activeConversation": true
+      },
+      "expectedRoute": "continue_agent",
+      "baselineComparison": false
+    },
+    {
+      "id": "continue-first-part",
+      "category": "continue",
+      "input": {
+        "text": "I’m done with the first part; let’s continue.",
+        "recentContext": "user: Help me work through these notes.\nassistant: Here is the explanation. There is no unfinished task.\nuser: I’m done with the first part; let’s continue.",
+        "activeConversation": true
+      },
+      "expectedRoute": "continue_agent",
+      "baselineComparison": false
+    },
+    {
+      "id": "continue-fact",
+      "category": "continue",
+      "input": {
+        "text": "The goalpost is 5m wide.",
+        "recentContext": "user: Help me reason about this field layout.\nassistant: How wide is the goalpost?\nuser: The goalpost is 5m wide.",
+        "activeConversation": true
+      },
+      "expectedRoute": "continue_agent",
+      "baselineComparison": false
+    },
+    {
+      "id": "idle-all",
+      "category": "no_action",
+      "input": {
+        "text": "That’s all.",
+        "recentContext": "user: I am dictating a list of measurements.\nuser: The goalpost is 5m wide. No agent conversation is active.\nuser: That’s all.",
+        "activeConversation": false
+      },
+      "expectedRoute": "no_action",
+      "baselineComparison": false
+    },
+    {
+      "id": "unclear-help-or-save",
+      "category": "unclear",
+      "input": {
+        "text": "I might want help, or just want to save this. I’m not sure.",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: I might want help, or just want to save this. I’m not sure.",
+        "activeConversation": false
+      },
+      "expectedRoute": "unclear",
+      "baselineComparison": false
+    },
+    {
+      "id": "unclear-stop",
+      "category": "unclear",
+      "input": {
+        "text": "Should we stop? Actually, I haven’t decided.",
+        "recentContext": "user: Help me work through these notes.\nassistant: Here is the explanation. There is no unfinished task.\nuser: Should we stop? Actually, I haven’t decided.",
+        "activeConversation": true
+      },
+      "expectedRoute": "unclear",
+      "baselineComparison": false
+    },
+    {
+      "id": "help-yes",
+      "category": "help_reply",
+      "input": {
+        "text": "Yes, please.",
+        "recentContext": "user: What’s even going on?\nassistant: I saved that. Would you like help? No answer or tool work has begun.\nuser: Yes, please.",
+        "activeConversation": false,
+        "pendingOffer": {
+          "kind": "help",
+          "recordId": "synthetic-saved-doubt"
+        }
+      },
+      "expectedRoute": "start_agent",
+      "baselineComparison": false,
+      "note": "Accepts help only; does not request or authorize screen capture."
+    },
+    {
+      "id": "help-no",
+      "category": "help_reply",
+      "input": {
+        "text": "No, just save it.",
+        "recentContext": "user: What’s even going on?\nassistant: I saved that. Would you like help? No answer or tool work has begun.\nuser: No, just save it.",
+        "activeConversation": false,
+        "pendingOffer": {
+          "kind": "help",
+          "recordId": "synthetic-saved-doubt"
+        }
+      },
+      "expectedRoute": "no_action",
+      "baselineComparison": false
+    },
+    {
+      "id": "idle-yes",
+      "category": "no_action",
+      "input": {
+        "text": "Yes, please.",
+        "recentContext": "The user is idle. No question, offer or request is pending.\nuser: Yes, please.",
+        "activeConversation": false
+      },
+      "expectedRoute": "no_action",
+      "baselineComparison": false
+    },
+    {
+      "id": "quoted-closure",
+      "category": "dictate",
+      "input": {
+        "text": "The example ends with the words ‘that’s all.’",
+        "recentContext": "user: I am reviewing my notes and thinking aloud.\nuser: The example ends with the words ‘that’s all.’",
+        "activeConversation": false
+      },
+      "expectedRoute": "dictate",
+      "baselineComparison": false
+    },
+    {
+      "id": "stop-reading",
+      "category": "no_action",
+      "input": {
+        "text": "Stop reading aloud.",
+        "recentContext": "user: Explain this paragraph.\nassistant: I am reading the explanation aloud.\nuser: Stop reading aloud.",
+        "activeConversation": true
+      },
+      "expectedRoute": "no_action",
+      "baselineComparison": false,
+      "note": "Conversation routing only: do not close the exchange. Playback stopping needs its own controller handling and is not executed in this test."
+    }
+  ]
+}

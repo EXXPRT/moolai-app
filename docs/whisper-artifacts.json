@@ -1,0 +1,41 @@
+{
+  "runtime": {
+    "repo": "ggml-org/whisper.cpp",
+    "version": "1.9.4",
+    "revision": "7d75b14994ae7f59623e2471445e2355fe506ed2",
+    "url": "https://api.github.com/repos/ggml-org/whisper.cpp/tarball/7d75b14994ae7f59623e2471445e2355fe506ed2",
+    "size": 9354971,
+    "sha256": "261de3e2edeb7b3fa8bd3b35d000848fb023933ca220bf4d15937e31f8992ec8"
+  },
+  "cmake": {
+    "version": "3.31.6",
+    "filename": "cmake-3.31.6-py3-none-macosx_10_10_universal2.whl",
+    "url": "https://files.pythonhosted.org/packages/7f/09/516b0d709672bc430eb13278f0316acd34869269447744f5d136daeef689/cmake-3.31.6-py3-none-macosx_10_10_universal2.whl",
+    "size": 47224338,
+    "sha256": "da9d4fd9abd571fd016ddb27da0428b10277010b23bb21e3678f8b9e96e1686e"
+  },
+  "models": {
+    "large-v3-turbo": {
+      "repo": "ggerganov/whisper.cpp",
+      "revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+      "filename": "ggml-large-v3-turbo.bin",
+      "size": 1624555275,
+      "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69"
+    },
+    "large-v3": {
+      "repo": "ggerganov/whisper.cpp",
+      "revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+      "filename": "ggml-large-v3.bin",
+      "size": 3095033483,
+      "sha256": "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"
+    }
+  },
+  "vad": {
+    "repo": "ggml-org/whisper-vad",
+    "version": "6.2.0",
+    "revision": "9ffd54a1e1ee413ddf265af9913beaf518d1639b",
+    "filename": "ggml-silero-v6.2.0.bin",
+    "size": 885098,
+    "sha256": "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
+  }
+}
