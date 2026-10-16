@@ -2,6 +2,8 @@ import type {
   Attachment,
   BrainPort,
   BrainRecord,
+  BrainQuery,
+  RecordRevision,
   PendingOperation,
   RecordPatch,
   Segment,
@@ -13,7 +15,10 @@ import {
   patchRecord,
   reviseSegment,
   searchRecords,
-} from "./records.js";
+  queryRecords,
+  relatedRecords,
+  importedHistory,
+} from "../../contracts/src/records.js";
 
 /** A separate, in-memory adapter for contract tests and ephemeral development. */
 export class MemoryBrain implements BrainPort {
@@ -23,6 +28,7 @@ export class MemoryBrain implements BrainPort {
     { mimeType: string; bytes: Uint8Array }
   >();
   private operations = new Map<string, PendingOperation>();
+  private revisions = new Map<string, RecordRevision[]>();
   private state = new Map<string, unknown>();
 
   async createRecord(input: {
@@ -44,6 +50,7 @@ export class MemoryBrain implements BrainPort {
     const record = this.records.get(id);
     if (!record) throw new Error(`Unknown record: ${id}`);
     const result = reviseSegment(record, segment);
+    if (result !== record) this.remember(record, result, "capture");
     this.records.set(id, result);
     return copy(result);
   }
@@ -55,11 +62,47 @@ export class MemoryBrain implements BrainPort {
     const record = this.records.get(id);
     if (!record || record.revision !== expectedRevision) return null;
     const result = patchRecord(record, patch);
+    if (result.revision !== record.revision)
+      this.remember(
+        record,
+        result,
+        patch.manualFields ? "manual" : "generated",
+      );
     this.records.set(id, result);
     return copy(result);
   }
-  async search(query: string, limit: number, options?: import("../../contracts/src/index.js").BrainSearchOptions): Promise<BrainRecord[]> {
+  async search(
+    query: string,
+    limit: number,
+    options?: import("../../contracts/src/index.js").BrainSearchOptions,
+  ): Promise<BrainRecord[]> {
     return searchRecords(await this.listRecords(), query, limit, options);
+  }
+  private remember(
+    before: BrainRecord,
+    after: BrainRecord,
+    reason: RecordRevision["reason"],
+  ) {
+    const entries = this.revisions.get(before.id) ?? [
+      { record: copy(before), reason: "import" as const, at: before.updatedAt },
+    ];
+    entries.push({ record: copy(after), reason, at: after.updatedAt });
+    this.revisions.set(before.id, entries);
+  }
+  async history(id: string) {
+    return copy(this.revisions.get(id) ?? []);
+  }
+  async importRecord(record: BrainRecord, history: RecordRevision[] = []) {
+    const revisions = importedHistory(record, history);
+    if (this.records.has(record.id)) throw new Error("Record already exists");
+    this.records.set(record.id, copy(record));
+    this.revisions.set(record.id, revisions);
+  }
+  async query(options: BrainQuery) {
+    return queryRecords(await this.listRecords(), options);
+  }
+  async related(id: string) {
+    return relatedRecords(await this.listRecords(), id);
   }
   async putAttachment(
     id: string,

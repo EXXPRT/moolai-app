@@ -10,10 +10,10 @@ async def test_closing_question_is_explicit_state_with_scoped_choices():
     def respond(request):
         body=json.loads(request.content);state=json.loads(body['state'])
         assert state['pendingOffer']['question']=='Shall I close this conversation?'
-        assert set(body['questions']['route']['criteria'])=={'end_agent','continue_agent','no_action','unclear'}
+        assert set(body['questions']['route']['criteria'])=={'end_agent','continue_agent','check_status','suppress_note','no_action','unclear'}
         assert 'plain affirmative' in body['questions']['route']['criteria']['end_agent']
         return httpx.Response(200,json={'model':SETTINGS.jev_model,'answers':{
-            'route':{'type':'choice','choice':'end_agent','confidence':.91,'probabilities':{'end_agent':.91,'continue_agent':.03,'no_action':.03,'unclear':.03}},
+            'route':{'type':'choice','choice':'end_agent','confidence':.91,'probabilities':{'end_agent':.91,'continue_agent':.03,'check_status':0,'suppress_note':0,'no_action':.03,'unclear':.03}},
             'substantive_content':{'type':'noul','noul':0}}})
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         result=await JevProvider(Gateway(SETTINGS,client)).route(RouteInput(text='Yes.',recentContext='assistant: Shall I close this conversation?',activeConversation=True,

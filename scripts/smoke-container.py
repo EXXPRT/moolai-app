@@ -1,12 +1,13 @@
 """Exercise the built container and real Postgres without paid providers."""
 import json
+import os
 import time
 from http.client import RemoteDisconnected
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
-base = "http://127.0.0.1:8000"
+base = os.environ.get("MOOLAI_SMOKE_BASE_URL", "http://127.0.0.1:8000")
 for attempt in range(20):
     try:
         with urlopen(base + "/health", timeout=2) as response:

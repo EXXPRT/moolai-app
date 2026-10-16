@@ -1,0 +1,7 @@
+{
+  "provider": "kokoro",
+  "voice": "af_heart",
+  "speed": 1,
+  "python": ".data/tts/venv/bin/python3",
+  "modelPath": ".data/tts/model"
+}

@@ -1,0 +1,2 @@
+# Synthetic image fixture generation only; not an application dependency.
+Pillow==11.3.0

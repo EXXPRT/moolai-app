@@ -1,7 +1,7 @@
-name: Verify agent phase
+name: Verify application
 on:
   push:
-    branches: [main, codex/agent-phase]
+    branches: [main, codex/agent-phase, codex/brain-phase]
   pull_request:
   workflow_dispatch:
 permissions:

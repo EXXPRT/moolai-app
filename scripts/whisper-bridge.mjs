@@ -1,9 +1,10 @@
-// Local finals-only ASR adapter. PCM and WAV buffers stay in RAM.
+// Local ASR adapter with bounded cumulative previews. PCM and WAV buffers stay in RAM.
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import WebSocket, { WebSocketServer } from 'ws';
+import { PcmEndpointer } from './pcm-endpointer.mjs';
 
 const REALTIME_PATH = '/v1/audio/transcriptions/realtime';
 const MAX_RESPONSE_BYTES = 256 * 1024;
@@ -51,7 +52,7 @@ export async function decodeWhisper(pcm16k, config, { signal, fetchImpl = fetch 
   const form = new FormData();
   form.set('file', new Blob([pcmWav(pcm16k)], { type: 'audio/wav' }), 'in-memory.wav');
   const fields = { response_format: 'json', language: config.language, prompt: config.initialPrompt,
-    temperature: '0', temperature_inc: '0', best_of: '1', beam_size: '1', vad: 'true' };
+    temperature: '0', temperature_inc: '0', best_of: '1', beam_size: String(config.beamSize ?? 1), vad: 'true' };
   for (const [key, value] of Object.entries(fields)) form.set(key, String(value));
   const response = await fetchImpl(`http://127.0.0.1:${config.inferencePort}/inference`, { method: 'POST', body: form, signal });
   if (!response.ok) throw new Error(`Local Whisper returned HTTP ${response.status}`);
@@ -84,16 +85,34 @@ export function createWhisperBridge(config, dependencies = {}) {
   const decode = dependencies.decode ?? decodeWhisper;
   const resample = dependencies.resample ?? resamplePcm;
   const decodeTimeoutMs = dependencies.decodeTimeoutMs ?? 10000;
+  const previewCancelTimeoutMs = dependencies.previewCancelTimeoutMs ?? 5000;
+  const configureTimeoutMs = dependencies.configureTimeoutMs ?? 5000;
   const maxQueuedUtterances = dependencies.maxQueuedUtterances ?? 2;
+  const livePreview = config.livePreview ?? false;
+  if (livePreview && config.model !== 'qwen3-asr-1.7b')
+    throw new Error('Live previews currently require Qwen cancellation acknowledgements; Whisper remains final-only');
   let active, closing = false;
   const http = createServer((request, response) => {
     response.setHeader('Content-Type', 'application/json');
     if (request.url !== '/health') { response.writeHead(404); response.end('{}'); return; }
     response.end(JSON.stringify({ ready: !closing, model: config.model, language: config.language,
-      initialPrompt: config.initialPrompt, activeCapture: Boolean(active), inferencePort: config.inferencePort,
-      finalsOnly: true, audioFilesCreated: false, endpointing: 'local PCM energy/pause; Silero VAD runs during server decode' }));
+      initialPrompt: config.initialPrompt, beamSize: config.beamSize ?? 1, activeCapture: Boolean(active), inferencePort: config.inferencePort,
+      finalsOnly: !livePreview, livePreview, previewIntervalMs: livePreview ? (config.previewIntervalMs ?? 2000) : null, audioFilesCreated: false,
+      endpointing: dependencies.endpointing ?? 'local PCM energy/pause; Silero VAD runs during server decode',
+      timestampSupport: 'host transcript times; no word alignment' }));
   });
-  const server = new WebSocketServer({ server: http, path: REALTIME_PATH, maxPayload: 512 * 1024 });
+  const server = new WebSocketServer({ server: http, path: REALTIME_PATH, maxPayload: 512 * 1024,
+    // This is a native-only endpoint. No browser origin (including a local web
+    // page or opaque "null" origin) is authorized to acquire microphone ASR.
+    // URLSession/native websocket clients legitimately send no Origin header.
+    verifyClient: ({ req }, done) => done(req.headers.origin === undefined, 403, 'Native ASR clients only'),
+  });
+  // ws forwards HTTP bind errors; both emitters need handlers for listen() to reject safely.
+  server.on('error', error => {
+    closing = true;
+    active?.stop();
+    dependencies.onError?.(error);
+  });
   server.on('connection', socket => {
     const send = event => {
       if (socket.readyState !== WebSocket.OPEN) return;
@@ -104,23 +123,36 @@ export function createWhisperBridge(config, dependencies = {}) {
       send({ type: 'error', error: { code: 'capture_busy', message: 'Only one microphone capture may use local ASR at a time' } });
       socket.close(1013, 'ASR capture busy'); return;
     }
-    let sampleRate, preRoll = Buffer.alloc(0), chunks = [], utteranceBytes = 0, silenceSamples = 0;
+    let sampleRate, endpointer;
     let queue = [], queuedBytes = 0, running = false, draining = false, failed = false, closed = false;
-    let controller, shutdownTimer;
-    const resetAudio = () => { preRoll = Buffer.alloc(0); chunks = []; utteranceBytes = 0; silenceSamples = 0; };
-    const discard = () => { resetAudio(); queue = []; queuedBytes = 0; };
+    let controller, currentItem, preview, shutdownTimer, configureTimer, context = '';
+    const captureId = randomUUID();
+    const updateContext = value => {
+      if (typeof value !== 'string' || value.length > 400) throw new Error('Recognition context must be at most 400 characters');
+      context = value.replace(/[\r\n]/g, ' ');
+    };
+    const discard = () => { endpointer?.discard(); queue = []; preview = undefined; queuedBytes = 0; };
     const fail = (error, transcript) => {
       if (closed || failed) return;
-      failed = true; controller?.abort(); discard();
+      failed = true; clearTimeout(configureTimer); controller?.abort(); discard();
       try { send({ type: 'error', error: { code: 'asr_failed', message: error.message, ...(transcript === undefined ? {} : { transcript }) } }); } catch { /* Socket may already be unusable. */ }
       socket.close(1011, 'ASR failed; review the reported error and retry');
       shutdownTimer = setTimeout(() => socket.terminate(), 1000); shutdownTimer.unref();
     };
     const release = () => {
-      closed = true; clearTimeout(shutdownTimer); controller?.abort(); discard();
+      closed = true; clearTimeout(shutdownTimer); clearTimeout(configureTimer); controller?.abort(); discard();
       if (active?.socket === socket) active = undefined;
     };
     active = { socket, stop: release };
+    configureTimer = setTimeout(() => {
+      // Expire before configuration, releasing ownership even if an abandoned
+      // peer never answers the close handshake. No audio/decode exists yet.
+      try { send({ type: 'error', error: { code: 'configuration_timeout', message: 'Configure local ASR within five seconds; reconnect to start capture' } }); }
+      catch { /* The abandoned client may no longer be reading. */ }
+      release(); socket.close(1008, 'ASR configuration timed out');
+      shutdownTimer = setTimeout(() => socket.terminate(), 1000); shutdownTimer.unref();
+    }, configureTimeoutMs);
+    configureTimer.unref();
     socket.on('close', release);
     socket.on('error', error => fail(error));
     const finishCommit = () => {
@@ -135,72 +167,85 @@ export function createWhisperBridge(config, dependencies = {}) {
       if (running || failed || closed) return;
       running = true;
       try {
-        while (queue.length && !failed && !closed) {
-          const item = queue.shift(); controller = new AbortController();
+        while ((queue.length || preview) && !failed && !closed) {
+          const item = queue.length ? queue.shift() : preview;
+          if (item === preview) preview = undefined;
+          currentItem = item; controller = new AbortController();
           const jobController = controller;
-          let timeout, abortListener;
+          const isPreview = item.trigger === 'preview';
+          let timeout, abortListener, cancelTimer;
           try {
             const timedOut = new Promise((_, reject) => {
               timeout = setTimeout(() => { const error = new Error('Local ASR decode timed out; the utterance was not committed'); jobController.abort(error); reject(error); }, decodeTimeoutMs);
             });
             const cancelled = new Promise((_, reject) => {
-              abortListener = () => reject(jobController.signal.reason ?? new Error('ASR capture cancelled'));
+              abortListener = () => {
+                if (!isPreview || closed || failed) reject(jobController.signal.reason ?? new Error('ASR capture cancelled'));
+                // A decoder must settle cancellation before the final decode starts. Starting a
+                // second inference immediately can overlap an uninterruptible model prefill.
+                else cancelTimer = setTimeout(() => reject(new Error('Local ASR preview did not stop within its cancellation bound; restart local ASR')), previewCancelTimeoutMs);
+              };
               jobController.signal.addEventListener('abort', abortListener, { once: true });
             });
             const work = async () => {
               const pcm = await resample(item.pcm, sampleRate, { signal: jobController.signal });
               jobController.signal.throwIfAborted();
-              return decode(pcm, config, { signal: jobController.signal });
+              return decode(pcm, {...config, initialPrompt: [config.initialPrompt, item.context].filter(Boolean).join(' ')}, { signal: jobController.signal });
             };
-            const transcript = await Promise.race([work(), timedOut, cancelled]);
+            const task = work();
+            // For previews the timeout requests cancellation; wait for the decoder's actual
+            // settlement (or the bounded cancellation failure) before dispatching another job.
+            const transcript = await Promise.race(isPreview ? [task, cancelled, timedOut.catch(error => {
+              if (!jobController.signal.aborted) jobController.abort(error);
+              return new Promise(() => {});
+            })] : [task, timedOut, cancelled]);
             if (closed || failed) return;
+            if (jobController.signal.aborted) continue;
             if (typeof transcript !== 'string') throw new Error('Local ASR decoder returned an invalid transcript');
             if (repetitiveOutput(transcript)) {
+              if (isPreview) { send({ type: 'session.preview_warning', reason: 'repetitive_output' }); continue; }
               fail(new Error('Local ASR produced repetitive text. The rejected transcript is included for review; no final was accepted.'), transcript);
               return;
             }
+            const identity = { utterance_id: `${captureId}:${item.utteranceSequence}`, revision: item.revision };
             // Preserve embedded newlines and wording; one completed utterance is one transcript event.
-            if (transcript.trim()) send({ type: 'conversation.item.input_audio_transcription.completed', transcript });
+            if (isPreview) {
+              if (transcript.trim()) send({ type: 'conversation.item.input_audio_transcription.partial', transcript, ...identity });
+            } else if (transcript.trim()) send({ type: 'conversation.item.input_audio_transcription.completed', transcript, ...identity });
+            else send({ type: 'conversation.item.input_audio_transcription.rejected', reason: 'empty', transcript: '', ...identity });
+          } catch (error) {
+            if (!isPreview || error.message.includes('cancellation bound')) throw error;
+            // Preview failure never rejects the retained utterance or silently submits it.
+            // A final decode still gets the complete PCM when a real endpoint is reached.
+            if (!closed && !failed && !jobController.signal.aborted) send({ type: 'session.preview_warning', reason: 'decode_failed' });
           } finally {
-            clearTimeout(timeout); jobController.signal.removeEventListener('abort', abortListener); queuedBytes = Math.max(0, queuedBytes - item.pcm.length); item.pcm = null; controller = undefined;
+            clearTimeout(timeout); clearTimeout(cancelTimer); jobController.signal.removeEventListener('abort', abortListener);
+            if (!isPreview) queuedBytes = Math.max(0, queuedBytes - item.pcm.length);
+            item.pcm = null; controller = undefined; currentItem = undefined;
           }
         }
       } catch (error) { fail(error); }
       finally { running = false; finishCommit(); }
     }
-    function enqueue() {
-      if (!utteranceBytes) return;
+    function enqueue(item) {
       const maxBytes = sampleRate * 2 * config.maxUtteranceSeconds;
-      if (queue.length + (running ? 1 : 0) >= maxQueuedUtterances || queuedBytes + utteranceBytes > maxBytes * maxQueuedUtterances) {
+      if (queue.length + (currentItem && currentItem.trigger !== 'preview' ? 1 : 0) >= maxQueuedUtterances || queuedBytes + item.pcm.length > maxBytes * maxQueuedUtterances) {
         throw new Error('Local ASR processing is behind: pending audio limit reached. Stop and retry; this capture was not committed.');
       }
-      const pcm = Buffer.concat(chunks, utteranceBytes);
-      queuedBytes += pcm.length; queue.push({ pcm }); resetAudio(); void pump();
+      if (preview?.utteranceSequence === item.utteranceSequence) preview = undefined;
+      queuedBytes += item.pcm.length; queue.push(item);
+      if (currentItem?.trigger === 'preview') controller?.abort(new Error('Final recognition takes priority over a preview'));
+      void pump();
+    }
+    function enqueuePreview(item) {
+      if (closed || failed || draining) return;
+      // Coalesce: one active decode and only the newest cumulative snapshot may wait.
+      preview = item;
+      void pump();
     }
     function receivePcm(data) {
       if (!sampleRate) throw new Error('PCM arrived before session.update configured its sample rate');
-      if (committed) throw new Error('PCM arrived after the final commit');
-      if (data.length % 2) throw new Error('PCM16 payload must have an even byte length');
-      const frameBytes = Math.max(2, Math.round(sampleRate * 0.02) * 2);
-      const preRollBytes = Math.ceil(sampleRate * config.preRollMs / 1000) * 2;
-      for (let offset = 0; offset < data.length; offset += frameBytes) {
-        const frame = data.subarray(offset, Math.min(offset + frameBytes, data.length));
-        let square = 0;
-        for (let i = 0; i < frame.length; i += 2) square += (frame.readInt16LE(i) / 32768) ** 2;
-        const voiced = Math.sqrt(square / (frame.length / 2)) >= config.rmsThreshold;
-        if (!utteranceBytes && !voiced) {
-          preRoll = Buffer.concat([preRoll, frame]);
-          if (preRoll.length > preRollBytes) preRoll = Buffer.from(preRoll.subarray(preRoll.length - preRollBytes));
-          continue;
-        }
-        if (!utteranceBytes && preRoll.length) { chunks.push(preRoll); utteranceBytes += preRoll.length; preRoll = Buffer.alloc(0); }
-        chunks.push(Buffer.from(frame)); utteranceBytes += frame.length;
-        silenceSamples = voiced ? 0 : silenceSamples + frame.length / 2;
-        if (utteranceBytes > sampleRate * 2 * config.maxUtteranceSeconds) {
-          throw new Error('Local ASR utterance exceeded its configured duration limit. Use Send or pause; this capture was not committed.');
-        }
-        if (silenceSamples * 1000 >= sampleRate * config.endpointSilenceMs) enqueue();
-      }
+      endpointer.push(data, context);
     }
     socket.on('message', (data, binary) => {
       if (failed || closed) return;
@@ -213,12 +258,18 @@ export function createWhisperBridge(config, dependencies = {}) {
           if (!Number.isInteger(rate) || rate < 8000 || rate > 48000) throw new Error('Expected mono PCM16 at an integer rate between 8000 and 48000 Hz');
           if (event.session.input_audio_format && event.session.input_audio_format !== 'pcm16') throw new Error('Only PCM16 audio is supported');
           sampleRate = rate;
+          endpointer = new PcmEndpointer(config, rate, enqueue, livePreview ? enqueuePreview : undefined);
+          if (event.session.context !== undefined) updateContext(event.session.context);
+          clearTimeout(configureTimer);
           send({ type: 'session.updated', session: { sample_rate: sampleRate, input_audio_format: 'pcm16', model: config.model,
-            language: config.language, initial_prompt: config.initialPrompt, endpointing_ms: config.endpointSilenceMs } });
+            language: config.language, initial_prompt: config.initialPrompt, endpointing_ms: config.endpointSilenceMs,
+            live_preview: livePreview, preview_interval_ms: livePreview ? (config.previewIntervalMs ?? 2000) : null } });
+        } else if (event.type === 'session.context') {
+          updateContext(event.context); send({type:'session.context.updated'});
         } else if (event.type === 'input_audio_buffer.commit') {
           if (!sampleRate) throw new Error('Configure the session before commit');
           if (committed) throw new Error('This capture has already been committed');
-          committed = true; draining = true; enqueue(); preRoll = Buffer.alloc(0); finishCommit();
+          committed = true; draining = true; endpointer.commit(); finishCommit();
         } else throw new Error(`Unsupported local ASR event: ${event.type ?? 'missing type'}`);
       } catch (error) { fail(error); }
     });

@@ -10,10 +10,47 @@ export interface Segment {
   text: string;
   final: boolean;
   createdAt: string;
+  references?: NoteReference[];
 }
+export interface NoteReference { recordId: string; title: string }
+export interface SourceSpan { segmentId: string; revision: number; start: number; end: number }
+export interface ActiveThought {
+  id: string; title: string; summary: string; sourceRevision: number;
+  sourceExcerpt: string; sourceTruncated: boolean;
+}
+export interface ThoughtInput { sessionId: string; segments: Segment[]; finalize: boolean; context?: string; activeNote?: ActiveThought; incremental?: boolean }
+export interface ThoughtGroup extends Summary {
+  spans: SourceSpan[];
+  /** Only the first group may extend the supplied active note. */
+  continuesActive?: boolean;
+  /** Only the last group may remain open for further speech. */
+  ongoing?: boolean;
+}
+/** Planning returns exact ordered source spans; writing remains a separate provider call. */
+export interface ThoughtPlan {
+  groups: {spans: SourceSpan[]}[];
+  remainder: SourceSpan[];
+  extendsActive: boolean;
+  ongoing: boolean;
+}
+export interface ThoughtResult { groups: ThoughtGroup[]; remainder: SourceSpan[] }
 export interface RelatedLink {
   targetId: string;
-  provenance: "suggested" | "source" | "reply";
+  provenance: "suggested" | "source" | "reply" | "manual" | "correction";
+  decision?: "accepted" | "dismissed";
+  confidence?: number;
+  sourceRevision?: number;
+  targetRevision?: number;
+}
+export interface Author {
+  id: string;
+  name: string;
+  kind: "user" | "agent" | "unknown";
+}
+export interface RecordRevision {
+  record: BrainRecord;
+  reason: "capture" | "manual" | "generated" | "import";
+  at: string;
 }
 export interface BrainRecord {
   id: string;
@@ -25,6 +62,13 @@ export interface BrainRecord {
   segments: Segment[];
   title: string;
   summary: string;
+  /** Authored Markdown, separate from retained source transcripts and generated summaries. */
+  body?: string;
+  author?: Author;
+  resolution?: "open" | "resolved";
+  archived?: boolean;
+  /** Hidden derived note; original transcript and historical revisions are retained. */
+  suppressed?: { at: string; operationId: string; sessionId: string };
   summarySourceRevision?: number;
   purpose?: Purpose;
   topics: string[];
@@ -37,12 +81,23 @@ export interface BrainRecord {
   manualFields: string[];
   acceptedRevision: number;
   error?: string;
+  /** Retained transcript/request, not an independently generated knowledge note. */
+  sourceOnly?: boolean;
+  sourceContext?: string;
+  sources?: { recordId: string; spans: SourceSpan[] }[];
+  connectionStatus?: "pending" | "connected" | "no_match" | "failed";
+  thoughtStatus?: "draft" | "growing" | "settled";
 }
 export type RecordPatch = Partial<
   Pick<
     BrainRecord,
     | "title"
     | "summary"
+    | "body"
+    | "author"
+    | "resolution"
+    | "archived"
+    | "suppressed"
     | "summarySourceRevision"
     | "purpose"
     | "topics"
@@ -55,8 +110,16 @@ export type RecordPatch = Partial<
     | "manualFields"
     | "acceptedRevision"
     | "error"
+    | "sourceContext"
+    | "sourceOnly"
+    | "sources"
+    | "connectionStatus"
+    | "thoughtStatus"
   >
->;
+> & {
+  /** Atomic replacement of a derived note's source projection, never an original transcript. */
+  derivedSegments?: Segment[];
+};
 export interface Attachment {
   id: string;
   mimeType: string;
@@ -64,7 +127,7 @@ export interface Attachment {
 }
 export interface PendingOperation {
   id: string;
-  kind: "route" | "enrich" | "accept";
+  kind: "route" | "enrich" | "accept" | "consolidate";
   recordId: string;
   /** Present for durable J1 work; source record is the retained session. */
   turnId?: string;
@@ -81,6 +144,11 @@ export interface BrainPort {
   }): Promise<BrainRecord>;
   getRecord(id: string): Promise<BrainRecord | undefined>;
   listRecords(): Promise<BrainRecord[]>;
+  query(options: BrainQuery): Promise<BrainRecord[]>;
+  related(id: string): Promise<BrainRecord[]>;
+  history(id: string): Promise<RecordRevision[]>;
+  /** Explicit transfer of a missing record; never overwrite an existing ID. */
+  importRecord(record: BrainRecord, history?: RecordRevision[]): Promise<void>;
   upsertSegment(recordId: string, segment: Segment): Promise<BrainRecord>;
   /** Compare-and-set against the complete record revision. Return null on conflict. */
   updateRecord(
@@ -88,7 +156,11 @@ export interface BrainPort {
     expectedRevision: number,
     patch: RecordPatch,
   ): Promise<BrainRecord | null>;
-  search(query: string, limit: number, options?: BrainSearchOptions): Promise<BrainRecord[]>;
+  search(
+    query: string,
+    limit: number,
+    options?: BrainSearchOptions,
+  ): Promise<BrainRecord[]>;
   putAttachment(
     id: string,
     mimeType: string,
@@ -108,6 +180,8 @@ export type Route =
   | "end_agent"
   | "offer_help"
   | "continue_agent"
+  | "check_status"
+  | "suppress_note"
   | "dictate"
   | "no_action"
   | "unclear";
@@ -115,9 +189,23 @@ export interface RouteInput {
   text: string;
   recentContext: string;
   activeConversation: boolean;
-  pendingOffer?: { kind: "help" | "general_help" | "clarification"; recordId: string; sourceRevision?: number; screenQuestion?: string } | { kind: "end_work" } | {
-    kind: "close"; conversationId: string; sessionId: string; turnId: string; revisionKey: string; question: string;
-  };
+  pendingOffer?:
+    | {
+        kind: "help" | "general_help" | "clarification";
+        recordId: string;
+        sourceRevision?: number;
+        screenQuestion?: string;
+      }
+    | { kind: "end_work" }
+    | { kind: "note_suppression"; proposalId: string; question: string }
+    | {
+        kind: "close";
+        conversationId: string;
+        sessionId: string;
+        turnId: string;
+        revisionKey: string;
+        question: string;
+      };
 }
 export interface RouteDecision {
   route: Route;
@@ -170,19 +258,44 @@ export interface ChatMessage {
   toolCalls?: ToolCall[];
   toolCallId?: string;
 }
+export interface SpokenOutline {
+  overview: string;
+  points: {
+    label: string;
+    explanation: string;
+    /** One-based main-section indices in the complete answer, in reading order. */
+    sourceSections?: number[];
+  }[];
+}
 export interface AgentReply {
   text: string;
+  /** Optional model interpretation of a self-corrected request; never replaces source. */
+  understoodRequest?: string;
+  /** Brief plain-text speech produced with the full answer in the same call. */
+  spokenText?: string;
+  /** Presentation failure only; the written answer remains available. */
+  narrationError?: string;
+  spokenOutline?: SpokenOutline;
+  references?: NoteReference[];
   toolCalls: ToolCall[];
   /** A suggestion only. The controller asks J1 to verify the latest user turn. */
-  controlProposal?: { action: "end_conversation" | "offer_close"; reason: string };
+  controlProposal?: {
+    action: "end_conversation" | "offer_close";
+    reason: string;
+  };
 }
 export interface GenerationProvider {
+  planThoughts?(input: ThoughtInput, signal?: AbortSignal): Promise<ThoughtPlan>;
+  consolidate?(input: ThoughtInput, signal?: AbortSignal): Promise<ThoughtResult>;
   summarize(record: BrainRecord, signal?: AbortSignal): Promise<Summary>;
   respond(
     messages: ChatMessage[],
     tools: ToolDefinition[],
     signal?: AbortSignal,
-    options?: { responseMode?: "auto" | "answer_only"; closingMode?: "current" | "contextual" },
+    options?: {
+      responseMode?: "auto" | "answer_only";
+      closingMode?: "current" | "contextual";
+    },
   ): Promise<AgentReply>;
 }
 export interface ToolDefinition {
@@ -226,33 +339,104 @@ export interface AgentState {
   listening: boolean;
   pendingOffer?: RouteInput["pendingOffer"];
   busy: boolean;
+  activity?: "listening" | "searching" | "preparing" | "interrupted";
+  narration?: {
+    conversationId: string;
+    outline: SpokenOutline;
+    next: number;
+    /** Optional only for legacy state. New offers always anchor the original answer. */
+    sourceResponse?: { segmentId: string; revision: number };
+  };
   currentSubject?: string;
+  /** Presentation only, tied to the exact user turn the response interpreted. */
+  understoodRequest?: { text: string; conversationId: string; turnId: string; revisionKey: string };
   webAllowed: boolean;
   lastError?: string;
 }
+export interface LiveThoughtPreview {
+  sessionId: string;
+  recordId?: string;
+  revision: string;
+  segments: Pick<Segment, "id" | "speaker" | "text" | "final">[];
+  status?: "pending" | "running" | "failed";
+}
 export interface AgentEvent {
-  type: "state" | "record" | "notice";
+  type: "state" | "record" | "notice" | "voice" | "thought_preview";
+  preview?: LiveThoughtPreview;
+  voice?: Record<string, unknown>;
   state?: AgentState;
   record?: BrainRecord;
   message?: string;
 }
 export const transcriptText = (record: BrainRecord): string =>
-  record.segments.map((s) => `${s.speaker}: ${s.text}`).join("\n");
+  [
+    record.body ? `Authored note:\n${record.body}` : "",
+    record.segments.map((s) => `${s.speaker}: ${s.text}`).join("\n"),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
+export interface BrainQuery extends BrainSearchOptions {
+  text?: string;
+  limit?: number;
+}
 export interface BrainSearchOptions {
+  topic?: string;
+  purpose?: Purpose;
+  quality?: Quality;
+  unresolved?: boolean;
+  archived?: boolean;
+  since?: string;
+  until?: string;
   excludeIds?: string[];
   kinds?: BrainRecord["kind"][];
 }
-export interface LocalFolder { id: string; name: string; path: string }
-export interface LocalFileMatch { rootId: string; path: string; line: number; excerpt: string; fingerprint: string }
-export interface LocalFileSearch { matches: LocalFileMatch[]; truncated: boolean }
-export interface LocalFileRead { rootId: string; path: string; startLine: number; text: string; fingerprint: string; truncated: boolean }
+export interface LocalFolder {
+  id: string;
+  name: string;
+  path: string;
+}
+export interface LocalFileMatch {
+  rootId: string;
+  path: string;
+  line: number;
+  excerpt: string;
+  fingerprint: string;
+}
+export interface LocalFileSearch {
+  matches: LocalFileMatch[];
+  truncated: boolean;
+}
+export interface LocalFileRead {
+  rootId: string;
+  path: string;
+  startLine: number;
+  text: string;
+  fingerprint: string;
+  truncated: boolean;
+}
 export interface LocalFilesPort {
   roots(): Promise<LocalFolder[]>;
   grant(path: string): Promise<LocalFolder>;
   revoke(id: string): Promise<void>;
-  search(input: { query: string; mode?: "text" | "filename"; regex?: boolean; rootId?: string }, signal?: AbortSignal): Promise<LocalFileSearch>;
-  read(input: { rootId: string; path: string; startLine?: number; lineCount?: number }, signal?: AbortSignal): Promise<LocalFileRead>;
+  search(
+    input: {
+      query: string;
+      mode?: "text" | "filename";
+      regex?: boolean;
+      rootId?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<LocalFileSearch>;
+  read(
+    input: {
+      rootId: string;
+      path: string;
+      startLine?: number;
+      lineCount?: number;
+    },
+    signal?: AbortSignal,
+  ): Promise<LocalFileRead>;
 }
 export interface VisionObservation {
   field: string;
@@ -273,6 +457,10 @@ export interface VisionEvidence {
 export interface VisualScene {
   status: "observed" | "absent" | "unclear";
   features: { id: string; description: string; region: string }[];
-  hypotheses: { label: string; featureIds: string[]; confidence: "low" | "medium" | "high" }[];
+  hypotheses: {
+    label: string;
+    featureIds: string[];
+    confidence: "low" | "medium" | "high";
+  }[];
   limitation: string;
 }

@@ -128,6 +128,9 @@ def main():
             raise SystemExit(f'Missing prerequisite: {command}. Install Node, ffmpeg and Xcode command-line tools before setup.')
     subprocess.run(['xcrun', '--find', 'clang++'], check=True, capture_output=True)
     config = read_config()
+    if config['model'] == 'qwen3-asr-1.7b':
+        subprocess.run([sys.executable, str(ROOT / 'scripts/qwen-asr/setup.py')], check=True)
+        return
     manifest = json.loads((ROOT / 'docs' / 'whisper-artifacts.json').read_text())
     DEST.mkdir(parents=True, exist_ok=True)
     build_runtime(manifest)

@@ -43,7 +43,7 @@ function allowedRequest(method, path) {
   if (method === "GET")
     return (
       ["/api/state", "/api/native", "/api/local-folders"].includes(path) ||
-      /^\/api\/export\/[a-zA-Z0-9_-]+$/.test(path)
+      /^\/api\/(related|attachment)\/[a-zA-Z0-9._-]+$/.test(path)
     );
   if (method !== "POST") return false;
   return (
@@ -55,4 +55,11 @@ function allowedRequest(method, path) {
   );
 }
 
-module.exports = { localContentPath, trustedFrame, allowedRequest };
+function externalURL(value) {
+  if(typeof value!=="string" || value.length>8192 || /[\u0000-\u0020]/.test(value)) return null;
+  try {
+    const url=new URL(value);
+    return ["https:","http:"].includes(url.protocol) && !url.username && !url.password ? url.href : null;
+  } catch {return null;}
+}
+module.exports = { localContentPath, trustedFrame, allowedRequest, externalURL };

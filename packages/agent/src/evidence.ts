@@ -1,54 +1,84 @@
 import {transcriptText, type BrainPort, type BrainRecord, type LocalFilesPort, type LocalFileRead, type VisionEvidence, type VisualScene} from '../../contracts/src/index.js';
 import type {ExperimentToolEvent} from './reliability.js';
 import {typedExperimentResult} from './reliability.js';
-export interface EvidenceRef { id: string; offset: number; length: number; query?: string }
-export interface EvidenceIndex { refs: EvidenceRef[]; outcomes: unknown[]; files?: {rootId:string;path:string;startLine:number}[] }
-export function noteEvidence(record: BrainRecord, offset = 0, length = 2400, query = '') {
-  const original = transcriptText(record);
-  if (query && offset === 0 && original.length > length) {
-    const words = query.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? [];
-    const found = words.map(w => original.toLowerCase().indexOf(w)).filter(n => n >= 0);
-    if (found.length) offset = Math.max(0, Math.min(...found) - 200);
-  }
-  return {id: record.id, title: record.title, revision: record.revision, sourceRevision: record.sourceRevision,
-    original: original.slice(offset, offset + length), offset, nextOffset: Math.min(original.length, offset + length),
-    truncated: offset > 0 || offset + length < original.length, totalCharacters: original.length,
-    quality: record.quality, qualityReasons: record.qualityReasons, topics: record.topics, offTopic: record.offTopic};
+import {readPassage, selectPassages} from './note-passages.js';
+import {independentNote} from './evidence-eligibility.js';
+export interface EvidenceRef { id: string; offset: number; length: number; query?: string; selection?: 'query' | 'window' }
+export interface EvidenceIndex { refs: EvidenceRef[]; outcomes: unknown[]; files?: {rootId:string;path:string;startLine:number;lineCount?:number}[] }
+/** History excerpts are revision-checked in their active run and retained in the
+ * raw tool ledger. They must not become stale, duplicated evidence on later turns. */
+function retainedOutcome(outcome: unknown): unknown {
+  if (!outcome || typeof outcome !== 'object' || !('tool' in outcome) || outcome.tool !== 'conversation_history') return outcome;
+  const value = outcome as Record<string, unknown>;
+  const result = value.result as Record<string, unknown> | undefined;
+  return {...value, result: {
+    requestedInterval: result?.requestedInterval,
+    source: 'Historical retrieval receipt only. Use the current tool response for checked excerpts; retrieve again for a new request. Full original output remains in the local tool ledger.',
+  }};
 }
-export async function loadEvidence(brain: BrainPort, id: string, local?: LocalFilesPort) {
+export function noteEvidence(record: BrainRecord, offset = 0, length = 2400, query = '') {
+  const selecting = !!query.trim() && offset === 0;
+  const {passages, ...evidence} = selecting ? selectPassages(record, query, length) : readPassage(record, offset, length);
+  const first = passages[0];
+  // Keep the first exact source window in original for older consumers. Additional
+  // passages are separate, never joined into a fabricated contiguous quotation.
+  return {...evidence, ...first, original: first?.original ?? '', offset: first?.offset ?? offset,
+    nextOffset: first?.nextOffset ?? Math.min(transcriptText(record).length, offset),
+    additionalPassages: passages.slice(1), selectionQuery: selecting ? query : undefined,
+    evidenceNotice: 'Offsets are UTF-16 source positions. Omitted text is not evidence. Written section dates describe document sections, not proof of completed work; record creation/import/update timestamps are not event dates.'};
+}
+export async function loadEvidence(brain: BrainPort, id: string, local?: LocalFilesPort, webAllowed = true,
+  requestTurnIds: readonly string[] = []) {
   const index = await brain.getState<EvidenceIndex>(`evidence-index:${id}`) ?? {refs: [], outcomes: []};
   const notes = [];
   for (const ref of index.refs) {
     const record = await brain.getRecord(ref.id);
-    if (record && record.kind !== 'session' && record.id !== id) notes.push(noteEvidence(record, ref.offset, ref.length, ref.query));
+    if (independentNote(record, id, requestTurnIds))
+      notes.push(noteEvidence(record, ref.selection === 'query' ? 0 : ref.offset, ref.length, ref.query));
   }
   const files: LocalFileRead[] = [];
   const unavailableFiles: string[] = [];
   for (const ref of index.files ?? []) {
-    try { if (!local) throw new Error("Local file access unavailable"); files.push(await local.read({...ref, lineCount: 80})); }
+    try { if (!local) throw new Error("Local file access unavailable"); files.push(await local.read({...ref, lineCount: ref.lineCount ?? 80})); }
     catch { unavailableFiles.push(`${ref.rootId}/${ref.path}: unavailable; do not reuse an earlier excerpt.`); }
   }
-  return {notes, files, unavailableFiles, recentOutcomes: index.outcomes};
+  const recentOutcomes = (webAllowed ? index.outcomes : index.outcomes.filter(outcome =>
+    !outcome || typeof outcome !== 'object' || !('tool' in outcome) || !['search_web','extract_web'].includes(String(outcome.tool)))
+  ).map(retainedOutcome);
+  return {notes, files, unavailableFiles, recentOutcomes};
 }
 export async function rememberEvidence(brain: BrainPort, id: string, event: ExperimentToolEvent) {
   const index = await brain.getState<EvidenceIndex>(`evidence-index:${id}`) ?? {refs: [], outcomes: []};
-  if (event.status === 'success' && ['read_note','search_notes'].includes(event.call.name)) {
+  if (event.status === 'success' && ['read_note','search_notes','related_notes'].includes(event.call.name)) {
     const output = Array.isArray(event.result) ? event.result : [event.result];
     for (const item of output) if (item && typeof item === 'object' && 'id' in item && typeof item.id === 'string') {
-      index.refs = index.refs.filter(r => r.id !== item.id);
-      index.refs.push({id: item.id, offset: Number(event.call.arguments.offset) || 0, length: Number(event.call.arguments.length) || 2400,
-        query: typeof event.call.arguments.query === 'string' ? event.call.arguments.query : undefined});
+      const offset = 'offset' in item ? Number(item.offset) : Number(event.call.arguments.offset) || 0;
+      // Retain the requested window, not the old text length: a correction may be longer.
+      const length = event.call.name === 'related_notes' ? 1600 : Number(event.call.arguments.length) || 2400;
+      const query = 'selectionQuery' in item && typeof item.selectionQuery === 'string' ? item.selectionQuery
+        : event.call.name === 'search_notes' && typeof event.call.arguments.query === 'string' ? event.call.arguments.query : undefined;
+      const selection = query ? 'query' : 'window';
+      // A continuation read must not discard the earlier passage establishing its
+      // scope/qualification. Keep at most five bounded references overall.
+      index.refs = index.refs.filter(ref => ref.id !== item.id ||
+        (ref.selection ?? (ref.query ? 'query' : 'window')) !== selection ||
+        (selection === 'query' ? ref.query !== query : ref.offset !== offset || ref.length !== length));
+      index.refs.push({id: item.id, offset, length, query, selection});
     }
     index.refs = index.refs.slice(-5);
   }
   if (event.status === 'success' && ['search_local_files','read_local_file'].includes(event.call.name)) {
     const result = event.result as any;
     for (const f of result?.matches ?? [result]) if (f?.rootId && f?.path) {
-      index.files = [...(index.files ?? []).filter(ref => ref.rootId !== f.rootId || ref.path !== f.path), {rootId:f.rootId,path:f.path,startLine:f.startLine ?? f.line ?? 1}].slice(-5);
+      const startLine=f.startLine ?? f.line ?? 1;
+      const receivedLines=typeof f.text==='string' ? f.text.split(/\r?\n/).length : 80;
+      const lineCount=event.call.name==='read_local_file' ? Math.min(200,Math.max(1,Number(event.call.arguments.lineCount)||receivedLines)) : 80;
+      // Different passages from one file remain distinct evidence; a refresh keeps its bounds.
+      index.files = [...(index.files ?? []).filter(ref => ref.rootId !== f.rootId || ref.path !== f.path || ref.startLine !== startLine || (ref.lineCount ?? 80) !== lineCount), {rootId:f.rootId,path:f.path,startLine,lineCount}].slice(-5);
     }
   }
   const outcome = typedExperimentResult(event);
-  index.outcomes = [...index.outcomes, {...outcome, result: ['read_note','search_notes','search_local_files','read_local_file'].includes(event.call.name) ? undefined : outcome.result}].slice(-5);
+  index.outcomes = [...index.outcomes, {...outcome, result: ['read_note','search_notes','related_notes','search_local_files','read_local_file'].includes(event.call.name) ? undefined : outcome.result}].slice(-5).map(retainedOutcome);
   await brain.setState(`evidence-index:${id}`, index);
 }
 export async function evidenceCurrent(brain: BrainPort, snapshot: Awaited<ReturnType<typeof loadEvidence>>, local?: LocalFilesPort) {
@@ -76,8 +106,25 @@ export function validateVision(value: VisionEvidence | string, question?: string
   // Excluded material is not a requested field. This conservative lexical check
   // may withhold synonyms; it never invents a label equivalence.
   const requested = question ? words(question.replace(/\b(?:do not|don't|never|ignore|exclude|without)\b[^.!?;]*/gi, "")) : undefined;
-  const observations = (Array.isArray(parsed.observations) ? parsed.observations : []).map((o: any) => {
+  const observations = (Array.isArray(parsed.observations) ? parsed.observations : []).flatMap((o: any) => {
     const status = ['readable','unreadable','absent'].includes(o.status) ? o.status : 'unreadable';
+    if (status !== 'readable') {
+      const fieldWords = words(String(o.field ?? ''));
+      // An unrelated absence is not evidence that the requested field is absent.
+      // Require the complete field identity, so a value hidden in its name cannot
+      // bypass the null-value safeguard. Do not strip digits from genuine labels.
+      const requestedField = fieldWords.size > 0 && (!requested || [...fieldWords].every(word => requested.has(word)));
+      const contradictoryAbsence = status === 'absent' &&
+        [o.label, o.sourceExcerpt].some(text => typeof text === 'string' && text.trim());
+      if (!requestedField || contradictoryAbsence || typeof value === 'string') {
+        errors.push('A nonreadable observation lacks an unambiguous requested field or contradicts visible text.');
+        return [];
+      }
+      if (o.value != null) errors.push('A nonreadable observation supplied an unusable value.');
+      // Partial identifiers and unrelated source excerpts remain in raw evidence,
+      // never in the answer packet. Only the requested field/status is usable.
+      return [{field: String(o.field), status, value: null, label: null, sourceExcerpt: null}];
+    }
     const valid = typeof value !== 'string' && status === 'readable' && typeof o.value === 'string' &&
       typeof o.label === 'string' && !!o.label.trim() && typeof o.sourceExcerpt === 'string' && o.sourceExcerpt.includes(o.value) && o.sourceExcerpt.toLowerCase().includes(o.label.toLowerCase()) && [...words(o.field)].some(w => words(o.label).has(w));
     const limitation = `${parsed.interpretation ?? ''} ${parsed.scene?.limitation ?? ''}`;
@@ -85,7 +132,7 @@ export function validateVision(value: VisionEvidence | string, question?: string
       /\b(?:obscured|unreadable|hidden|incomplete|partially|uncertain)\b/i.test(clause) && [...words(o.field)].some(w => words(clause).has(w)));
     const supported = valid && !contradictory && (!requested || [...words(`${o.field} ${o.label} ${o.sourceExcerpt}`)].some(w => requested.has(w)));
     if ((status !== 'readable' && o.value != null) || (status === 'readable' && !supported)) errors.push(`Unsupported observation: ${String(o.field)}.`);
-    return {field: String(o.field ?? 'unknown'), status, value: supported ? o.value : null, label: supported ? o.label : null, sourceExcerpt: supported ? o.sourceExcerpt : null};
+    return [{field: String(o.field ?? 'unknown'), status, value: supported ? o.value : null, label: supported ? o.label : null, sourceExcerpt: supported ? o.sourceExcerpt : null}];
   });
   if (mode === 'ocr' && !observations.length) errors.push('OCR mode requires field observations; visual prose is not extracted text.');
   const scene = typeof value === 'string' || observations.length || mode === 'ocr' ? undefined : validateScene(parsed.scene, errors);
@@ -112,7 +159,15 @@ function validateScene(value: unknown, errors: string[]): VisualScene | undefine
   return {status:s.status, features:s.status === 'absent' ? [] : s.features, hypotheses, limitation:s.limitation};
 }
 export function usableVision(evidence: VisionEvidence) {
-  return {observations: evidence.observations, validated: evidence.validated, validationErrors: evidence.validationErrors,
+  return {observations: evidence.observations.filter(observation => observation.status !== 'readable' ||
+      (typeof observation.value === 'string' && !!observation.value.trim() &&
+       typeof observation.label === 'string' && !!observation.label.trim() &&
+       typeof observation.sourceExcerpt === 'string' && !!observation.sourceExcerpt.trim())),
+    validated: evidence.validated,
+    // Detailed validation errors can themselves contain discarded OCR values.
+    // Preserve them locally; hand only a value-free limitation to generation.
+    validationErrors: evidence.validationErrors.length ? ['Some requested visual evidence could not be validated.'] : [],
+    evidenceNotice: 'Only listed observations support claims. A missing requested observation is an extraction limitation, not evidence that the field is absent.',
     ...(evidence.scene ? {scene:evidence.scene, visualEvidenceNotice:'Model-reported visual features and tentative hypotheses; not verified identity or extracted text. Clarify absent/unclear targets.'} : {}),
     interpretation: 'Model interpretation is retained for review, not usable factual evidence.'};
 }

@@ -1,21 +1,18 @@
-import React, { useEffect, useState } from "react";
+import { MarkdownContent } from "./MarkdownContent.js";
+import { BrainWorkspace } from "./BrainWorkspace.js";
+import { useChatFollow } from "./useChatFollow.js";
+import React, { useEffect, useRef, useState } from "react";
+import { actionMessage, connectionAfterRefresh, processingMessage, readableNotice, clearAcknowledgedDraft, type ConnectionStatus } from "./feedback.js";
 import { createRoot } from "react-dom/client";
 import type {
   AgentEvent,
   AgentState,
   BrainRecord,
   LocalFolder,
-  RecordPatch,
 } from "../../../packages/contracts/src/index.js";
 import "./style.css";
 
-type Snapshot = {
-  state: AgentState;
-  records: BrainRecord[];
-  mode: string;
-  native?: Record<string, unknown>;
-  localFolders: LocalFolder[];
-};
+import { applySnapshotEvent, reconcileSnapshot, type Snapshot, type SnapshotEvent } from "./snapshot.js";
 declare global {
   interface Window {
     moolai?: {
@@ -26,6 +23,7 @@ declare global {
       ): Promise<T>;
       subscribe(callback: (event: AgentEvent) => void): () => void;
       chooseFolder(): Promise<LocalFolder | null>;
+      openExternal?(url: string): Promise<void>;
     };
   }
 }
@@ -37,21 +35,29 @@ function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [working, setWorking] = useState(false);
-  const [selected, setSelected] = useState<string>();
-  const [query, setQuery] = useState("");
-  const [showSessions, setShowSessions] = useState(false);
-  const [edit, setEdit] = useState<{
-    id: string;
-    revision: number;
-    title: string;
-    summary: string;
-    topics: string;
-  }>();
+  const [selectedNote,setSelectedNote] = useState<{id:string;nonce:number}>();
+  const [connection, setConnection] = useState<ConnectionStatus>("connecting");
+  const [savedSubmission, setSavedSubmission] = useState(false);
+  const refreshSequence = useRef(0);
+  const refreshEvents = useRef<SnapshotEvent[]>([]);
+  const refreshPending = useRef<Promise<void> | undefined>(undefined);
+  const transcriptPane = useRef<HTMLDivElement>(null);
   const api = window.moolai;
   async function refresh() {
     if (!api) return;
-    const next = await api.request<Snapshot>("GET", "/api/state");
-    setSnapshot(next);
+    // Polling and post-action refresh share one request, so an older response cannot replace newer UI state.
+    if (refreshPending.current) return refreshPending.current;
+    const sequence = ++refreshSequence.current;
+    refreshEvents.current = [];
+    const request = api.request<Snapshot>("GET", "/api/state").then(next => {
+      if (sequence !== refreshSequence.current) return;
+      setSnapshot(reconcileSnapshot(next, refreshEvents.current));
+      setConnection(connectionAfterRefresh(true));
+    }).catch(() => {
+      if (sequence === refreshSequence.current) setConnection(connectionAfterRefresh(false));
+    }).finally(() => { if (refreshPending.current === request) refreshPending.current = undefined; });
+    refreshPending.current = request;
+    return request;
   }
   useEffect(() => {
     if (!api) {
@@ -60,28 +66,18 @@ function App() {
       );
       return;
     }
-    void refresh().catch((e: Error) => setError(e.message));
+    void refresh();
     const dispose = api.subscribe((event) => {
-      if (event.type === "state" && event.state)
-        setSnapshot((old) => (old ? { ...old, state: event.state! } : old));
-      if (event.type === "record" && event.record)
-        setSnapshot((old) =>
-          old
-            ? {
-                ...old,
-                records: [
-                  event.record!,
-                  ...old.records.filter(
-                    (record) => record.id !== event.record!.id,
-                  ),
-                ],
-              }
-            : old,
-        );
-      if (event.type === "notice" && event.message) setNotice(event.message);
+      if (refreshPending.current) refreshEvents.current.push(event);
+      setSnapshot(old => old ? applySnapshotEvent(old, event) : old);
+      if (event.type === "notice" && event.message) {
+        const message = readableNotice(event.message);
+        if (message) setNotice(message);
+      }
+
     });
     const timer = window.setInterval(
-      () => void refresh().catch((e: Error) => setError(e.message)),
+      () => void refresh(),
       3000,
     );
     return () => {
@@ -98,14 +94,16 @@ function App() {
       after?.();
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(actionMessage(e, path));
     } finally {
       setWorking(false);
     }
   }
   async function send() {
-    if (!text.trim()) return;
-    await act("/api/input", { text }, () => setText(""));
+    if (!text.trim() || working) return;
+    const submitted = text;
+    setSavedSubmission(false);
+    await act("/api/input", { text: submitted }, () => { setText(current => clearAcknowledgedDraft(current, submitted)); setSavedSubmission(true); });
   }
   async function chooseFolder() {
     if (!api) return;
@@ -115,7 +113,7 @@ function App() {
       await api.chooseFolder();
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(actionMessage(e, "/api/local-folders"));
     } finally {
       setWorking(false);
     }
@@ -127,44 +125,29 @@ function App() {
       await api.request("POST", "/api/speech/stop");
       await act("/api/voice", { action: "start" });
     } catch (e) {
-      setError(String(e));
-    }
-  }
-  async function download(record: BrainRecord) {
-    try {
-      const markdown = await api!.request<string>(
-        "GET",
-        `/api/export/${record.id}`,
-      );
-      const url = URL.createObjectURL(
-        new Blob([markdown], { type: "text/markdown" }),
-      );
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `${record.title || record.id}.md`;
-      link.click();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      setError(String(e));
+      setError(actionMessage(e, "/api/voice"));
     }
   }
   const state = snapshot?.state;
   const records = [...(snapshot?.records || [])].sort((a, b) =>
     b.updatedAt.localeCompare(a.updatedAt),
   );
-  const nodes = records.filter(
-    (record) =>
-      (showSessions ? record.kind === "session" : record.kind !== "session") &&
-      `${record.title} ${record.summary} ${record.segments.map((s) => s.text).join(" ")} ${record.topics.join(" ")}`
-        .toLowerCase()
-        .includes(query.toLowerCase()),
-  );
-  const record = records.find((item) => item.id === selected) || nodes[0];
   const session = records.find((item) => item.id === state?.sessionId);
   const conversation = records.find(
     (item) => item.id === state?.conversationId,
   );
   const transcript = conversation || session;
+  const visibleSegments = transcript?.segments.filter(segment => segment.text.trim()) ?? [];
+  const follow = useChatFollow(transcriptPane, `${transcript?.id ?? ""}:${transcript?.sourceRevision ?? 0}`);
+  const micRequested = Boolean(snapshot?.native?.requestedOn || snapshot?.native?.enabled);
+  const processingAvailable = snapshot?.processing?.status === "available";
+  const offlineMessage = snapshot?.processing?.status === "unavailable" ? processingMessage(false, savedSubmission && !text.trim()) : undefined;
+  const currentResponseFailed = Boolean(state?.conversationId && state.lastError && !state.busy && processingAvailable);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 8000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
   return (
     <div className="shell">
       <header>
@@ -172,7 +155,7 @@ function App() {
           <span className="mark">m</span>
           <div>
             <h1>Moolai</h1>
-            <p>A place for thoughts to become knowledge.</p>
+            <p>Your second brain, in conversation.</p>
           </div>
         </div>
         <div className="header-actions">
@@ -199,19 +182,9 @@ function App() {
             : "Connecting to your local Agent…"}
         </div>
       )}
-      {(error || state?.lastError) && (
-        <div role="alert" className="alert">
-          {error || state?.lastError}
-          <button
-            onClick={() => {
-              setError("");
-              void refresh();
-            }}
-          >
-            Refresh
-          </button>
-        </div>
-      )}
+      {connection === "disconnected" && <div className="connection-status" role="status">Connecting to your local workspace… Your draft stays here.</div>}
+      {offlineMessage && connection !== "disconnected" && <div className="connection-status" role="status">{offlineMessage}</div>}
+      {error && <div role="alert" className="alert">{error}<button className="text-button" aria-label="Dismiss action message" onClick={() => setError("")}>Dismiss</button></div>}
       {notice && (
         <div className="notice" role="status">
           {notice}
@@ -224,7 +197,7 @@ function App() {
         <section className="conversation">
           <div className="section-heading">
             <div>
-              <span className="eyebrow">CAPTURE & CONVERSATION</span>
+              <span className="eyebrow">MOO</span>
               <h2>
                 {state?.conversationId
                   ? "Talking with Moo"
@@ -234,18 +207,25 @@ function App() {
             <span className="small-status">
               {snapshot?.native?.phase === "finishing_transcription"
                 ? "Finishing transcription…"
+                : snapshot?.native?.error
+                ? "Microphone needs attention"
+                : snapshot?.native?.phase === "reconnecting"
+                ? "Reconnecting microphone…"
+                : snapshot?.native?.phase === "connecting_asr"
+                ? "Preparing speech recognition…"
+                : snapshot?.native?.speaking
+                ? "Moo is speaking · speak to interrupt"
                 : state?.busy
-                ? "Moo is working…"
-                : snapshot?.native?.listening
-                  ? "Microphone on"
-                  : "Ready"}
+                ? state.activity === "listening" ? "Listening to your update…" : state.activity === "searching" ? "Searching…" : "Preparing answer…"
+                : state?.activity === "interrupted"
+                  ? "Interrupted · ready for your next request"
+                  : snapshot?.native?.listening
+                  ? "Listening"
+                  : snapshot?.native?.requestedOn ? "Connecting microphone…" : "Microphone off"}
             </span>
           </div>
-          <p className="hint">
-            Start a session to save your thoughts. Ask a question when you need
-            help. Follow-ups stay in the same conversation. Say “That’s all”
-            or “Moo, finish conversation” when you're done.
-          </p>
+          <details className="study-settings"><summary>Settings{state?.currentSubject ? ` · ${state.currentSubject}` : ""}</summary>
+          <div className="study-settings-panel">
           <form
             className="subject"
             onSubmit={(event) => {
@@ -295,8 +275,15 @@ function App() {
               Choose folder
             </button>
           </details>
-          <div className="transcript" aria-live="polite">
-            {!transcript?.segments.length && (
+          </div>
+          </details>
+          <div className="chat-follow-controls">
+            <label><input type="checkbox" checked={follow.enabled} onChange={event => follow.setFollow(event.target.checked)} />Auto-follow latest</label>
+            {follow.enabled && follow.paused ? <span>Paused while reading</span> : null}
+            {!follow.atBottom ? <button className="text-button" onClick={follow.jump}>Jump to latest ↓</button> : null}
+          </div>
+          <div ref={transcriptPane} className="transcript" role="region" aria-label="Conversation transcript" tabIndex={0} aria-live="polite">
+            {!visibleSegments.length && (
               <div className="empty">
                 <span>“</span>
                 <h3>Begin anywhere.</h3>
@@ -306,10 +293,11 @@ function App() {
                 </p>
               </div>
             )}
-            {transcript?.segments.map((segment) => (
+            {visibleSegments.map((segment) => (
               <article
                 className={`utterance ${segment.speaker}`}
                 key={segment.id}
+                aria-busy={!segment.final}
               >
                 <span>
                   {segment.speaker === "user"
@@ -318,13 +306,17 @@ function App() {
                       ? "Moo"
                       : "Session"}
                 </span>
-                <p>
-                  {segment.text || "…"}
-                  {!segment.final && <em> · transcribing</em>}
-                </p>
+                <div>
+                  <MarkdownContent text={segment.text} />
+                  {!segment.final && <em> · Transcribing…</em>}
+                </div>
+                {segment.references?.map(ref=><button key={ref.recordId} className="note-reference" onClick={()=>setSelectedNote({id:ref.recordId,nonce:Date.now()})}>{ref.title}</button>)}
               </article>
             ))}
           </div>
+          {state?.understoodRequest?.conversationId === state?.conversationId && state?.understoodRequest &&
+            <p className="response-status understood-request" role="status"><strong>Moo understood: </strong>{state.understoodRequest.text}</p>}
+          {currentResponseFailed && <p className="response-status" role="status">Moo couldn’t finish that response. Your conversation is still here; you can ask again.</p>}
           {(state?.pendingOffer?.kind === "help" ||
             state?.pendingOffer?.kind === "general_help") && (
             <div className="offer">
@@ -343,8 +335,14 @@ function App() {
           )}
           {state?.pendingOffer?.kind === "clarification" && (
             <div className="offer" role="status">
-              Your words are saved. Tell Moo whether you want help or want to
-              keep this as a note.
+              Would you like Moo to answer that? Say yes or no. Your original request is saved.
+            </div>
+          )}
+          {(state?.pendingOffer?.kind === "close" || state?.pendingOffer?.kind === "note_suppression") && (
+            <div className="offer" role="status">
+              <p>{state.pendingOffer.question}</p>
+              <button disabled={working} onClick={() => void act("/api/input", { text: "Yes" })}>Yes</button>
+              <button disabled={working} onClick={() => void act("/api/input", { text: "No" })}>No</button>
             </div>
           )}
           {state?.pendingOffer?.kind === "end_work" && (
@@ -372,7 +370,7 @@ function App() {
               id="input"
               placeholder="A thought to keep, or ‘Can you help me…’"
               value={text}
-              onChange={(event) => setText(event.target.value)}
+              onChange={(event) => { setText(event.target.value); setSavedSubmission(false); }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
                   event.preventDefault();
@@ -383,21 +381,14 @@ function App() {
             />
             <div className="controls">
               <div>
-                <button
-                  disabled={!state?.listening || working}
-                  onClick={() => void talk()}
-                >
-                  Talk
+                <button className={`mic-toggle ${micRequested ? "is-on" : ""}`}
+                  disabled={!state?.listening || (working && !micRequested)} aria-pressed={micRequested}
+                  aria-label={micRequested ? "Turn microphone off" : "Turn microphone on"}
+                  onClick={() => void (micRequested ? act("/api/voice", {action:"stop"}) : talk())}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>
+                  {micRequested ? "Mic on" : "Mic off"}
                 </button>
-                <button
-                  disabled={!state?.listening}
-                  onClick={() => void act("/api/voice", { action: "stop" })}
-                >
-                  Stop mic
-                </button>
-                <button onClick={() => void act("/api/speech/stop")}>
-                  Stop speech
-                </button>
+                {(snapshot?.native?.speaking || state?.busy) && <button className="text-button" onClick={() => void act("/api/speech/stop")}>{state?.busy ? "Stop response" : "Stop speech"}</button>}
               </div>
               <button
                 className="primary"
@@ -409,258 +400,18 @@ function App() {
             </div>
           </div>
           <div className="conversation-footer">
-            <small>
-              Saved locally first · Microphone audio is not retained
-            </small>
-            <button
-              disabled={!state?.listening || working}
-              onClick={() => void act("/api/voice", { action: "flush" })}
-            >
-              Send voice turn
-            </button>
+            <small>{session?.segments.length ? "Saved locally · audio isn’t stored" : "Your words stay yours"}</small>
             {state?.conversationId && (
-              <button disabled={working} onClick={() => void act("/api/end")}>
-                End Moo conversation
+              <button className="text-button" disabled={working} onClick={() => void act("/api/end")}>
+                Finish conversation
               </button>
             )}
           </div>
         </section>
-        <section className="brain">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">BRAIN</span>
-              <h2>
-                {showSessions ? "Session transcripts" : "Saved notes"}{" "}
-                <span className="count">{nodes.length}</span>
-              </h2>
-            </div>
-            <button onClick={() => void act("/api/retry")}>
-              Retry pending
-            </button>
-          </div>
-          <div className="view-switch">
-            <button
-              aria-pressed={!showSessions}
-              onClick={() => {
-                setShowSessions(false);
-                setSelected(undefined);
-              }}
-            >
-              Notes
-            </button>
-            <button
-              aria-pressed={showSessions}
-              onClick={() => {
-                setShowSessions(true);
-                setSelected(undefined);
-              }}
-            >
-              Session transcripts
-            </button>
-          </div>
-          <label className="sr-only" htmlFor="search">
-            Search saved notes
-          </label>
-          <input
-            id="search"
-            className="search"
-            placeholder="Find a thought, topic, or phrase…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-          <div className="notes">
-            {nodes.length === 0 && (
-              <p className="hint">
-                Your saved notes will appear here. Off-topic and uncertain
-                thoughts are kept too.
-              </p>
-            )}
-            {nodes.map((node) => (
-              <button
-                className={`note ${record?.id === node.id ? "selected" : ""}`}
-                onClick={() => {
-                  setSelected(node.id);
-                  setEdit(undefined);
-                }}
-                key={node.id}
-              >
-                <span className="note-top">
-                  <strong>
-                    {node.title ||
-                      (node.kind === "conversation"
-                        ? "Moo conversation"
-                        : "Saved thought")}
-                  </strong>
-                  <small>
-                    {new Date(node.createdAt).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </small>
-                </span>
-                <p>
-                  {node.summary ||
-                    node.segments[0]?.text ||
-                    "Transcript saved. Processing pending."}
-                </p>
-                <span className="tags">
-                  {node.purpose && <span>{node.purpose}</span>}
-                  {node.offTopic && <span>Off-topic</span>}
-                  <span
-                    className={node.quality === "needs_review" ? "review" : ""}
-                  >
-                    {node.quality.replace("_", " ")}
-                  </span>
-                </span>
-              </button>
-            ))}
-          </div>
-          {record && (
-            <article className="detail">
-              <div className="detail-heading">
-                <h3>{record.title || "Saved thought"}</h3>
-                <button
-                  onClick={() =>
-                    setEdit({
-                      id: record.id,
-                      revision: record.revision,
-                      title: record.title,
-                      summary: record.summary,
-                      topics: record.topics.join(", "),
-                    })
-                  }
-                >
-                  Edit
-                </button>
-              </div>
-              <div className="save-status">
-                Saved locally ·{" "}
-                {record.acceptedRevision >= record.revision
-                  ? "Backend accepted"
-                  : "Backend acceptance pending"}
-              </div>
-              {edit?.id === record.id ? (
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    const topics = [...new Set(edit.topics.split(",").map((topic) => topic.trim()).filter(Boolean))];
-                    const patch: RecordPatch = {};
-                    if (edit.title !== record.title) patch.title = edit.title;
-                    if (edit.summary !== record.summary) patch.summary = edit.summary;
-                    if (JSON.stringify(topics) !== JSON.stringify(record.topics)) patch.topics = topics;
-                    if (!Object.keys(patch).length) { setEdit(undefined); return; }
-                    void act(
-                      `/api/record/${record.id}`,
-                      { revision: edit.revision, patch },
-                      () => setEdit(undefined),
-                    );
-                  }}
-                >
-                  <label>
-                    Title
-                    <input
-                      value={edit.title}
-                      onChange={(event) =>
-                        setEdit({ ...edit, title: event.target.value })
-                      }
-                    />
-                  </label>
-                  <label>
-                    Summary
-                    <textarea
-                      value={edit.summary}
-                      onChange={(event) =>
-                        setEdit({ ...edit, summary: event.target.value })
-                      }
-                    />
-                  </label>
-                  <label>
-                    Topics · separate with commas
-                    <input
-                      value={edit.topics}
-                      onChange={(event) => setEdit({ ...edit, topics: event.target.value })}
-                    />
-                  </label>
-                  <button className="primary" disabled={working}>
-                    Save edits
-                  </button>
-                  <button type="button" onClick={() => setEdit(undefined)}>
-                    Cancel
-                  </button>
-                </form>
-              ) : (
-                <p className="summary">
-                  {record.summary || "Source retained. Summary pending."}
-                </p>
-              )}
-              <div className="tags">
-                {record.purpose && <span>{record.purpose}</span>}
-                {record.topics.map((topic) => (
-                  <span key={topic}>{topic}</span>
-                ))}
-                {record.offTopic && (
-                  <span title={`Outside ${record.offTopic.subject}`}>
-                    Off-topic: {record.offTopic.subject}
-                  </span>
-                )}
-              </div>
-              {record.topics.length > 0 && (
-                <p className="topic-note">
-                  {record.manualFields.includes("topics")
-                    ? "Topics edited by you."
-                    : "Suggested topics · edit to refine or remove."}
-                </p>
-              )}
-              {record.qualityReasons.length > 0 && (
-                <p className="quality">
-                  Review: {record.qualityReasons.join(" · ")}
-                </p>
-              )}
-              {record.error && <p className="quality">{record.error}</p>}
-              {record.links.length > 0 && (
-                <div className="connections">
-                  <h4>Connections</h4>
-                  {record.links.map((link) => (
-                    <button
-                      key={link.targetId}
-                      onClick={() => setSelected(link.targetId)}
-                    >
-                      {records.find((item) => item.id === link.targetId)
-                        ?.title || link.targetId}{" "}
-                      <small>· {link.provenance}</small>
-                    </button>
-                  ))}
-                </div>
-              )}
-              <details>
-                <summary>
-                  Original transcript · {record.segments.length} segments
-                </summary>
-                {record.segments.map((segment) => (
-                  <p className="source" key={segment.id}>
-                    <strong>{segment.speaker}:</strong> {segment.text}
-                  </p>
-                ))}
-              </details>
-              <div className="detail-actions">
-                <button onClick={() => void download(record)}>
-                  Export Markdown
-                </button>
-                <button
-                  onClick={() =>
-                    void act("/api/retry", { recordId: record.id })
-                  }
-                >
-                  Retry processing
-                </button>
-              </div>
-            </article>
-          )}
-        </section>
+        <BrainWorkspace ready={!!snapshot} liveThought={snapshot?.liveThought} processing={snapshot?.thoughtProcessing} processingAvailable={processingAvailable} retry={()=>act("/api/retry",{recordId:state?.sessionId,scope:"summary"})} records={snapshot?.records ?? []} api={api} refresh={refresh} requestedNote={selectedNote}/>
+
       </main>
-      <footer>
-        MOOLAI <span>Your ideas belong here, even before they make sense.</span>
-      </footer>
+
     </div>
   );
 }

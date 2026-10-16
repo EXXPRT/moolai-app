@@ -44,6 +44,15 @@ test("renderer can list and revoke folders but cannot grant arbitrary paths", ()
   ]) assert.equal(allowedRequest("POST", path), false, path);
 });
 
+test("archived desktop features are denied by the renderer request allowlist", () => {
+  for(const path of ["/api/notes","/api/brain/query","/api/snapshot/export","/api/snapshot/import"])
+    assert.equal(allowedRequest("POST",path),false,path);
+  for(const path of ["/api/history/note","/api/export/note"])
+    assert.equal(allowedRequest("GET",path),false,path);
+  assert.equal(allowedRequest("GET","/api/related/note"),true);
+  assert.equal(allowedRequest("GET","/api/attachment/screen.png"),true);
+});
+
 test("folder picker grants only the native selection and cancellation grants nothing", async () => {
   const handlers = new Map<string, (...args: any[]) => Promise<unknown>>();
   const requests: { path: string; body?: unknown }[] = [];
@@ -65,6 +74,7 @@ test("folder picker grants only the native selection and cancellation grants not
         readFile: async () => JSON.stringify({ port: 4317, token: "desktop-token", pid: 1 }),
       };
       if (name === "./local-content.cjs") return { localContentPath, trustedFrame, allowedRequest };
+      if (name === "./voice-lifecycle.cjs") return require("../../desktop/voice-lifecycle.cjs");
       return require(name);
     },
     __dirname: resolve("apps/desktop"),
@@ -125,4 +135,27 @@ test("desktop IPC accepts only its own top-level document", () => {
     false,
   );
   assert.equal(trustedFrame({}, undefined, url), false);
+});
+
+test('external link boundary accepts only HTTP(S) URLs without credentials or controls',()=>{
+ const {externalURL}=require('../../desktop/local-content.cjs');
+ assert.equal(externalURL('https://example.com/docs?q=topic'),'https://example.com/docs?q=topic');
+ for(const value of ['file:///etc/passwd','javascript:alert(1)','obsidian://open','https://user:secret@example.com','https://example.com/\nattack','relative.md',null]) assert.equal(externalURL(value),null);
+});
+
+test('an alive but slow runtime never launches a second host',async()=>{
+ let spawns=0;
+ const file=resolve('apps/desktop/electron.cjs');const localRequire=createRequire(file);
+ const module={exports:{} as {ensureRuntime:()=>Promise<void>}};
+ const context=vm.createContext({module,__dirname:resolve('apps/desktop'),URL,AbortSignal,setTimeout,
+ process:{env:{},kill(){}},fetch:async()=>{throw Error('health timed out');},
+ require(name:string){
+ if(name==='electron')return {app:{whenReady:()=>new Promise(()=>{}),on(){}},ipcMain:{handle(){},on(){}},protocol:{registerSchemesAsPrivileged(){}}};
+ if(name==='node:fs/promises')return {readFile:async()=>JSON.stringify({port:4317,pid:4242,token:'fixture'})};
+ if(name==='node:child_process')return {spawn(){spawns++;throw Error('must not spawn');}};
+ if(name.startsWith('./'))return localRequire(name);
+ return localRequire(name);
+ }});
+ vm.runInContext(await readFile(file,'utf8')+'\nmodule.exports={ensureRuntime};',context);
+ await assert.rejects(module.exports.ensureRuntime(),/existing Agent runtime is not responding/);assert.equal(spawns,0);
 });

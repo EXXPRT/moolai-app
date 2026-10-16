@@ -7,6 +7,7 @@
     "node": ">=22.13"
   },
   "scripts": {
+    "moo": "bash scripts/start-moo.sh",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test packages/agent/test/*.test.ts packages/brain/test/*.test.ts apps/runtime/test/*.test.ts scripts/*.test.mjs scripts/*.test.ts",
     "dev:runtime": "node --env-file-if-exists=runtime.env --import tsx apps/runtime/src/main.ts",
@@ -14,19 +15,30 @@
     "build:desktop": "vite build --config apps/desktop/vite.config.ts",
     "desktop": "electron apps/desktop/electron.cjs",
     "test:desktop": "electron scripts/smoke-desktop.cjs",
+    "test:desktop:scroll": "electron scripts/smoke-pane-scrolling.cjs",
     "check": "npm run typecheck && npm test && npm run build:desktop",
     "demo": "MOOLAI_MODE=fixture node --env-file-if-exists=runtime.env --import tsx apps/runtime/src/main.ts",
     "build:native": "bash native/build.sh",
     "setup:asr": "python3 scripts/setup-asr.py",
     "asr": "bash scripts/start-asr.sh",
-    "test:asr": "node scripts/smoke-asr.mjs .data/validation/whisper-asr-smoke.json"
+    "test:asr": "node scripts/smoke-asr.mjs .data/validation/whisper-asr-smoke.json",
+    "test:voice-endpoints": "node scripts/benchmark-voice-endpoints.mjs",
+    "setup:tts": "python3 scripts/setup-tts.py",
+    "test:desktop:regressions": "electron scripts/smoke-desktop-regressions.cjs"
   },
   "dependencies": {
+    "cytoscape": "3.34.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
+    "unified": "11.0.5",
     "ws": "8.21.3"
   },
   "devDependencies": {
+    "@types/cytoscape": "3.21.9",
+    "@types/mdast": "4.0.4",
     "@types/node": "26.6.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",

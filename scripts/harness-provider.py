@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT / 'backend'))
 from dotenv import dotenv_values
 import httpx
 from moolai_backend.providers import NebiusProvider, ServiceError
-from moolai_backend.schemas import RespondInput
+from moolai_backend.schemas import AgentReply, RespondInput
 from moolai_backend.settings import Settings
 from moolai_backend.validate_live import Ledger
 
@@ -200,7 +200,23 @@ class HarnessGateway(EvidenceGateway):
 
 
 class HarnessProvider(NebiusProvider):
+    def response_instruction(self, mode):
+        # Frozen historical harness policies remain separate from production prompts.
+        return None
+
+    def answer_only_reply(self, content):
+        # The frozen historical experiment explicitly removes response_format
+        # below. Its final text was never the production presentation envelope.
+        return AgentReply(text=content, toolCalls=[])
+
     async def completion(self, model, messages, max_completion_tokens, **parameters):
+        # Keep this historical comparison's declared text/tool wire unchanged.
+        # Production answer delivery now carries structured narration, which was
+        # not part of the frozen harness profiles or their request allowance.
+        parameters.pop('response_format', None)
+        if 'tools' in parameters:
+            parameters['tools'] = [tool for tool in parameters['tools']
+                                   if tool.get('function', {}).get('name') != 'deliver_answer']
         return await super().completion(model, messages, OUTPUT_TOKENS, **parameters)
 
 

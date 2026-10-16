@@ -69,8 +69,8 @@ async function assertSource(brain: BrainPort, text: string) {
     assert((await brain.getRecord(id))!.segments.some(segment => segment.speaker === "user" && segment.text === text),
       `${id} should retain the original source`);
 }
-async function assertUnpublished(brain: BrainPort, spoken: string[]) {
-  assert.deepEqual(spoken, []);
+async function assertUnpublished(brain: BrainPort, spoken: string[], closed = false) {
+  assert.deepEqual(spoken, closed ? ["Conversation closed. Your transcript is saved."] : []);
   assert.equal((await brain.getRecord("conversation"))!.segments.filter(segment => segment.speaker === "assistant").length, 0);
 }
 
@@ -210,7 +210,7 @@ for (const [sdk, create] of [["Pi", createPiRunner], ["DSH", createDeepSeekRunne
       assert.equal(f.calls.length, 1); assert.equal(f.previews.length, 0);
       assert.equal(f.agent.getState().conversationId, undefined);
       assert.equal(f.agent.getState().busy, false);
-      await assertUnpublished(context.brain, f.spoken);
+      await assertUnpublished(context.brain, f.spoken, true);
       await assertSource(await context.reopen(), "Explain the garden, unless I cancel.");
       assert.equal(f.forbiddenCalls(), 0);
     });

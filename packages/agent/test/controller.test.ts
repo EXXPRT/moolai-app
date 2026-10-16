@@ -182,6 +182,196 @@ for (const adapter of ["memory", "sqlite"] as const) {
     });
   };
 
+  run("a partial invocation is visible and retained but a corrected dictation final alone reaches J1", async ({agent,options,calls}, brain) => {
+    const visible: string[] = [];
+    options.onEvent = event => { if (event.type === "record" && event.record) visible.push(transcriptText(event.record)); };
+    const pending = { ...segment("stream", "Moo, search the web for iodine.", 1, "speech-turn"), final: false };
+    await agent.ingest(pending); await agent.settleTurn(pending.turnId); await agent.drain();
+    assert.ok(visible.some(text => text.includes(pending.text)), "The UI receives partial source text");
+    assert.equal(calls.routes.length, 0); assert.equal(calls.responses.length, 0);
+    assert.equal(calls.searches, 0); assert.equal(calls.captures, 0); assert.equal(calls.speech.length, 0);
+    await agent.ingest({ ...pending, revision: 2, text: "The title is Moo, search the web for iodine.", final: true });
+    await agent.settleTurn(pending.turnId); await agent.settleTurn(pending.turnId); await agent.drain();
+    assert.equal(calls.routes.length, 1, "Duplicate turn completion cannot dispatch twice");
+    assert.equal(calls.routes[0]!.text, "The title is Moo, search the web for iodine.");
+    assert.equal(agent.getState().conversationId, undefined);
+    const record = (await brain.listRecords()).find(r => r.kind === "dictation")!;
+    assert.equal(record.segments[0]!.revision, 2);
+    assert.equal(calls.responses.length, 0);
+  });
+  run("partial closing words cannot close an active conversation before their negated final", async ({agent,calls,hooks}) => {
+    await agent.submitText("Moo, explain iodine."); await agent.drain();
+    const id = agent.getState().conversationId!;
+    const routes = calls.routes.length, responses = calls.responses.length;
+    const pending = { ...segment("close-partial", "End conversation.", 1, "close-turn"), final: false };
+    await agent.ingest(pending); await agent.settleTurn(pending.turnId); await agent.drain();
+    assert.equal(agent.getState().conversationId, id);
+    assert.equal(calls.routes.length, routes); assert.equal(calls.responses.length, responses);
+    hooks.route = async () => ({ route: "continue_agent", confidence: 1 });
+    await agent.ingest({ ...pending, text: "Do not end the conversation. Explain iodine instead.", revision: 2, final: true });
+    await agent.settleTurn(pending.turnId); await agent.drain();
+    assert.equal(agent.getState().conversationId, id);
+    assert.equal(calls.routes.length, routes + 1);
+    assert.equal(calls.responses.length, responses + 1);
+    assert.ok(!calls.speech.some(text => text.startsWith("Conversation closed.")));
+  });
+  run("all speech blocks must be final before the complete request can act", async ({agent,calls}) => {
+    await agent.ingest(segment("first-block", "Moo, explain iodine.", 1, "one-thought"));
+    const constraint = { ...segment("last-block", "Use only my", 1, "one-thought"), final: false };
+    await agent.ingest(constraint); await agent.settleTurn("one-thought"); await agent.drain();
+    assert.equal(calls.routes.length, 0); assert.equal(calls.responses.length, 0);
+    await agent.ingest({ ...constraint, text: "Use only my notes. Keep it brief.", final: true, revision: 2 });
+    await agent.settleTurn("one-thought"); await agent.drain();
+    assert.equal(calls.routes.length, 1);
+    assert.match(calls.routes[0]!.text, /explain iodine.*Use only my notes/);
+    assert.equal(agent.getState().webAllowed, false);
+    assert.ok(calls.toolNames.length > 0);
+    assert.ok(calls.toolNames.every(names => names.includes("search_notes") && !names.includes("search_web") && !names.includes("extract_web")));
+  });
+
+  run("self-correction stays visible in one transcript and no superseded partial request executes", async ({agent,options,calls,hooks}, brain) => {
+    const visible: Segment[] = [];
+    options.onEvent = event => {
+      if (event.type === "record") {
+        const current = event.record?.segments.find(s => s.id === "corrected-search");
+        if (current) visible.push(structuredClone(current));
+      }
+    };
+    const input = {...segment("corrected-search", "Moo, check my notes for what Ian said", 1, "corrected-turn"), final: false};
+    await agent.ingest(input); await agent.settleTurn(input.turnId); await agent.drain();
+    await agent.ingest({...input, revision: 2, text: input.text + ", no, check it for what John said."});
+    await agent.settleTurn(input.turnId); await agent.drain();
+    assert.equal(calls.routes.length, 0); assert.equal(calls.responses.length, 0);
+    assert.equal(calls.searches, 0);
+    const final = {...input, revision: 3, final: true, text: "Moo, check my notes for what Ian said, no, check it for what John said. Use only my notes."};
+    // The fixture supplies a known interpretation; this tests handoff and tool execution,
+    // not whether a live model can infer every spoken correction correctly.
+    let generated = 0;
+    hooks.respond = async messages => {
+      if (generated++ === 0) {
+        assert.ok(messages.some(m => m.role === "user" && m.content === final.text));
+        assert.match(messages[0]!.content, /latest explicit correction/);
+        return {text: "", toolCalls: [{id: "john-search", name: "search_notes", arguments: {query: "John"}}]};
+      }
+      return {text: "That search found no matching note for John.", toolCalls: []};
+    };
+    const searches: string[] = [], search = brain.search.bind(brain);
+    brain.search = async (query, options) => { searches.push(query); return search(query, options); };
+    await agent.ingest(final); await agent.settleTurn(final.turnId); await agent.settleTurn(final.turnId); await agent.drain();
+    assert.equal(calls.routes.length, 1); assert.equal(calls.routes[0]!.text, final.text);
+    assert.deepEqual(searches, ["John"]);
+    assert.equal(agent.getState().webAllowed, false);
+    const session = (await brain.getRecord(agent.getState().sessionId!))!;
+    assert.equal(session.segments.filter(s => s.id === input.id).length, 1);
+    assert.equal(session.segments.find(s => s.id === input.id)!.text, final.text, "Raw wording is retained, not rewritten to a cleaned command");
+    assert.ok(visible.some(s => !s.final && s.revision === 2));
+    await agent.ingest(input); await agent.drain();
+    assert.equal((await brain.getRecord(session.id))!.segments.find(s => s.id === input.id)!.revision, 3, "A late preview cannot replace the final source");
+  });
+  run("an empty corrected final and a restart never execute discarded partial commands", async ({agent,options,calls}, brain) => {
+    const pending = { ...segment("cancelled-asr", "Moo, take a screenshot.", 1, "empty-turn"), final: false };
+    await agent.ingest(pending); await agent.drain();
+    const restarted = new Agent(options); await restarted.initialize(); await restarted.drain();
+    await restarted.settleTurn(pending.turnId);
+    assert.equal(calls.routes.length, 0); assert.equal(calls.captures, 0);
+    await restarted.ingest({ ...pending, text: "", revision: 2, final: true });
+    await restarted.settleTurn(pending.turnId); await restarted.drain();
+    assert.equal(calls.routes.length, 0); assert.equal(calls.responses.length, 0);
+    assert.equal(calls.speech.length, 0);
+    const session = await brain.getRecord(restarted.getState().sessionId!);
+    assert.equal(session!.segments[0]!.text, ""); assert.equal(session!.segments[0]!.revision, 2);
+  });
+
+  run("closure acknowledges once and returns to dictation with capture intent unchanged", async ({agent,calls}, brain) => {
+    await agent.submitText("Moo, explain tides."); await agent.drain();
+    const id = agent.getState().conversationId!;
+    await agent.submitText("End conversation."); await agent.drain();
+    assert.equal(agent.getState().conversationId, undefined);
+    assert.equal(agent.getState().listening, true);
+    assert.equal(calls.speech.filter(s => s === "Conversation closed. Your transcript is saved.").length, 1);
+    assert.equal(await brain.getState(`checkpoint:${id}`), "conversation closed");
+    await agent.submitText("The tide was high today."); await agent.drain();
+    assert.ok((await brain.listRecords()).some(r => r.kind === "dictation" && transcriptText(r).includes("tide was high")));
+  });
+  run("yes/no clarification preserves the original question and new constraint", async ({agent,hooks,calls}, brain) => {
+    hooks.route = async input => ({route: input.pendingOffer?.kind === "clarification" ? "start_agent" : "unclear", confidence: 1});
+    await agent.submitText("How does a siphon work?"); await agent.drain();
+    assert.equal(calls.speech.at(-1), "Would you like Moo to answer that?");
+    await agent.submitText("Yes, use only my notes."); await agent.drain();
+    assert.ok(agent.getState().conversationId);
+    assert.equal(agent.getState().webAllowed, false);
+    assert.match(JSON.stringify(calls.responses.at(-1)), /How does a siphon work/);
+    assert.ok((await brain.listRecords()).some(r => transcriptText(r).includes("How does a siphon work")));
+  });
+  run("speech onset supersedes a pending J1 close before ASR finishes the new words", async ({agent,hooks}, brain) => {
+    await agent.submitText("Moo, explain tides."); await agent.drain();
+    const id=agent.getState().conversationId!;
+    const reply=deferred<RouteDecision>(), started=deferred<void>();
+    hooks.route=async()=>{started.resolve();return reply.promise;};
+    const closing=agent.submitText("End conversation."); await started.promise;
+    await agent.speechStarted();
+    reply.resolve({route:'end_agent',confidence:1});await closing;await agent.drain();
+    assert.equal(agent.getState().conversationId,id);
+    assert.ok((await brain.listOperations()).some(o=>o.error?.includes('New speech superseded')));
+  });
+  run("speech onset invalidates late generation without closing or resuming the old answer", async ({agent,hooks,calls}, brain) => {
+    await agent.submitText("Moo, explain gravity."); await agent.drain();
+    const id = agent.getState().conversationId!;
+    const pending = deferred<AgentReply>(); const started = deferred<void>();
+    hooks.respond = async () => { started.resolve(); return pending.promise; };
+    await agent.submitText("Give me more detail."); await started.promise;
+    await agent.interrupt();
+    assert.equal(agent.getState().busy, false); assert.equal(agent.getState().conversationId, id);
+    pending.resolve({text:"Superseded answer must never be spoken.",toolCalls:[]}); await agent.drain();
+    assert.ok(!calls.speech.some(s => s.includes("Superseded answer")));
+    assert.ok(!transcriptText((await brain.getRecord(id))!).includes("Superseded answer"));
+    assert.match(await brain.getState<string>(`work-status:${id}`) ?? '', /interrupted/);
+    hooks.respond = async () => ({text:"The new direction is retained.",spokenText:"The new direction is retained.",toolCalls:[]});
+    await agent.submitText("Instead explain buoyancy."); await agent.drain();
+    assert.equal(agent.getState().conversationId,id); assert.match(calls.speech.at(-1)!,/new direction/);
+  });
+  run("interruption during playback stops speech but retains the complete onscreen answer", async ({agent,options}, brain) => {
+    await agent.submitText("Moo, begin."); await agent.drain();
+    const speaking = deferred<void>(), stopped = deferred<void>();
+    options.speech.speak = async () => { speaking.resolve(); await stopped.promise; };
+    options.speech.stop = async () => { stopped.resolve(); };
+    await agent.submitText("Explain further."); await speaking.promise;
+    const id=agent.getState().conversationId!;
+    await agent.interrupt(); await agent.drain();
+    assert.equal(agent.getState().conversationId,id);
+    assert.ok((await brain.getRecord(id))!.segments.some(s=>s.speaker==='assistant'));
+  });
+  run("nearby dictation and explicit terminology corrections remain attributed and raw", async ({agent,calls}, brain) => {
+    await agent.submitText("We are studying the element iodene."); await agent.drain();
+    await agent.submitText("I meant iodine. That element is essential."); await agent.drain();
+    const thoughts=(await brain.listRecords()).filter(r=>r.kind==='dictation');
+    assert.equal(thoughts.length,2); assert.ok(thoughts.some(r=>r.links.some(l=>l.provenance==='source')));
+    assert.match(await agent.recognitionContext(),/iodine/);
+    await agent.submitText("Moo, why is it essential?"); await agent.drain();
+    const context=JSON.stringify(calls.responses.at(-1));
+    assert.match(context,/same-session dictation/); assert.match(context,/iodene/); assert.match(context,/I meant iodine/);
+    assert.ok(thoughts.some(r=>transcriptText(r).includes('iodene')));
+  });
+  run("ungranted file tools stay hidden and saved-note retrieval is preferred", async ({agent,options,calls}) => {
+    options.localFiles = {roots:async()=>[]} as any;
+    await agent.submitText("Moo, find my saved notes about tides."); await agent.drain();
+    assert.ok(calls.toolNames[0]!.includes('search_notes'));
+    assert.ok(!calls.toolNames[0]!.includes('search_local_files'));
+    assert.match(JSON.stringify(calls.responses[0]),/bounded result list establishes an empty Brain/);
+  });
+  run("consolidation retains raw large tool results but sends bounded execution references", async ({agent,hooks}, brain) => {
+    await agent.submitText("Moo, explain the saved tide observations."); await agent.drain();
+    const id=agent.getState().conversationId!;
+    const large='Raw evidence paragraph '.repeat(10000);
+    await brain.setState(`tool-ledger:${id}`,[{call:{id:'retrieval-1',name:'search_notes',arguments:{query:'tide'}},result:{status:'success',executed:true,result:[{id:'tide-note',revision:3,title:'Tides',original:large}]}}]);
+    let summaryInput=''; hooks.summarize=async r=>{summaryInput=transcriptText(r);return {title:'Tides',summary:'The user asked about saved tide observations.'};};
+    await agent.submitText('End conversation.'); await agent.drain();
+    assert.ok(summaryInput.length<15000); assert.match(summaryInput,/tide-note/); assert.match(summaryInput,/revision/);
+    assert.ok(!summaryInput.includes(large));
+    assert.match(JSON.stringify(await brain.getState(`tool-ledger:${id}`)),/Raw evidence paragraph/);
+    assert.ok((await brain.listOperations()).filter(o=>o.recordId===id&&o.kind==='enrich').every(o=>o.status!=='failed'));
+  });
+
   run(
     "saves source before a routing provider failure",
     async ({ agent, hooks }, brain) => {
@@ -848,12 +1038,14 @@ for (const adapter of ["memory", "sqlite"] as const) {
       assert.equal(calls.captures, 1);
       assert.equal(agent.getState().conversationId, undefined);
       assert.match(
-        calls.responses[0]![0]!.content,
-        /Legacy output is unvalidated/,
+        JSON.stringify(calls.responses[0]),
+        /Some requested visual evidence could not be validated/,
       );
       assert.doesNotMatch(calls.responses[0]![0]!.content, /\[object Object\]/);
       const attachmentId = (await brain.getRecord(conversationId))!
         .attachmentIds[0]!;
+      const retained = await brain.getState<{evidence: {validationErrors: string[]}}>(`evidence:${attachmentId}`);
+      assert.ok(retained?.evidence.validationErrors.includes("Legacy output is unvalidated."));
       assert.deepEqual(
         (await brain.getAttachment(attachmentId))?.bytes,
         new Uint8Array([7, 8]),

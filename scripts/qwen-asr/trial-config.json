@@ -1,0 +1,13 @@
+{
+  "model": "qwen3-asr-1.7b",
+  "language": "en",
+  "initialPrompt": "Moo.",
+  "livePreview": true,
+  "previewIntervalMs": 2000,
+  "port": 8178,
+  "inferencePort": 8177,
+  "endpointSilenceMs": 1200,
+  "maxUtteranceSeconds": 60,
+  "rmsThreshold": 0.008,
+  "preRollMs": 500
+}

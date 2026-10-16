@@ -1,10 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type {
   Attachment,
   BrainPort,
   BrainRecord,
+  BrainQuery,
+  RecordRevision,
   PendingOperation,
   RecordPatch,
   Segment,
@@ -15,7 +17,10 @@ import {
   patchRecord,
   reviseSegment,
   searchRecords,
-} from "./records.js";
+  queryRecords,
+  relatedRecords,
+  importedHistory,
+} from "../../contracts/src/records.js";
 
 /** SQLite owns durable state; attachment bytes live beside the database. */
 export class SQLiteBrain implements BrainPort {
@@ -26,6 +31,27 @@ export class SQLiteBrain implements BrainPort {
     this.attachmentDirectory = join(directory, "attachments");
     mkdirSync(this.attachmentDirectory, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(join(directory, "brain.sqlite"));
+    const version = Number(
+      this.db.prepare("PRAGMA user_version").get()?.user_version ?? 0,
+    );
+    if (version > 2)
+      throw new Error("This Brain schema is newer than this application");
+    if (version === 1 && !existsSync(join(directory, "brain.before-v2.sqlite")))
+      this.db.exec(
+        `VACUUM INTO '${join(directory, "brain.before-v2.sqlite").replaceAll("'", "''")}'`,
+      );
+    if (version === 1) {
+      const backup = new DatabaseSync(
+        join(directory, "brain.before-v2.sqlite"),
+        { readOnly: true },
+      );
+      try {
+        if (backup.prepare("PRAGMA quick_check").get()?.quick_check !== "ok")
+          throw new Error("Pre-migration backup failed integrity verification");
+      } finally {
+        backup.close();
+      }
+    }
     this.db.exec(`
       PRAGMA journal_mode=WAL;
       PRAGMA synchronous=FULL;
@@ -34,7 +60,8 @@ export class SQLiteBrain implements BrainPort {
       CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, mime_type TEXT NOT NULL, size INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS state (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-      PRAGMA user_version=1;
+      CREATE TABLE IF NOT EXISTS revisions (record_id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(record_id, revision));
+      PRAGMA user_version=2;
     `);
   }
   private readRecord(id: string): BrainRecord | undefined {
@@ -86,7 +113,10 @@ export class SQLiteBrain implements BrainPort {
       const record = this.readRecord(id);
       if (!record) throw new Error(`Unknown record: ${id}`);
       const updated = reviseSegment(record, segment);
-      if (updated !== record) this.saveRecord(updated);
+      if (updated !== record) {
+        this.remember(record, updated, "capture");
+        this.saveRecord(updated);
+      }
       return updated;
     });
   }
@@ -99,12 +129,70 @@ export class SQLiteBrain implements BrainPort {
       const record = this.readRecord(id);
       if (!record || record.revision !== expectedRevision) return null;
       const updated = patchRecord(record, patch);
+      if (updated.revision !== record.revision)
+        this.remember(
+          record,
+          updated,
+          patch.manualFields ? "manual" : "generated",
+        );
       this.saveRecord(updated);
       return updated;
     });
   }
-  async search(query: string, limit: number, options?: import("../../contracts/src/index.js").BrainSearchOptions): Promise<BrainRecord[]> {
+  async search(
+    query: string,
+    limit: number,
+    options?: import("../../contracts/src/index.js").BrainSearchOptions,
+  ): Promise<BrainRecord[]> {
     return searchRecords(await this.listRecords(), query, limit, options);
+  }
+  private remember(
+    before: BrainRecord,
+    after: BrainRecord,
+    reason: RecordRevision["reason"],
+  ) {
+    const insert = this.db.prepare(
+      "INSERT OR IGNORE INTO revisions(record_id,revision,data) VALUES (?,?,?)",
+    );
+    insert.run(
+      before.id,
+      before.revision,
+      JSON.stringify({
+        record: before,
+        reason: "import",
+        at: before.updatedAt,
+      }),
+    );
+    insert.run(
+      after.id,
+      after.revision,
+      JSON.stringify({ record: after, reason, at: after.updatedAt }),
+    );
+  }
+  async history(id: string): Promise<RecordRevision[]> {
+    return this.db
+      .prepare("SELECT data FROM revisions WHERE record_id=? ORDER BY revision")
+      .all(id)
+      .map((row) => JSON.parse(row.data as string));
+  }
+  async importRecord(record: BrainRecord, history: RecordRevision[] = []) {
+    const revisions = importedHistory(record, history);
+    this.transaction(() => {
+      if (this.readRecord(record.id)) throw new Error("Record already exists");
+      this.saveRecord(record);
+      for (const entry of revisions)
+        this.db
+          .prepare(
+            "INSERT INTO revisions(record_id,revision,data) VALUES (?,?,?)",
+          )
+          .run(record.id, entry.record.revision, JSON.stringify(entry));
+    });
+  }
+  async query(options: BrainQuery) {
+    return queryRecords(await this.listRecords(), options);
+  }
+  async related(id: string) {
+    return relatedRecords(await this.listRecords(), id);
   }
   async putAttachment(
     id: string,

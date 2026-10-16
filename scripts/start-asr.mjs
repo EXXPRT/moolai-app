@@ -2,10 +2,10 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { access, constants, readFile, stat } from 'node:fs/promises';
-import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { asrConfigPath, readAsrConfig } from './asr-config.mjs';
+import { existingAsr, requireFreePort } from './asr-service.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const assets = path.join(root, '.data/asr/whisper');
@@ -25,14 +25,6 @@ async function requireArtifact(artifact) {
   return filename;
 }
 
-async function requireFreePort(port) {
-  await new Promise((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once('error', () => reject(new Error(`ASR loopback port ${port} is occupied. Stop its existing service or change asr-config.json.`)));
-    probe.listen(port, '127.0.0.1', () => probe.close(error => error ? reject(error) : resolve()));
-  });
-}
-
 async function ready(port, signal, timeoutMs = 60000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -49,6 +41,15 @@ async function ready(port, signal, timeoutMs = 60000) {
 async function main() {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') throw new Error('Local ASR requires macOS Apple Silicon with Metal');
   const config = await readAsrConfig(root);
+  const running = await existingAsr(config);
+  if (running) {
+    console.log(`Local ASR already running: ${running.model} on port ${config.port} (microphone ${running.activeCapture ? 'active' : 'off'}). Use the existing app connection. No second service started; its existing configuration remains in use.`);
+    return;
+  }
+  if (config.model === 'qwen3-asr-1.7b') {
+    const { startQwen } = await import('./qwen-asr/start.mjs');
+    return startQwen(config);
+  }
   console.log(`Verifying local ASR assets for ${config.model}...`);
   const manifest = JSON.parse(await readFile(path.join(root, 'docs/whisper-artifacts.json'), 'utf8'));
   const server = path.join(assets, 'build/bin/whisper-server');
@@ -92,7 +93,7 @@ async function main() {
   try {
     console.log(`Loading ${config.model} with Metal and Silero VAD...`);
     launch('Whisper', server, ['-m', model, '--host', '127.0.0.1', '--port', String(config.inferencePort),
-      '-t', '8', '-l', config.language, '-fa', '-nf', '-bo', '1', '-bs', '1', '--prompt', config.initialPrompt,
+      '-t', '8', '-l', config.language, '-fa', '-nf', '-bo', '1', '-bs', String(config.beamSize ?? 1), '--prompt', config.initialPrompt,
       '--vad', '-vm', vad], true);
     await ready(config.inferencePort, abort.signal);
     launch('Speech bridge', process.execPath, [path.join(root, 'scripts/whisper-bridge.mjs')]);

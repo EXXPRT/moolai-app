@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { once } from "node:events";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import type { Agent } from "../../../packages/agent/src/index.js";
 import type {
@@ -19,11 +21,12 @@ import { NativeBridge } from "../src/native.js";
 const token = "test-runtime-token";
 const state: AgentState = { listening: false, busy: false, webAllowed: true };
 
-async function runtime(localFiles?: LocalFilesPort) {
+async function runtime(localFiles?: LocalFilesPort, processingStatus?: () => {status:"available"|"unavailable"|"checking";checkedAt?:string}, initialState=state) {
   const actions: { name: string; value?: unknown }[] = [];
   const brain = new MemoryBrain();
   const agent = {
-    getState: () => state,
+    getState: () => initialState,
+    liveThoughtPreview: async () => initialState.sessionId ? {sessionId:initialState.sessionId,revision:"fixture",segments:[{id:"preview",speaker:"user",text:"Revisable source preview",final:false}]} : undefined,
     startSession: async () => {
       actions.push({ name: "session-start" });
     },
@@ -45,8 +48,8 @@ async function runtime(localFiles?: LocalFilesPort) {
     setSubject: async (subject: string) => {
       actions.push({ name: "subject", value: subject });
     },
-    retryPending: async (id?: string) => {
-      actions.push({ name: "retry", value: id });
+    retrySummary: async (id: string) => {
+      actions.push({ name: "summary-retry", value: id });
     },
     stopSpeech: async () => {
       actions.push({ name: "speech-stop" });
@@ -62,6 +65,7 @@ async function runtime(localFiles?: LocalFilesPort) {
     localFiles,
     token,
     mode: "fixture",
+    processingStatus,
     voice: async (action) => {
       actions.push({ name: "voice", value: action });
     },
@@ -99,6 +103,21 @@ async function runtime(localFiles?: LocalFilesPort) {
   };
 }
 
+test("runtime distinguishes successful remaining work from a provider failure without exposing source buffers", async()=>{
+  const host=await runtime(undefined,undefined,{...state,sessionId:"study"});
+  try {
+    await host.brain.setState("thought-buffer:study",{status:"failed",error:"More text remains",continuationRequired:true,activeId:"growing",spans:[{text:"private retained text"}]});
+    const response=await fetch(host.base+"/api/state",{headers:{Authorization:`Bearer ${token}`}});
+    const snapshot=await response.json() as {thoughtProcessing:unknown;liveThought:{segments:{text:string;final:boolean}[]}};
+    assert.deepEqual(snapshot.thoughtProcessing,{status:"failed",error:"More text remains",pending:true,continuationRequired:true,recordId:"growing"});
+    assert.equal(snapshot.liveThought.segments[0]?.text,"Revisable source preview");
+    assert.equal(snapshot.liveThought.segments[0]?.final,false);
+    await host.brain.setState("thought-buffer:study",{status:"failed",error:"Provider unavailable",draftId:"draft",spans:[{}]});
+    const failed=await (await fetch(host.base+"/api/state",{headers:{Authorization:`Bearer ${token}`}})).json() as {thoughtProcessing:{continuationRequired:boolean;recordId:string}};
+    assert.equal(failed.thoughtProcessing.continuationRequired,false);assert.equal(failed.thoughtProcessing.recordId,"draft");
+  }finally{await host.close();}
+});
+
 test("runtime requires the exact bearer token and reports its explicit mode/native status", async () => {
   const host = await runtime();
   try {
@@ -117,11 +136,13 @@ test("runtime requires the exact bearer token and reports its explicit mode/nati
       mode: string;
       native: { listening: boolean; error: string };
       localFolders: unknown[];
+      processing: {status:string};
     };
     assert.equal(snapshot.mode, "fixture");
     assert.equal(snapshot.native.listening, false);
     assert.equal(snapshot.native.error, "permission pending");
     assert.deepEqual(snapshot.localFolders, []);
+    assert.equal(snapshot.processing.status, "available");
     assert.equal(result.headers.get("cache-control"), "no-store");
   } finally {
     await host.close();
@@ -190,6 +211,9 @@ test("runtime rejects malformed action/edit bodies before changing Agent state",
       ["/api/voice", { action: "record-forever" }],
       ["/api/end/resolve", { action: "discard-everything" }],
       ["/api/retry", { recordId: {} }],
+      ["/api/retry", {}],
+      ["/api/retry", { recordId: "note" }],
+      ["/api/retry", { recordId: "note", scope: "all" }],
       ["/api/record/note", { revision: -1, patch: { summary: "text" } }],
       ["/api/record/note", { revision: 1, patch: { summary: 42 } }],
       ["/api/record/note", { revision: 1, patch: { title: {} } }],
@@ -218,8 +242,6 @@ test("runtime rejects malformed action/edit bodies before changing Agent state",
           patch: {
             title: "A title",
             summary: "Saved text",
-            topics: ["Gardening"],
-            purpose: "Idea",
           },
         })
       ).status,
@@ -234,6 +256,44 @@ test("runtime rejects malformed action/edit bodies before changing Agent state",
   } finally {
     await host.close();
   }
+});
+
+test("processing availability recovers without altering retained note failures or blocking capture", async () => {
+  let status: "available" | "unavailable" = "unavailable";
+  const host = await runtime(undefined, () => ({status,checkedAt:"2026-09-28T00:00:00Z"}));
+  try {
+    let note = await host.brain.createRecord({id:"saved",kind:"dictation",createdAt:"2026-09-28T00:00:00Z"});
+    note = (await host.brain.updateRecord(note.id,note.revision,{summary:"Retained useful summary",error:"Backend 502: incomplete provider output"}))!;
+    const get = () => fetch(host.base+"/api/state",{headers:{Authorization:`Bearer ${token}`}}).then(r=>r.json());
+    assert.equal((await get()).processing.status,"unavailable");
+    assert.equal((await host.post("/api/input",{text:"A thought saved during the outage."})).status,200);
+    status="available";
+    const recovered=await get();
+    assert.equal(recovered.processing.status,"available");
+    assert.equal(recovered.records[0].summary,note.summary);
+    assert.equal(recovered.records[0].error,note.error,"a healthy backend does not hide old failed work");
+    assert.equal((await host.post("/api/retry",{recordId:note.id,scope:"summary"})).status,200);
+    assert.deepEqual(host.actions.at(-1),{name:"summary-retry",value:note.id});
+  } finally { await host.close(); }
+});
+
+test("removed desktop features have no runtime route, while relationships and attachments stay readable", async () => {
+  const host=await runtime();
+  try {
+    for(const path of ["/api/notes","/api/brain/query","/api/snapshot/export","/api/snapshot/import"])
+      assert.equal((await host.post(path,{})).status,404,path);
+    for(const path of ["/api/history/note","/api/export/note"])
+      assert.equal((await fetch(host.base+path,{headers:{Authorization:`Bearer ${token}`}})).status,404,path);
+    assert.equal(host.actions.length,0);
+    let note=await host.brain.createRecord({id:"note",kind:"note",createdAt:"2026-09-28T00:00:00Z"});
+    note=(await host.brain.updateRecord(note.id,note.revision,{links:[{targetId:"other",provenance:"suggested",confidence:.95,decision:"accepted"},{targetId:"source",provenance:"source"}]}))!;
+    for(const patch of [{archived:true},{body:"different source"},{resolution:"resolved"},{topics:["new"]},{purpose:"Action"},
+      {links:[]},{links:[...note.links,{targetId:"new",provenance:"manual"}]},
+      {links:note.links.map(l=>({...l,confidence:1}))}])
+      assert.equal((await host.post("/api/record/note",{revision:note.revision,patch})).status,400,JSON.stringify(patch));
+    assert.equal((await host.post("/api/record/note",{revision:note.revision,patch:{links:note.links.map((l,i)=>i===0?{...l,decision:"dismissed"}:l)}})).status,200);
+    assert.deepEqual(host.actions.map(a=>a.name),["edit"]);
+  } finally { await host.close(); }
 });
 
 test("runtime SSE delivers valid initial state and serialized Agent events", async () => {
@@ -253,6 +313,7 @@ test("runtime SSE delivers valid initial state and serialized Agent events", asy
     assert.deepEqual(JSON.parse(initial.replace(/^data: /, "").trim()), {
       type: "state",
       state,
+      sequence: 0,
     });
     const event: AgentEvent = {
       type: "notice",
@@ -260,7 +321,9 @@ test("runtime SSE delivers valid initial state and serialized Agent events", asy
     };
     host.emit(event);
     const next = new TextDecoder().decode((await reader.read()).value);
-    assert.deepEqual(JSON.parse(next.replace(/^data: /, "").trim()), event);
+    assert.deepEqual(JSON.parse(next.replace(/^data: /, "").trim()), {...event,sequence:1});
+    const snapshot=await (await fetch(host.base+"/api/state",{headers:{Authorization:`Bearer ${token}`}})).json();
+    assert.equal(snapshot.sequence,1);
     await reader.cancel();
   } finally {
     controller.abort();
@@ -314,6 +377,7 @@ test("explicit fixture providers label generated output and perform no fetches",
     throw new Error("Unexpected network access");
   });
   const fixture = new FixtureProviders();
+  assert.equal(fixture.processingStatus().status,"available");
   assert.match(
     (await fixture.respond([{ role: "user", content: "Moo, explain this." }]))
       .text,
@@ -324,6 +388,30 @@ test("explicit fixture providers label generated output and perform no fetches",
     /no web search was performed/,
   );
   assert.match(await fixture.interpret(), /screenshot was not analyzed/);
+});
+
+test("backend health is cheap, coalesced, bounded and refreshed after outages without inference", async (t) => {
+  let now=Date.now(),calls=0;
+  let finish!:(value:Response)=>void;
+  t.mock.method(Date,"now",()=>now);
+  t.mock.method(globalThis,"fetch",async(url: URL,init:RequestInit)=>{
+    calls++;
+    assert.equal(url.pathname,"/health");assert.equal(init.method,"GET");
+    assert.ok(init.signal);assert.equal(init.body,undefined);assert.equal(init.headers,undefined);
+    return new Promise<Response>(resolve=>finish=resolve);
+  });
+  const p=new BackendProviders("http://localhost:8000","private-test-token");
+  assert.deepEqual(p.processingStatus(),{status:"checking"});
+  assert.equal(p.processingStatus().status,"checking");assert.equal(calls,1);
+  finish(new Response("unavailable",{status:503}));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(p.processingStatus().status,"unavailable");assert.equal(calls,1);
+  now+=5001;
+  assert.equal(p.processingStatus().status,"unavailable");assert.equal(calls,2);
+  finish(new Response(JSON.stringify({status:"ok",service:"moolai-backend"})));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(p.processingStatus().status,"available");assert.equal(calls,2);
+  assert.equal(p.processingStatus().checkedAt,new Date(now).toISOString());
 });
 
 async function companion() {
@@ -373,14 +461,21 @@ test("native request timeouts and protocol errors do not corrupt later responses
 
 test("native process exit, missing executable and close reject pending requests promptly", async () => {
   const fixture = await companion();
-  const bridge = new NativeBridge(fixture.path, () => {}, { request: 1000 });
+  const timeouts = { request: 5000 };
+  const bridge = new NativeBridge(fixture.path, () => {}, timeouts);
   try {
+    // Separate subprocess startup under parallel test load from the exit/close behavior under test.
+    await bridge.request("echo");
+    timeouts.request = 1000;
     await assert.rejects(bridge.request("exit"), /exited \(7\)/);
     // Restart is possible after exit, and closing rejects an in-flight request immediately.
+    timeouts.request = 5000;
     assert.deepEqual(await bridge.request("echo"), { echo: {} });
+    timeouts.request = 1000;
     const pending = bridge.request("wait");
     bridge.close();
     await assert.rejects(pending, /closed/);
+    timeouts.request = 5000;
     assert.deepEqual(await bridge.request("echo"), { echo: {} });
     const missing = new NativeBridge(
       join(fixture.directory, "missing"),
@@ -390,6 +485,31 @@ test("native process exit, missing executable and close reject pending requests 
     await assert.rejects(missing.request("health"), /unavailable/);
     missing.close();
   } finally {
+    bridge.close();
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test("a broken native input pipe retires its process before the next request restarts it", { timeout: 15000 }, async () => {
+  const fixture = await companion();
+  const events: { event: string; [key: string]: unknown }[] = [];
+  const bridge = new NativeBridge(fixture.path, (event) => events.push(event), { request: 5000 });
+  let child: ChildProcessWithoutNullStreams | undefined;
+  try {
+    await bridge.request("echo");
+    // Inject a real stream failure while the companion is alive and a request
+    // is pending. No microphone or native audio device is used by this fixture.
+    child = (bridge as unknown as { process: ChildProcessWithoutNullStreams }).process;
+    const exited = once(child, "exit");
+    const pending = bridge.request("wait");
+    child.stdin.destroy(new Error("fixture broken pipe"));
+    await assert.rejects(pending, /Native input failed/);
+    await exited;
+    assert.ok(events.some((event) => event.phase === "error" && event.listening === false && event.requestedOn === false));
+    assert.deepEqual(await bridge.request("echo", { restarted: true }), { echo: { restarted: true } });
+    assert.notEqual((bridge as unknown as { process: ChildProcessWithoutNullStreams }).process.pid, child.pid);
+  } finally {
+    child?.kill();
     bridge.close();
     await rm(fixture.directory, { recursive: true, force: true });
   }

@@ -42,6 +42,22 @@ def completion(model, text='Supported answer.'):
             'choices': [{'finish_reason': 'stop', 'message': {'role': 'assistant', 'content': text}}]}
 
 
+@pytest.mark.parametrize('mode', ['auto', 'answer_only'])
+@pytest.mark.parametrize('text', ['', None])
+async def test_historical_final_text_still_rejects_empty_output_without_retry(mode, text):
+    requests = []
+    def respond(req):
+        requests.append(req.method)
+        if req.method == 'GET':
+            return httpx.Response(200, json={'data': [{'id': CONFIG.agent_model}]})
+        return httpx.Response(200, json=completion(CONFIG.agent_model, text))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        with pytest.raises(bridge.ServiceError):
+            await bridge.HarnessProvider(bridge.EvidenceGateway(CONFIG, client)).respond(RespondInput(
+                messages=[{'role': 'user', 'content': 'Explain the evidence.'}], tools=[], responseMode=mode))
+    assert requests == ['GET', 'POST']
+
+
 def test_full_frozen_matrix_reserves_496_calls_without_changing_history(tmp_path):
     path = tmp_path / 'ledger.json'
     history = {'callId': 'previous', 'validation': 'old', 'reservedUsd': '15.87', 'status': 'failed_or_unknown_charge'}
@@ -147,6 +163,8 @@ async def test_dispatch_reserves_before_request_keeps_wire_and_usage(tmp_path, m
         body = json.loads(req.content)
         assert body['max_completion_tokens'] == 4000 and body['temperature'] == .2
         assert body['stream'] is False and not any('reasoning' in key for key in body)
+        assert 'response_format' not in body
+        assert all(tool['function']['name'] != 'deliver_answer' for tool in body.get('tools', []))
         if mode == 'answer_only':
             assert 'tools' not in body and body['tool_choice'] == 'none'
         else:

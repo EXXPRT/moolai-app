@@ -72,7 +72,7 @@ for (const adapter of ['memory','sqlite']) {
     test(`${adapter}: changed/multiple targets ${status} never become identification evidence`,()=>run(async(f)=>{
       f.hooks.vision.interpret=async()=>({...scene(),scene:{...scene().scene!,status,limitation:'No unique bird can be identified on the current screen.'}});
       await f.agent.submitText('What bird is this?');await f.agent.drain();await f.agent.submitText('Yes');await f.agent.drain();
-      const context=f.observed.generations[0].messages[0].content;assert.match(context,/No unique bird/);assert.doesNotMatch(context,/Possibly a robin/);
+      const context=JSON.stringify(f.observed.generations[0].messages);assert.match(context,/No unique bird/);assert.doesNotMatch(context,/Possibly a robin/);
     }));
 }
 test('visual hypotheses require concrete feature references; raw contradictions remain',()=>{
@@ -89,7 +89,7 @@ test('mixed visual hypotheses cannot rescue contradictory OCR values; clear neig
     {field:'Identifier',label:'Identifier',sourceExcerpt:'Identifier: A-2',status:'readable' as const,value:'A-2'},
     {field:'Volume',label:'Volume',sourceExcerpt:'Volume: 140 mL',status:'readable' as const,value:'140 mL'}]};
   const usable=usableVision(validateVision(value,'Read the identifier and volume'));
-  assert.equal(usable.scene,undefined);assert.equal(usable.observations[0]!.value,null);assert.equal(usable.observations[1]!.value,'140 mL');
+  assert.equal(usable.scene,undefined);assert.deepEqual(usable.observations.map(o=>o.field),['Volume']);assert.equal(usable.observations[0]!.value,'140 mL');
 });
 
 test('OCR mode refuses scene-only text even if the provider marks it validated',()=>{

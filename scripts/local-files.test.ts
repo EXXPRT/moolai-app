@@ -176,16 +176,26 @@ test("LocalFiles: revoking a folder while a search is running prevents returned 
   const root = await files.grant(directory);
   const delayed = join(temporary, "delayed-rg");
   const started = join(temporary, "started");
+  const release = join(temporary, "release");
   const response = JSON.stringify({ type: "match", data: { path: { text: "./a.md" }, lines: { text: "private\n" }, line_number: 1 } });
-  await writeFile(delayed, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(started)}, 'ready');\nsetTimeout(() => console.log(${JSON.stringify(response)}), 250);\n`);
+  await writeFile(delayed, `#!${process.execPath}\nconst fs=require('node:fs');fs.writeFileSync(${JSON.stringify(started)}, 'ready');\nconst timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer);console.log(${JSON.stringify(response)});}},10);\n`);
   await chmod(delayed, 0o700);
-  const pending = new LocalFiles(config, delayed).search({ query: "private" });
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try { await stat(started); break; } catch { await new Promise(resolve => setTimeout(resolve, 10)); }
+  const abort = new AbortController();
+  const pending = new LocalFiles(config, delayed).search({ query: "private" }, abort.signal);
+  void pending.catch(() => {}); // A fixture-start failure must not leave an unhandled rejection.
+  try {
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      try { await stat(started); break; } catch { await new Promise(resolve => setTimeout(resolve, 10)); }
+    }
+    await stat(started);
+    await files.revoke(root.id);
+    await writeFile(release, "ready");
+    await assert.rejects(pending, /revoked/);
+  } finally {
+    abort.abort();
+    await pending.catch(() => {});
   }
-  await stat(started);
-  await files.revoke(root.id);
-  await assert.rejects(pending, /revoked/);
 });
 
 test("LocalFiles: hung executable is terminated at the five-second bound", async t => {

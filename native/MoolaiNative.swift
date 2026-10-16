@@ -46,15 +46,36 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
     private var drainTask: Task<Void, Error>?
     private var configured = false
     private var socketError: String?
-    private var pendingSpeech = 0
+    private let player = AVAudioPlayerNode()
+    private let outputEngine = AVAudioEngine()
+    private let outputPlayer = AVAudioPlayerNode()
+    private var pcmUtterance: String?
+    private var pcmOutputOnly = false
+    private let playbackFormat = AVAudioFormat(standardFormatWithSampleRate: 24000, channels: 1)!
+    private var outputOnlyWaiters: [ObjectIdentifier: CheckedContinuation<Void, Never>] = [:]
+    private var playbackWaiter: CheckedContinuation<Void, Never>?
+    private var playbackBuffers = 0
+    private var playbackFrames: AVAudioFrameCount = 0
+    private var playbackEnded = false
+    private var speaking = false
+    private var activity = VoiceActivity()
+    private var diagnostics: [[String: Any]] = []
+    private var recognitionContext = ""
+    private var reconnecting = false
     private var speechCancellation = 0
-    private var speechWaiters: [ObjectIdentifier: CheckedContinuation<Void, Never>] = [:]
     private let captured = AudioCaptureBuffer()
     private let asrURL = ProcessInfo.processInfo.environment["MOOLAI_ASR_URL"] ?? "ws://127.0.0.1:8178/v1/audio/transcriptions/realtime"
 
     override init() {
         super.init()
         speech.delegate = self
+        outputEngine.attach(outputPlayer)
+        outputEngine.connect(outputPlayer, to: outputEngine.mainMixerNode, format: playbackFormat)
+        audio.attach(player)
+        audio.connect(player, to: audio.mainMixerNode, format: playbackFormat)
+        NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: audio, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.configurationChanged() }
+        }
     }
 
     func emit(_ value: [String: Any]) {
@@ -70,7 +91,7 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
             switch command["method"] as? String {
             case "health":
                 result = ["platform": "macOS", "asrURL": asrURL, "listening": listening,
-                    "speaking": speech.isSpeaking, "asrConnected": socket != nil && configured,
+                    "speaking": speaking, "requestedOn": wantsListening, "phase": phase, "diagnostics": diagnostics, "asrConnected": socket != nil && configured,
                     "microphoneAvailable": hasMicrophone(),
                     "microphonePermission": AVCaptureDevice.authorizationStatus(for: .audio).rawValue,
                     "screenPermission": CGPreflightScreenCaptureAccess()]
@@ -84,47 +105,96 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
                 guard listening || drainTask != nil else { throw NativeFailure(message: "Microphone is not listening") }
                 try await stopListening(preserveIntent: true)
                 // Pending TTS owns the restart after this shared drain completes.
-                if wantsListening, pendingSpeech == 0 { try await startListening() }
+                if wantsListening { try await startListening() }
                 result = ["listening": listening, "flushed": true]
             case "speak":
                 guard let text = params["text"] as? String, !text.isEmpty else { throw NativeFailure(message: "speak requires text") }
                 try await speak(text)
                 result = ["completed": true]
+            case "beginSpeechAudio":
+                guard let token = params["utteranceId"] as? String else { throw NativeFailure(message: "Missing speech identity") }
+                stopPlayback()
+                pcmOutputOnly = !wantsListening
+                if pcmOutputOnly {
+                    outputEngine.prepare(); try outputEngine.start()
+                } else if !listening || !audio.isRunning {
+                    throw NativeFailure(message: "Capture unavailable; spoken output withheld")
+                }
+                pcmUtterance = token; speaking = true; publishStatus()
+                result = ["ready": true]
+            case "speechAudio":
+                guard let token = params["utteranceId"] as? String, token == pcmUtterance else {
+                    throw NativeFailure(message: "Discarded stale speech audio")
+                }
+                guard let encoded = params["pcm"] as? String, let bytes = Data(base64Encoded: encoded),
+                    bytes.count > 0, bytes.count % 4 == 0, bytes.count <= 96000 else { throw NativeFailure(message: "Invalid speech PCM") }
+                let count = AVAudioFrameCount(bytes.count / 4)
+                guard playbackFrames + count <= 24000 * 240,
+                    let buffer = AVAudioPCMBuffer(pcmFormat: playbackFormat, frameCapacity: count), let samples = buffer.floatChannelData?[0] else {
+                    throw NativeFailure(message: "Speech playback queue exceeded")
+                }
+                _ = bytes.withUnsafeBytes { raw in memcpy(samples, raw.baseAddress!, bytes.count) }
+                guard (0..<Int(count)).allSatisfy({ samples[$0].isFinite }) else { throw NativeFailure(message: "Nonfinite speech PCM") }
+                buffer.frameLength = count
+                let cancellation = speechCancellation
+                playbackBuffers += 1; playbackFrames += count
+                let target = pcmOutputOnly ? outputPlayer : player
+                target.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                    Task { @MainActor in
+                        guard let self, cancellation == self.speechCancellation else { return }
+                        self.playbackBuffers -= 1; self.playbackFrames -= count; self.finishPlaybackIfReady()
+                    }
+                }
+                if !target.isPlaying { target.play() }
+                result = ["queued": true]
+            case "endSpeechAudio":
+                guard params["utteranceId"] as? String == pcmUtterance, pcmUtterance != nil else { throw NativeFailure(message: "Discarded stale speech completion") }
+                playbackEnded = true
+                if playbackBuffers > 0 { await withCheckedContinuation { playbackWaiter = $0 } }
+                finishPlaybackIfReady()
+                result = ["completed": true]
             case "stopSpeaking":
-                speechCancellation += 1
-                speech.stopSpeaking(at: .immediate)
+                stopPlayback()
                 result = ["stopped": true]
+            case "recognitionContext":
+                recognitionContext = String((params["text"] as? String ?? "").prefix(400))
+                if socket != nil && configured { try await sendJSON(["type": "session.context", "context": recognitionContext]) }
+                result = ["updated": true]
             case "capture": result = try await capture()
             default: throw NativeFailure(message: "Unknown native method")
             }
             emit(["id": id, "result": result])
-        } catch { emit(["id": id, "error": error.localizedDescription]) }
+        } catch {
+            if ["startListening", "flushListening", "stopListening"].contains(command["method"] as? String ?? "") {
+                if !listening { wantsListening = false }
+                socketError = error.localizedDescription; diagnostic("capture_error", ["message": error.localizedDescription]); publishStatus()
+            }
+            emit(["id": id, "error": error.localizedDescription])
+        }
     }
 
     private func startListening() async throws {
         wantsListening = true
+        if !outputOnlyWaiters.isEmpty { stopPlayback() }
         if let draining = drainTask { try await draining.value }
-        // Remember Talk's intent, but never open capture during queued or active speech.
-        guard wantsListening, pendingSpeech == 0, !speech.isSpeaking else { return }
+        guard wantsListening else { return }
         guard hasMicrophone() else {
-            wantsListening = false
             throw NativeFailure(message: "No microphone input device is connected. Connect a microphone or headset, select it in System Settings > Sound > Input, then try Talk again.")
         }
         if listening { return }
-        guard !starting, !speech.isSpeaking else { throw NativeFailure(message: "Speech is busy; stop spoken output before talking") }
+        guard !starting else { return }
         starting = true
         defer { starting = false }
         if socket != nil { disconnect() }
         generation += 1
         let currentGeneration = generation
-        emit(["event": "status", "phase": "microphone_permission"])
+        emit(["event": "status", "phase": "microphone_permission", "requestedOn": true, "listening": false, "error": NSNull()])
         let permission = AVCaptureDevice.authorizationStatus(for: .audio)
         let granted = permission == .authorized ? true : await AVCaptureDevice.requestAccess(for: .audio)
         guard granted else {
-            wantsListening = false
             throw NativeFailure(message: "Microphone permission is required. Enable Moolai Native in System Settings > Privacy & Security > Microphone.")
         }
-        guard currentGeneration == generation, wantsListening, pendingSpeech == 0 else { return }
+        guard currentGeneration == generation, wantsListening else { return }
         guard let url = URL(string: asrURL), url.scheme == "ws", ["localhost", "127.0.0.1", "[::1]"].contains(url.host ?? "") else {
             throw NativeFailure(message: "MOOLAI_ASR_URL must be a local ws:// URL")
         }
@@ -153,7 +223,9 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
                             self.emit(["event": "asr_diagnostic", "text": raw, "message": detail])
                         }
                         self.fail(detail)
+                        return
                     }
+                    guard self.socketError == nil else { continue }
                     for output in self.assembler.receive(event) { self.emit(output) }
                 } catch {
                     if !Task.isCancelled, let self, self.socket === task {
@@ -165,17 +237,17 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
         }
         do {
             let input = audio.inputNode
-            // The input node's hardware-facing format is authoritative on macOS.
-            // Its unconnected output can still report the engine's default stereo format.
-            let format = input.inputFormat(forBus: 0)
+            // Voice processing owns both the microphone path and this engine's playback reference.
+            if !input.isVoiceProcessingEnabled { try input.setVoiceProcessingEnabled(true) }
+            let format = input.outputFormat(forBus: 0)
             emit(["event": "status", "phase": "configuring_asr", "sampleRate": format.sampleRate])
             guard format.sampleRate > 0, format.channelCount > 0 else { throw NativeFailure(message: "No usable microphone input") }
             try await sendJSON(["type": "session.update", "session": ["sample_rate": Int(format.sampleRate),
-                "language": "en-US", "automatic_punctuation": true]])
+                "language": "en-US", "automatic_punctuation": true, "context": recognitionContext]])
             emit(["event": "status", "phase": "awaiting_asr_configuration"])
-            try await waitUntil(seconds: 8) { self.configured || currentGeneration != self.generation || self.pendingSpeech > 0 }
-            guard currentGeneration == generation, wantsListening, pendingSpeech == 0 else {
-                // A concurrent TTS/Stop drain owns this socket until its final acknowledgment.
+            try await waitUntil(seconds: 8) { self.configured || currentGeneration != self.generation }
+            guard currentGeneration == generation, wantsListening else {
+                // A concurrent Stop/Flush drain owns this socket until its final acknowledgment.
                 if drainTask == nil, socket === task { disconnect() }
                 return
             }
@@ -192,18 +264,28 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
                 }
                 let data = samples.withUnsafeBytes { Data($0) }
                 captured.append(data)
-                Task { @MainActor in self?.drainCapture() }
+                let seconds = Double(buffer.frameLength) / buffer.format.sampleRate
+                let rms = sqrt(samples.reduce(0.0) { $0 + pow(Double(Int16(littleEndian: $1)) / 32768.0, 2) } / Double(max(1, samples.count)))
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.drainCapture()
+                    if self.listening && self.activity.observe(rms: rms, seconds: seconds) {
+                        let wasSpeaking = self.speaking
+                        self.stopPlayback()
+                        self.diagnostic("speech_onset", ["interruptedPlayback": wasSpeaking])
+                        self.emit(["event": "speech_started", "interruptedPlayback": wasSpeaking])
+                    }
+                }
             }
             tapInstalled = true
             try audio.start()
             listening = true
-            emit(["event": "status", "listening": true, "speaking": false])
+            publishStatus()
         } catch {
             // An interrupted startup must not tear down the drain or a later capture.
             if currentGeneration != generation { return }
             stopCapture()
             disconnect()
-            wantsListening = false
             throw error
         }
     }
@@ -224,6 +306,7 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     private func stopCapture() {
+        stopPlayback()
         audio.stop()
         if tapInstalled { audio.inputNode.removeTap(onBus: 0); tapInstalled = false }
     }
@@ -237,7 +320,13 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
         sendTail = Task { [weak self] in
             await previous?.value
             do { try await activeSocket.send(.data(bytes)) }
-            catch { self?.fail("Could not send audio to local ASR: \(error.localizedDescription)") }
+            catch {
+                // A cancelled socket can finish sending after a new capture
+                // has started. Its failure must not stop that new session.
+                if self?.socket === activeSocket {
+                    self?.fail("Could not send audio to local ASR: \(error.localizedDescription)")
+                }
+            }
             self?.pendingBytes -= bytes.count
         }
     }
@@ -257,13 +346,18 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
 
     private func drainListening() async throws {
         generation += 1
-        guard socket != nil else { return }
+        guard socket != nil else {
+            listening = false
+            socketError = nil
+            publishStatus()
+            return
+        }
         // Stop capture before committing, then drain all already queued PCM frames.
         stopCapture()
         drainCapture()
         listening = false
         await sendTail?.value
-        defer { disconnect(); emit(["event": "status", "listening": false, "speaking": speech.isSpeaking]) }
+        defer { disconnect(); publishStatus() }
         emit(["event": "status", "phase": "finishing_transcription", "listening": false])
         try await sendJSON(["type": "input_audio_buffer.commit"])
         // Allow the local Whisper adapter to drain its bounded pending decodes.
@@ -289,11 +383,13 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
         socketError = message
         stopCapture()
         listening = false
-        wantsListening = false
-        emit(["event": "status", "listening": false, "error": message])
+        for output in assembler.cancelPending(reason: message) { emit(output) }
+        diagnostic("capture_error", ["message": message])
+        emit(["event": "status", "phase": "error", "requestedOn": wantsListening, "listening": false, "speaking": false, "error": message])
     }
 
     private func disconnect() {
+        for output in assembler.cancelPending(reason: "Recognition connection closed before a final result") { emit(output) }
         receiveTask?.cancel()
         socket?.cancel(with: .normalClosure, reason: nil)
         socket = nil
@@ -302,40 +398,123 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
         sendTail = nil
     }
 
-    private func speak(_ text: String) async throws {
-        // Set intent before the first suspension so Flush cannot reopen the microphone.
-        pendingSpeech += 1
-        let cancellation = speechCancellation
+    private var phase: String {
+        if speaking { return "speaking" }
+        if !wantsListening { return "off" }
+        if socketError != nil { return "error" }
+        if reconnecting { return "reconnecting" }
+        return listening ? "listening" : wantsListening ? "connecting" : "off"
+    }
+    private func diagnostic(_ name: String, _ fields: [String: Any] = [:]) {
+        diagnostics.append(fields.merging(["name": name, "at": Date().timeIntervalSince1970]) { _, new in new })
+        if diagnostics.count > 40 { diagnostics.removeFirst(diagnostics.count - 40) }
+    }
+    private func publishStatus() {
+        emit(["event": "status", "phase": phase, "requestedOn": wantsListening,
+            "listening": listening, "speaking": speaking, "error": socketError ?? NSNull()])
+    }
+    private func configurationChanged() async {
+        guard wantsListening, listening, !starting, !reconnecting, !audio.isRunning else { return }
+        reconnecting = true; diagnostic("device_reconnecting"); publishStatus()
         do {
-            if socket != nil { try await stopListening(preserveIntent: true) }
-            if cancellation == speechCancellation {
-                speech.stopSpeaking(at: .immediate)
-                let utterance = AVSpeechUtterance(string: text)
-                utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-                emit(["event": "status", "listening": false, "speaking": true])
-                await withCheckedContinuation { continuation in
-                    speechWaiters[ObjectIdentifier(utterance)] = continuation
-                    speech.speak(utterance)
+            try await stopListening(preserveIntent: true)
+            // An explicit Stop during the drain always wins over reconnect intent.
+            if wantsListening { try await startListening() }
+        } catch { fail("Audio device changed; final transcription or reconnection failed: \(error.localizedDescription). Use Talk to retry.") }
+        reconnecting = false; publishStatus()
+    }
+    private func stopPlayback() {
+        speechCancellation += 1
+        player.stop(); outputPlayer.stop(); outputEngine.stop(); pcmUtterance = nil
+        speech.stopSpeaking(at: .immediate)
+        playbackBuffers = 0; playbackFrames = 0; playbackEnded = false; speaking = false
+        let waiter = playbackWaiter; playbackWaiter = nil; waiter?.resume()
+        let outputWaiters = outputOnlyWaiters.values; outputOnlyWaiters.removeAll()
+        for pending in outputWaiters { pending.resume() }
+        publishStatus()
+    }
+    private func finishPlaybackIfReady() {
+        if playbackEnded && playbackBuffers == 0 {
+            pcmUtterance = nil; outputEngine.stop()
+            speaking = false
+            let waiter = playbackWaiter; playbackWaiter = nil; waiter?.resume()
+            publishStatus()
+        }
+    }
+    private func speak(_ text: String) async throws {
+        if !wantsListening {
+            // Explicit output-only requests must never open an input engine or microphone.
+            stopPlayback()
+            let utterance = AVSpeechUtterance(string: text)
+            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+            speaking = true; publishStatus()
+            await withCheckedContinuation { continuation in
+                outputOnlyWaiters[ObjectIdentifier(utterance)] = continuation
+                speech.speak(utterance)
+            }
+            return
+        }
+        guard listening, audio.isRunning else { throw NativeFailure(message: "Capture is unavailable; restart Talk before spoken output.") }
+        stopPlayback()
+        let cancellation = speechCancellation
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        let buffers = SpeechBuffers()
+        speaking = true; publishStatus()
+        await withCheckedContinuation { continuation in
+            playbackWaiter = continuation
+            speech.write(utterance) { [weak self] buffer in
+                guard let pcm = buffer as? AVAudioPCMBuffer else { return }
+                buffers.append(pcm)
+                Task { @MainActor in
+                    guard let self else { return }
+                    let batch = buffers.drain()
+                    guard cancellation == self.speechCancellation else { return }
+                    for pcm in batch {
+                        if pcm.frameLength == 0 { self.playbackEnded = true; continue }
+                        guard let converter = AVAudioConverter(from: pcm.format, to: self.playbackFormat),
+                            let output = AVAudioPCMBuffer(pcmFormat: self.playbackFormat,
+                                frameCapacity: AVAudioFrameCount(ceil(Double(pcm.frameLength) * 24000 / pcm.format.sampleRate)) + 32) else {
+                            self.stopPlayback(); self.diagnostic("playback_conversion_failed"); self.emit(["event": "error", "message": "Speech playback conversion failed. Full text remains on screen."]); return
+                        }
+                        var consumed = false
+                        var error: NSError?
+                        converter.convert(to: output, error: &error) { _, status in
+                            if consumed { status.pointee = .endOfStream; return nil }
+                            consumed = true; status.pointee = .haveData; return pcm
+                        }
+                        if error != nil { self.stopPlayback(); self.diagnostic("playback_conversion_failed"); self.emit(["event": "error", "message": "Speech playback conversion failed. Full text remains on screen."]); return }
+                        guard self.playbackFrames + output.frameLength <= 24000 * 240 else {
+                            self.stopPlayback()
+                            self.emit(["event": "error", "message": "Speech exceeded its bounded playback queue. Full text remains on screen."])
+                            return
+                        }
+                        self.playbackBuffers += 1; self.playbackFrames += output.frameLength
+                        let frames = output.frameLength
+                        self.player.scheduleBuffer(output, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                            Task { @MainActor in
+                                guard let self, cancellation == self.speechCancellation else { return }
+                                self.playbackBuffers -= 1; self.playbackFrames -= frames; self.finishPlaybackIfReady()
+                            }
+                        }
+                        if !self.player.isPlaying { self.player.play() }
+                    }
+                    self.finishPlaybackIfReady()
                 }
             }
-        } catch {
-            pendingSpeech -= 1
-            throw error
-        }
-        pendingSpeech -= 1
-        emit(["event": "status", "listening": false, "speaking": pendingSpeech > 0 || speech.isSpeaking])
-        if wantsListening, pendingSpeech == 0 {
-            // A startup interrupted during configuration must unwind before resuming capture.
-            if starting { try await waitUntil(seconds: 8) { !self.starting } }
-            if wantsListening, pendingSpeech == 0 { try await startListening() }
         }
     }
 
+    private func outputOnlyFinished(_ utterance: AVSpeechUtterance) {
+        if let waiter = outputOnlyWaiters.removeValue(forKey: ObjectIdentifier(utterance)) {
+            speaking = false; waiter.resume(); publishStatus()
+        }
+    }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.speechWaiters.removeValue(forKey: ObjectIdentifier(utterance))?.resume() }
+        Task { @MainActor in self.outputOnlyFinished(utterance) }
     }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.speechWaiters.removeValue(forKey: ObjectIdentifier(utterance))?.resume() }
+        Task { @MainActor in self.outputOnlyFinished(utterance) }
     }
 
     private func capture() async throws -> [String: Any] {

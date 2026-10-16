@@ -76,7 +76,9 @@ for (const adapter of ["memory", "sqlite"] as const) {
     assert.match(f.agent.getState().lastError!, /Final answer requested/);
     assert.match(f.messages[0]![0]!.content, /Current authoritative evidence/);
     assert.deepEqual(f.definitions[5], []);
-    assert.equal(f.definitions[0]![0]!.description, "Find relevant saved Brain notes. Results include original text and review status.");
+    assert.match(f.definitions[0]!.find(t=>t.name==="search_notes")!.description, /bounded exact passages/);
+    assert.match(f.messages[5]![0]!.content, /Retrieval has ended/);
+    assert.doesNotMatch(f.messages[5]![0]!.content, /Allow one grounded repair/);
     assert.deepEqual(await readResponseEvidence(brain, "conversation"), { version: 1, notes: [], recentOutcomes: [] });
   });
 

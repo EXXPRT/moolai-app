@@ -1,16 +1,15 @@
-import { randomUUID, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { mkdir, writeFile, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SQLiteBrain } from "../../../packages/brain/src/index.js";
 import { LocalFiles } from "../../../packages/local-files/src/index.js";
-import { Agent } from "../../../packages/agent/src/index.js";
 import type { AgentEvent } from "../../../packages/contracts/src/index.js";
 import { BackendProviders, FixtureProviders } from "./providers.js";
-import { NativeBridge } from "./native.js";
-import { NativeInput, retainAsrDiagnostic } from "./native-input.js";
+import { createAgentHost } from "../../../packages/agent-host/src/index.js";
 import { createRuntimeServer } from "./server.js";
+import { acquireRuntimeOwnership } from "./ownership.js";
 import { readAsrConfig } from "../../../scripts/asr-config.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
@@ -34,6 +33,7 @@ const providers =
         process.env.MOOLAI_BACKEND_URL ?? "http://127.0.0.1:8000",
         backendToken,
       );
+const ownership = acquireRuntimeOwnership(dir);
 const brain = new SQLiteBrain(dir);
 // Folder grants belong to this host, not to portable Brain records.
 const localFiles = new LocalFiles(
@@ -41,87 +41,19 @@ const localFiles = new LocalFiles(
   process.env.MOOLAI_RG_PATH,
 );
 let emit = (event: AgentEvent) => {};
-let voiceEnabled = false;
-const nativeInput = new NativeInput(
-  {
-    ingest: (segment) => agent.ingest(segment),
-    settleTurn: (turnId) => agent.settleTurn(turnId),
-    async retainDiagnostic(text, message) {
-      const record = await retainAsrDiagnostic(brain, text, message);
-      emit({ type: "record", record });
-      emit({ type: "notice", message: `${message} The unconfirmed transcript was saved for review.` });
-    },
-  },
-  (error) => emit({ type: "notice", message: String(error) }),
-);
-let nativeStatus: { listening: boolean; speaking: boolean; phase?: string; error?: string } = {
-  listening: false,
-  speaking: false,
-};
-const native = new NativeBridge(
-  process.env.MOOLAI_NATIVE_PATH ??
+const host = await createAgentHost({
+  brain,
+  localFiles,
+  providers,
+  nativePath:
+    process.env.MOOLAI_NATIVE_PATH ??
     path.join(
       root,
       "native/build/Moolai Native.app/Contents/MacOS/MoolaiNative",
     ),
-  (event) => {
-    if (event.event === "transcript" && event.segment)
-      nativeInput.ingest(event.segment);
-    if (event.event === "turn_end" && event.turnId)
-      nativeInput.settleTurn(event.turnId);
-    if (event.event === "asr_diagnostic" && typeof event.text === "string")
-      nativeInput.retainDiagnostic(event.text, String(event.message ?? "Speech recognition needs review"));
-    if (event.event === "error")
-      emit({
-        type: "notice",
-        message: String(event.message ?? event.error ?? "Native error"),
-      });
-    if (event.event === "status") {
-      nativeStatus = {
-        listening: event.listening === true,
-        speaking: event.speaking === true,
-        ...(event.phase ? { phase: String(event.phase) } : {}),
-        ...(event.error ? { error: String(event.error) } : {}),
-      };
-      if (event.error) emit({ type: "notice", message: String(event.error) });
-      // The renderer refreshes this snapshot on state events. Session state and microphone state are distinct.
-      emit({ type: "state", state: agent.getState() });
-    }
-  },
-);
-const agent = new Agent({
-  brain,
-  localFiles,
-  decisions: providers,
-  generation: providers,
-  search: providers,
-  vision: providers,
-  capture: {
-    async capture() {
-      const result = await native.request<{
-        mimeType: string;
-        dataBase64: string;
-      }>("capture");
-      return {
-        mimeType: result.mimeType,
-        bytes: Buffer.from(result.dataBase64, "base64"),
-      };
-    },
-  },
-  speech: {
-    async speak(text) {
-      if (voiceEnabled) await native.request("speak", { text });
-    },
-    async stop() {
-      if (voiceEnabled) await native.request("stopSpeaking");
-    },
-  },
-  acceptance: providers instanceof BackendProviders ? providers : undefined,
-  id: randomUUID,
-  now: () => new Date().toISOString(),
   onEvent: (event) => emit(event),
 });
-await agent.initialize();
+const { agent } = host;
 const token = randomBytes(32).toString("hex");
 const runtime = createRuntimeServer({
   agent,
@@ -129,28 +61,11 @@ const runtime = createRuntimeServer({
   localFiles,
   token,
   mode,
-  async voice(action) {
-    if (action === "start") {
-      await agent.startSession();
-      await native.request("startListening");
-      voiceEnabled = true;
-    } else if (action === "flush") {
-      if (voiceEnabled) {
-        try { await native.request("flushListening"); }
-        finally { await nativeInput.saved(); }
-        await nativeInput.settled();
-      }
-    } else if (voiceEnabled) {
-      try { await native.request("stopListening"); }
-      finally { await nativeInput.saved(); voiceEnabled = false; }
-      // Settle the last routed turn before the host checkpoints its conversation.
-      // Generation is scheduled independently and is not awaited here.
-      await nativeInput.settled();
-    }
-    return { voiceEnabled };
-  },
-  nativeHealth: () => native.request("health"),
-  nativeSnapshot: () => ({ ...nativeStatus, enabled: voiceEnabled }),
+  processingStatus: () => providers.processingStatus(),
+  voice: host.voice,
+  ownerLost: host.revokeVoice,
+  nativeHealth: host.nativeHealth,
+  nativeSnapshot: host.nativeSnapshot,
 });
 emit = runtime.emit;
 const port = Number(process.env.MOOLAI_PORT ?? 4317);
@@ -168,27 +83,13 @@ runtime.server.listen(port, "127.0.0.1", async () => {
 });
 runtime.server.on("error", (error) => {
   console.error(error.message);
-  native.close();
-  void brain.close();
-  process.exitCode = 1;
+  void shutdown(1);
 });
 let closing = false;
-async function shutdown() {
+async function shutdown(exitCode=0) {
   if (closing) return;
   closing = true;
-  try {
-    if (voiceEnabled) await native.request("stopListening");
-  } catch (e) {
-    console.error(String(e));
-  }
-  // Stop Agent speech hooks from lazily respawning the companion during shutdown.
-  voiceEnabled = false;
-  native.close();
-  // Error diagnostics can arrive immediately before a failed Stop response.
-  // Drain those durable writes even when transcription could not be confirmed.
-  await nativeInput.saved();
-  await nativeInput.settled();
-  await agent.stopSession().catch((e) => console.error(String(e)));
+  await host.close();
   runtime.server.closeAllConnections();
   runtime.server.close();
   await Promise.race([
@@ -197,7 +98,8 @@ async function shutdown() {
   ]);
   await brain.close();
   await unlink(path.join(dir, "runtime.json")).catch(() => {});
-  process.exit(0);
+  ownership.release();
+  process.exit(exitCode);
 }
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());

@@ -6,13 +6,15 @@ const {
   net,
   session,
   dialog,
+  shell,
 } = require("electron");
 const { readFile, mkdir, open } = require("node:fs/promises");
 const { join, resolve } = require("node:path");
 const { homedir } = require("node:os");
 const { spawn } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
-const { localContentPath, trustedFrame, allowedRequest } = require("./local-content.cjs");
+const { localContentPath, trustedFrame, allowedRequest, externalURL } = require("./local-content.cjs");
+const { installVoiceLifecycle } = require("./voice-lifecycle.cjs");
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -52,16 +54,24 @@ async function connection() {
   return { base: `http://127.0.0.1:${info.port}`, token: info.token };
 }
 
+const voiceLifecycle = installVoiceLifecycle({ app, connection, fetch: (...args) => fetch(...args) });
+
 async function available() {
+  let info;
+  try { info = await connection(); }
+  catch (error) {
+    if (["ENOENT", "ESRCH"].includes(error.code)) return false;
+    throw error;
+  }
   try {
-    const { base, token } = await connection();
-    const response = await fetch(`${base}/api/state`, {
-      headers: { Authorization: `Bearer ${token}` },
+    const response = await fetch(`${info.base}/api/state`, {
+      headers: { Authorization: `Bearer ${info.token}` },
       signal: AbortSignal.timeout(1000),
     });
-    return response.ok;
+    if (!response.ok) throw Error(`Runtime health failed (${response.status})`);
+    return true;
   } catch {
-    return false;
+    throw Error("The existing Agent runtime is not responding. Reconnect or use the Moo restart command; a second runtime was not started.");
   }
 }
 
@@ -119,20 +129,12 @@ async function runtimeRequest(method, path, body) {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: method === "POST" ? JSON.stringify(body || {}) : undefined,
+    body: method === "POST" ? JSON.stringify(path === "/api/voice" && body?.action === "start" ? {...body,ownerPid:process.pid} : body || {}) : undefined,
     signal: AbortSignal.timeout(180_000),
   });
-  const text = await response.text();
-  let value = text;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    /* Markdown exports stay text. */
-  }
+  const value = await response.json();
   if (!response.ok)
-    throw Error(
-      typeof value === "object" ? value.error || "Agent request failed" : value,
-    );
+    throw Error(value?.error || "Agent request failed");
   return value;
 }
 
@@ -140,6 +142,13 @@ ipcMain.handle("moolai:request", async (event, { method, path, body }) => {
   if (!trusted(event)) throw Error("Untrusted desktop request");
   if (!allowedRequest(method, path)) throw Error("Unsupported Agent request");
   return runtimeRequest(method, path, body);
+});
+
+ipcMain.handle("moolai:open-external", async (event, value) => {
+  if (!trusted(event)) throw Error("Untrusted desktop request");
+  const url=externalURL(value);
+  if (!url) throw Error("Only public HTTP or HTTPS links can be opened");
+  await shell.openExternal(url);
 });
 
 ipcMain.handle("moolai:choose-folder", async (event) => {
@@ -243,11 +252,12 @@ app.whenReady().then(async () => {
   window.webContents.on("will-navigate", (event, url) => {
     if (url !== documentURL) event.preventDefault();
   });
+  window.webContents.on("render-process-gone", () => { void voiceLifecycle.stop(); });
   window.on("closed", () => {
     streamAbort?.abort();
     window = null;
   });
   await window.loadURL(documentURL);
 });
-// Closing a UI window never changes the explicitly enabled study session.
+// Quit stops audio, preserving the conversation and the independently runnable runtime.
 app.on("window-all-closed", () => app.quit());

@@ -62,3 +62,24 @@ async def test_missing_key_is_visible_without_network():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test', headers={'Authorization': 'Bearer token'}) as client:
             response = await client.post('/v1/search', json={'query': 'retained thought'})
             assert response.status_code == 503 and response.json()['detail'] == 'Tavily is not configured'
+
+
+async def test_truncated_summary_is_an_explicit_output_limit_response(record):
+    settings = Settings(backend_token='fixture-token', nebius_api_key='fixture-key')
+    calls = []
+    def truncated(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json={'data': [{'id': settings.summary_model}]})
+        calls.append(request)
+        return httpx.Response(200, json={'model': settings.summary_model, 'choices': [
+            {'finish_reason': 'length', 'message': {'content': 'PRIVATE_PARTIAL_OUTPUT'}}]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(truncated)) as upstream:
+        app = create_app(settings, http_client=upstream)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test',
+                headers={'Authorization': 'Bearer fixture-token'}) as client:
+            response = await client.post('/v1/summarize', json={'record': record.model_dump(exclude_none=True)})
+    assert response.status_code == 422
+    assert 'Summary exceeded its 1,200-token output limit' in response.json()['detail']
+    assert 'source remains saved locally' in response.json()['detail']
+    assert 'PRIVATE_PARTIAL_OUTPUT' not in response.text
+    assert len(calls) == 1

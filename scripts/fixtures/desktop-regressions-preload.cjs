@@ -1,0 +1,13 @@
+const {contextBridge}=require('electron');
+const record={id:'fixture-note',kind:'note',revision:1,sourceRevision:1,title:'Fixture note',summary:'A complete **summary** with [Evidence](https://example.com/evidence).',createdAt:'2026-10-07T00:00:00Z',updatedAt:'2026-10-07T00:00:00Z',body:'Original written source',segments:[],links:[],attachmentIds:[],topics:[],quality:'ready',qualityReasons:[],doubt:false,manualFields:[],acceptedRevision:0};
+record.summary+='\n\n'+Array.from({length:20},(_,index)=>`Readable summary paragraph ${index+1} with enough detail to inspect independent scrolling.`).join('\n\n');
+let pendingSave,releaseFetch,holdFetch=false,sequence=0;const events=new Set(),additionalRecords=[];
+let interpreted,pendingOffer;
+const state=()=>({sequence,records:structuredClone([record,...additionalRecords]),state:{listening:false,busy:false,webAllowed:true,pendingOffer,...(interpreted?{conversationId:'fixture-chat',understoodRequest:interpreted}:{})},processing:{status:'available'},mode:'fixture',native:{enabled:false},localFolders:[]});
+const emit=e=>{sequence++;for(const listener of events)listener({...e,sequence});};
+contextBridge.exposeInMainWorld('moolai',{subscribe:listener=>{events.add(listener);return()=>events.delete(listener);},chooseFolder:async()=>null,openExternal:async()=>{},request:async(method,path,body)=>{
+ if(path==='/api/state'){const snapshot=state();if(holdFetch){holdFetch=false;return new Promise(resolve=>releaseFetch=()=>resolve(snapshot));}return snapshot;}
+ if(path.startsWith('/api/record/'))return new Promise(resolve=>pendingSave=()=>{Object.assign(record,body.patch);record.revision++;emit({type:'record',record:structuredClone(record)});resolve(structuredClone(record));});
+ return {};
+}});
+contextBridge.exposeInMainWorld('fixture',{finishSave:()=>{pendingSave?.();pendingSave=undefined;},pendingSave:()=>!!pendingSave,holdFetch:()=>{holdFetch=true;},fetchHeld:()=>!!releaseFetch,releaseFetch:()=>{releaseFetch?.();releaseFetch=undefined;},interpret:(text)=>{interpreted=text?{text,conversationId:'fixture-chat',turnId:'request',revisionKey:'segment:1'}:undefined;emit({type:'state',state:state().state});},newTitle:()=>{record.title='Newer event title';record.revision++;emit({type:'record',record:structuredClone(record)});},addNote:()=>{const added={...structuredClone(record),id:'new-growing-note',title:'A new growing thought',links:[],updatedAt:'2026-10-07T00:01:00Z'};additionalRecords.push(added);emit({type:'record',record:added});},offer:(kind,question)=>{pendingOffer={kind,question,proposalId:'fixture-proposal'};emit({type:'state',state:state().state});}});

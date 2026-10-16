@@ -1,0 +1,110 @@
+// Energy endpointing only, not a speech classifier. Keep analysis frames independent
+// of transport packets so packet size cannot change which audio reaches ASR.
+export class PcmEndpointer {
+  constructor(config, sampleRate, onUtterance, onPreview) {
+    this.config = config;
+    this.sampleRate = sampleRate;
+    this.onUtterance = onUtterance;
+    this.onPreview = onPreview;
+    this.utteranceSequence = 0;
+    this.frameBytes = Math.max(2, Math.round(sampleRate * 0.02) * 2);
+    this.preRollBytes = Math.ceil(sampleRate * config.preRollMs / 1000) * 2;
+    this.pending = Buffer.alloc(0);
+    this.samples = 0;
+    this.committed = false;
+    this.resetUtterance();
+  }
+
+  resetUtterance() {
+    this.preRoll = Buffer.alloc(0);
+    this.chunks = [];
+    this.bytes = 0;
+    this.silenceSamples = 0;
+    this.revision = 0;
+    this.previewSamples = 0;
+  }
+
+  push(data, context = '') {
+    if (this.committed) throw new Error('PCM arrived after the final commit');
+    if (data.length % 2) throw new Error('PCM16 payload must have an even byte length');
+    let offset = 0;
+    if (this.pending.length) {
+      const needed = this.frameBytes - this.pending.length;
+      const count = Math.min(needed, data.length);
+      this.pending = Buffer.concat([this.pending, data.subarray(0, count)]);
+      offset = count;
+      if (this.pending.length < this.frameBytes) return;
+      this.frame(this.pending, this.pendingContext);
+      this.pending = Buffer.alloc(0);
+    }
+    while (offset + this.frameBytes <= data.length) {
+      this.frame(data.subarray(offset, offset + this.frameBytes), context);
+      offset += this.frameBytes;
+    }
+    if (offset < data.length) {
+      this.pending = Buffer.from(data.subarray(offset));
+      this.pendingContext = context;
+    }
+  }
+
+  frame(frame, context) {
+    let square = 0;
+    for (let i = 0; i < frame.length; i += 2) square += (frame.readInt16LE(i) / 32768) ** 2;
+    const voiced = Math.sqrt(square / (frame.length / 2)) >= this.config.rmsThreshold;
+    const start = this.samples;
+    this.samples += frame.length / 2;
+    if (!this.bytes && !voiced) {
+      this.preRoll = Buffer.concat([this.preRoll, frame]);
+      if (this.preRoll.length > this.preRollBytes)
+        this.preRoll = Buffer.from(this.preRoll.subarray(this.preRoll.length - this.preRollBytes));
+      return;
+    }
+    if (!this.bytes) {
+      this.utteranceSequence++;
+      this.context = context;
+      this.startSample = start - this.preRoll.length / 2;
+      if (this.preRoll.length) { this.chunks.push(this.preRoll); this.bytes += this.preRoll.length; }
+      this.preRoll = Buffer.alloc(0);
+    }
+    this.chunks.push(Buffer.from(frame)); this.bytes += frame.length;
+    this.silenceSamples = voiced ? 0 : this.silenceSamples + frame.length / 2;
+    if (voiced) this.lastVoicedSample = this.samples;
+    if (this.bytes > this.sampleRate * 2 * this.config.maxUtteranceSeconds)
+      throw new Error('Local ASR utterance exceeded its configured duration limit. Use Send or pause; this capture was not committed.');
+    if (this.silenceSamples * 1000 >= this.sampleRate * this.config.endpointSilenceMs) this.emit('pause');
+    else if (voiced && this.onPreview && !this.committed &&
+      (this.samples - this.startSample - this.previewSamples) * 1000 >= this.sampleRate * (this.config.previewIntervalMs ?? 2000)) {
+      this.previewSamples = this.samples - this.startSample;
+      this.onPreview(this.snapshot('preview'));
+    }
+  }
+
+  snapshot(trigger) {
+    return { pcm: Buffer.concat(this.chunks, this.bytes), context: this.context,
+      startSample: this.startSample, endSample: this.samples, lastVoicedSample: this.lastVoicedSample, trigger,
+      utteranceSequence: this.utteranceSequence, revision: ++this.revision };
+  }
+
+  emit(trigger) {
+    if (!this.bytes) return;
+    const utterance = this.snapshot(trigger);
+    this.resetUtterance();
+    this.onUtterance(utterance);
+  }
+
+  commit() {
+    if (this.committed) throw new Error('This capture has already been committed');
+    this.committed = true;
+    // Stop must include the final short frame, even if it has only one sample.
+    if (this.pending.length) this.frame(this.pending, this.pendingContext);
+    this.pending = Buffer.alloc(0);
+    this.emit('commit');
+    this.resetUtterance();
+  }
+
+  discard() {
+    this.committed = true;
+    this.pending = Buffer.alloc(0);
+    this.resetUtterance();
+  }
+}

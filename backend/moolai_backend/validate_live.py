@@ -128,7 +128,8 @@ async def validate(settings: Settings, selected: list[str], paid: bool, reservat
     report = {'mode': 'paid_smoke' if paid else 'inventory_only', 'providers': {}, 'paidCalls': 0}
     try:
         gateway = Gateway(settings, client)
-        models = {'summary': settings.summary_model, 'agent': settings.agent_model, 'vision': settings.vision_model}
+        models = {'summary': settings.summary_model, 'agent': settings.agent_model,
+                  'vision': settings.vision_model, 'ocr': settings.ocr_model}
         keys = {'jev': settings.typesafe_api_key, 'nebius': settings.nebius_api_key, 'tavily': settings.tavily_api_key}
         eligible = True
         for provider in selected:
@@ -180,7 +181,7 @@ def main():
     parser.add_argument('--allow-paid', action='store_true')
     parser.add_argument('--pricing-checked', action='store_true', help='Confirm current account pricing supports the per-call upper bound')
     parser.add_argument('--max-call-usd', help='Conservative verified upper bound for EACH selected tiny call, retained on failures')
-    parser.add_argument('--nebius-role', choices=['summary', 'agent', 'vision'], default='summary')
+    parser.add_argument('--nebius-role', choices=['summary', 'agent', 'vision', 'ocr'], default='summary')
     args = parser.parse_args()
     selected = list(dict.fromkeys(part.strip() for part in args.providers.split(',')))
     if not selected or any(provider not in ('jev', 'nebius', 'tavily') for provider in selected):

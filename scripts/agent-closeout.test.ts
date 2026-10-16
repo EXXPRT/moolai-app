@@ -146,7 +146,7 @@ for(const adapter of ['memory','sqlite'] as const){
     f.hooks.generation.respond=async()=>++n===1?tool('capture','capture_screen',{question:'What is the calibration value?'}):{text:'I cannot read the value.',toolCalls:[]};
     await f.agent.submitText('Moo, read my screen and tell me the calibration value.');await f.agent.drain();
     const evidence=f.observed.generations[1]!.messages.find((m:any)=>m.role==='tool').content;
-    const parsed=JSON.parse(evidence);assert.equal(parsed.result.observations[0].value,null);assert.ok(parsed.result.validationErrors.length);assert.ok(!evidence.includes('G8-29'));
+    const parsed=JSON.parse(evidence);assert.deepEqual(parsed.result.observations,[]);assert.ok(parsed.result.validationErrors.length);assert.ok(!evidence.includes('G8-29'));
   });
   run('a search must not return the current unanswered question as note evidence',async(f,brain)=>{
     await note(brain,{id:'schedule',title:'Workshop timing',text:'The optics workshop starts at 09:20.'});let n=0;

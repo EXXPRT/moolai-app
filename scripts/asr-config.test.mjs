@@ -10,6 +10,8 @@ const config = { model: 'large-v3-turbo', language: 'en', initialPrompt: 'Moo.',
 test('explicit model selection preserves the chosen model and freezes config', () => {
   assert.equal(validateAsrConfig(config).model, 'large-v3-turbo');
   assert.equal(validateAsrConfig({ ...config, model: 'large-v3' }).model, 'large-v3');
+  assert.equal(validateAsrConfig({ ...config, model: 'qwen3-asr-1.7b' }).model, 'qwen3-asr-1.7b');
+  assert.throws(() => validateAsrConfig({ ...config, model: 'qwen3-asr-1.7b', beamSize: 1 }), /Whisper-only/);
   assert.ok(Object.isFrozen(validateAsrConfig(config)));
   assert.throws(() => validateAsrConfig({ ...config, model: 'small.en' }), /no automatic fallback/);
 });
@@ -50,4 +52,19 @@ test('config override resolves relative to the project, and malformed files do n
     else process.env.MOOLAI_ASR_CONFIG = previous;
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('beam search is optional, bounded and explicit',()=>{
+  assert.equal(validateAsrConfig(config).beamSize,undefined);
+  assert.equal(validateAsrConfig({...config,beamSize:3}).beamSize,3);
+  for(const beamSize of [0,6,1.5,'3']) assert.throws(()=>validateAsrConfig({...config,beamSize}));
+});
+
+test('live transcription options are explicit and bounded without changing model or endpoint settings', () => {
+  assert.equal(validateAsrConfig(config).livePreview, undefined);
+  assert.equal(validateAsrConfig({ ...config, model: 'qwen3-asr-1.7b', livePreview: true, previewIntervalMs: 2000 }).livePreview, true);
+  assert.throws(() => validateAsrConfig({ ...config, livePreview: true }), /cancellation acknowledgements/);
+  assert.equal(validateAsrConfig({ ...config, model: 'qwen3-asr-1.7b', livePreview: false }).livePreview, false);
+  for (const change of [{ livePreview: 'yes' }, { previewIntervalMs: 999 }, { previewIntervalMs: 10001 }, { previewIntervalMs: 1000.5 }])
+    assert.throws(() => validateAsrConfig({ ...config, ...change }));
 });
