@@ -317,3 +317,44 @@ async def test_unsupported_structured_ocr_request_fails_once_without_schema_or_m
     assert len(posts) == 1
     assert posts[0]['model'] == settings.ocr_model
     assert posts[0]['response_format']['json_schema']['strict'] is True
+
+
+def channel_observation(field='Channel 12 Observed', value='3.2', valueColumn=1, row=None):
+    return {'field': field, 'status': 'readable', 'value': value, 'label': None, 'sourceExcerpt': None,
+            'tableSupport': {'headers': ['Channel', 'Observed', 'Target'], 'row': row or ['12', '3.2', '3.5'],
+                             'valueColumn': valueColumn, 'rowLabelColumn': 0}}
+
+
+@pytest.mark.parametrize(('field', 'value', 'column', 'question'), [
+    ('Channel 12 Observed', '3.2', 1, 'Read Channel 12 Observed.'),
+    ('12 Observed', '3.2', 1, 'Read Channel 12 Observed.'),
+    ('Channel 12 Target', '3.5', 2, 'What is the target for channel 12?'),
+])
+async def test_glm_ocr_accepts_a_row_label_qualified_by_its_header(field, value, column, question):
+    settings = Settings(nebius_api_key='fixture')
+    original = raw(channel_observation(field, value, column))
+    def respond(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json={'data': [{'id': settings.ocr_model}]})
+        assert json.loads(request.content)['model'] == settings.ocr_model
+        return httpx.Response(200, json={'model': settings.ocr_model, 'choices': [{
+            'finish_reason': 'stop', 'message': {'content': original}}]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        result = await NebiusProvider(Gateway(settings, client)).vision(VisionInput(
+            question=question, image={'mimeType': 'image/png', 'dataBase64': 'YWJj'}))
+    assert result.validated and result.observations[0].value == value
+
+
+@pytest.mark.parametrize(('field', 'value', 'column', 'question'), [
+    ('Channel 12 Target', '3.2', 1, 'Read Channel 12 Target.'),        # wrong column for the named header
+    ('Channel 13 Observed', '3.2', 1, 'Read Channel 13 Observed.'),    # wrong row
+    ('Observed Channel 12', '3.2', 1, 'Read Channel 12 Observed.'),    # reversed order
+    ('Channel 12 Observed', '3.5', 1, 'Read Channel 12 Observed.'),    # wrong value
+    ('Channel 12 Observed', '3.2', 1, 'Read Channel 14 Observed.'),    # the request names another row
+    ('Channel 12 Observed minimum', '3.2', 1, 'Read Channel 12 Observed.'),  # invented qualifier
+])
+def test_header_qualified_row_keeps_column_row_and_request_guards(field, value, column, question):
+    result = validate_table_vision(raw(channel_observation(field, value, column)), question)
+    assert not result.validated
+    assert all(item.value is None for item in result.observations)
+

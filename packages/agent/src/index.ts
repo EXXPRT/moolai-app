@@ -2172,7 +2172,8 @@ export class Agent {
       const score=scores[candidate.id];
       if(typeof score !== "number" || !Number.isFinite(score) || score < this.threshold || score>1 || links.some(l=>l.targetId===candidate.id)) continue;
       const current=await this.p.brain.getRecord(candidate.id);
-      if(!current || current.revision!==candidate.revision || current.archived || current.suppressed || dismissed(latest,current)) throw Error("Related source changed; stale links discarded.");
+      // J6 judged the candidate's source; metadata-only updates (quality, topics, links) do not invalidate that judgement.
+      if(!current || current.sourceRevision!==candidate.sourceRevision || current.archived || current.suppressed || dismissed(latest,current)) throw Error("Related source changed; stale links discarded.");
       links.push({targetId:candidate.id,provenance:"suggested",decision:"accepted",confidence:score,sourceRevision:record.sourceRevision,targetRevision:candidate.revision});
     }
     return await this.p.brain.updateRecord(record.id,record.revision,{links,manualFields:record.manualFields,connectionStatus:links.some(l=>l.provenance==="suggested" && l.decision==="accepted")?"connected":"no_match"}) ?? record;

@@ -68,3 +68,13 @@ test('live transcription options are explicit and bounded without changing model
   for (const change of [{ livePreview: 'yes' }, { previewIntervalMs: 999 }, { previewIntervalMs: 10001 }, { previewIntervalMs: 1000.5 }])
     assert.throws(() => validateAsrConfig({ ...config, ...change }));
 });
+
+test('checked-in configs match the documented default and live-caption modes', async () => {
+  // Explicit filenames, so a MOOLAI_ASR_CONFIG in the shell cannot redirect the default check.
+  const whisper = await readAsrConfig(undefined, 'asr-config.json');
+  assert.equal(whisper.model, 'large-v3-turbo');
+  assert.notEqual(whisper.livePreview, true, 'The repository default gives final transcripts only');
+  const captions = await readAsrConfig(undefined, 'scripts/qwen-asr/trial-config.json');
+  assert.equal(captions.model, 'qwen3-asr-1.7b');
+  assert.equal(captions.livePreview, true);
+});

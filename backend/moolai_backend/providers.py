@@ -241,7 +241,8 @@ def excerpt_supports(value: str | None, excerpt: str | None) -> bool:
     value = ' '.join((value or '').casefold().split())
     if not value or not text:
         return False
-    return re.search(r'(?<![\w.+-])' + re.escape(value) + r'(?!\w|[.,]\d)', text) is not None
+    # U+2212 (minus sign) and U+2013 (en dash) are signs too: '5' must not be read out of '−5'.
+    return re.search(r'(?<![\w.+\-\u2212\u2013])' + re.escape(value) + r'(?!\w|[.,]\d)', text) is not None
 
 
 def validate_vision(raw: str, mode: str | None = None) -> VisionEvidence:

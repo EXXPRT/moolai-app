@@ -9,7 +9,9 @@ export function dismissed(a:BrainRecord,b:BrainRecord) {
 }
 export async function connectionCandidates(brain:BrainPort, record:BrainRecord, active?:string) {
   const all=await brain.listRecords();
-  const eligible=all.filter(r=>r.id!==record.id && r.id!==active && r.kind!=='session' && !r.sourceOnly && !r.archived && !r.suppressed && !dismissed(record,r));
+  // Draft and growing notes are rewritten on every organizer pass; they link to settled notes from their own pass.
+  const eligible=all.filter(r=>r.id!==record.id && r.id!==active && r.kind!=='session' && !r.sourceOnly && !r.archived && !r.suppressed
+    && r.thoughtStatus!=='draft' && r.thoughtStatus!=='growing' && !dismissed(record,r));
   const conversation=origins(record,all,'conversation'), session=origins(record,all,'session');
   const neighbours=eligible.filter(r=>overlap(conversation,origins(r,all,'conversation')))
     .sort((a,b)=>Math.abs(time(a)-time(record))-Math.abs(time(b)-time(record)) || a.id.localeCompare(b.id)).slice(0,2);

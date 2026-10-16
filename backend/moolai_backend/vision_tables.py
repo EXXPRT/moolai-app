@@ -212,13 +212,17 @@ def _table_issues(observation: TableObservation) -> list[str]:
     if observation.value != value or not value:
         issues.append('readable value must exactly match the selected data cell, without invented units')
     field, row_name = _field_phrase(observation.field), _field_phrase(row_label)
-    if not row_name or not field.startswith(row_name + ' '):
+    # The row may be named bare ("12 Observed") or qualified by its own column
+    # header ("Channel 12 Observed"); the remainder must still be one header.
+    prefix = next((name for name in (_field_phrase(headers[support.rowLabelColumn] + ' ' + row_label), row_name)
+                   if row_name and field.startswith(name + ' ')), None)
+    if prefix is None:
         issues.append('named field must begin with the complete transcribed data row label')
-    elif field[len(row_name) + 1:] not in _header_names(header):
+    elif field[len(prefix) + 1:] not in _header_names(header):
         # Shared words such as "pressure" cannot turn the minimum column into
         # the maximum, or planned work into actual work.
         issues.append('named field must match the complete selected header, including qualifiers')
-    elif sum(field[len(row_name) + 1:] in _header_names(item) for item in headers) != 1:
+    elif sum(field[len(prefix) + 1:] in _header_names(item) for item in headers) != 1:
         issues.append('named field is ambiguous between transcribed column headers')
     return issues
 

@@ -95,6 +95,14 @@ export async function inputDigest(text: string) {
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2,'0')).join('');
 }
 /** Raw vision output is retained separately and never used as answer evidence. */
+/** Mirrors the backend's excerpt_supports: the value must stand alone, never as part of a longer number or after a sign. */
+function excerptSupports(value: string, excerpt: string) {
+  const normal = (text: string) => text.toLowerCase().split(/\s+/).filter(Boolean).join(" ");
+  const needle = normal(value), text = normal(excerpt);
+  if (!needle || !text) return false;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}_.+\\-\u2212\u2013])${escaped}(?![\\p{L}\\p{N}_]|[.,]\\d)`, "u").test(text);
+}
 export function validateVision(value: VisionEvidence | string, question?: string, mode: "ocr" | "visual" = "ocr"): VisionEvidence {
   const raw = typeof value === 'string' ? value : value.raw;
   let parsed: any = value;
@@ -126,7 +134,7 @@ export function validateVision(value: VisionEvidence | string, question?: string
       return [{field: String(o.field), status, value: null, label: null, sourceExcerpt: null}];
     }
     const valid = typeof value !== 'string' && status === 'readable' && typeof o.value === 'string' &&
-      typeof o.label === 'string' && !!o.label.trim() && typeof o.sourceExcerpt === 'string' && o.sourceExcerpt.includes(o.value) && o.sourceExcerpt.toLowerCase().includes(o.label.toLowerCase()) && [...words(o.field)].some(w => words(o.label).has(w));
+      typeof o.label === 'string' && !!o.label.trim() && typeof o.sourceExcerpt === 'string' && excerptSupports(o.value, o.sourceExcerpt) && o.sourceExcerpt.toLowerCase().includes(o.label.toLowerCase()) && [...words(o.field)].some(w => words(o.label).has(w));
     const limitation = `${parsed.interpretation ?? ''} ${parsed.scene?.limitation ?? ''}`;
     const contradictory = limitation.split(/[.!?;\n]/).some((clause: string) =>
       /\b(?:obscured|unreadable|hidden|incomplete|partially|uncertain)\b/i.test(clause) && [...words(o.field)].some(w => words(clause).has(w)));

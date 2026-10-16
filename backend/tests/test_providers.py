@@ -636,6 +636,8 @@ async def test_vision_preserves_contradictions_but_never_exposes_their_value(sta
     ('Calibration value', 'Calibration value', '9.31', 'Calibration value: [hidden]; Footer: 8.17'),
     ('Batch lot', 'Batch lot', 'R-619', 'Receipt number: R-619'),
     ('Temperature', 'Temperature', '5 C', 'Temperature: -5 C'),
+    ('Temperature', 'Temperature', '5 C', 'Temperature: \u22125 C'),
+    ('Temperature', 'Temperature', '5 C', 'Temperature: \u20135 C'),
     ('Amount', 'Amount', '12', 'Amount: 12.5'),
     ('Temperature', None, '5 C', '5 C'),
 ])
@@ -647,6 +649,7 @@ def test_vision_rejects_substituted_or_unsupported_field_values(field, label, va
 
 @pytest.mark.parametrize(('value', 'excerpt'), [
     ('-5 °C', 'Temperature: -5 °C.'),
+    ('\u22125 °C', 'Temperature: \u22125 °C.'),
     ('12.5', 'Amount: 12.5.'),
     ('5 mL', 'Amount: 5 mL.'),
 ])
