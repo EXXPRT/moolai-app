@@ -125,7 +125,6 @@ export async function createAgentHost(options: {
     if(action === "stop") {
       await stopCaptureOnce();
       await input.settled();
-      await agent.consolidateThoughts();
       return {voiceEnabled};
     }
     if(stoppingCapture)await stoppingCapture;
@@ -137,7 +136,10 @@ export async function createAgentHost(options: {
     if (action === "start") {
       const startupIntent=voiceIntent;
       if (voiceEnabled) return {voiceEnabled};
-      if (captureMayBeOn || voiceShutdownPending) throw Error("Voice shutdown is unconfirmed. Stop listening again before restarting.");
+      if (captureMayBeOn || voiceShutdownPending) {
+        await stopCaptureOnce();
+        if (startupIntent !== voiceIntent || closed) return {voiceEnabled};
+      }
       const epoch = ++voiceRequestEpoch;
       const startup = new AbortController();
       voiceStartup = startup;
@@ -155,7 +157,8 @@ export async function createAgentHost(options: {
         if (epoch !== voiceRequestEpoch || closed) return {voiceEnabled};
         nativeAttempted = true;
         captureMayBeOn = true;
-        await native.request("startListening");
+        const started = await native.request<{listening?: boolean}>("startListening");
+        if (started?.listening === false) throw Error("The microphone did not start. Click the microphone again to retry.");
       } catch (error) {
         if (epoch !== voiceRequestEpoch || closed) return {voiceEnabled};
         voiceEnabled = false;
@@ -228,20 +231,23 @@ export async function createAgentHost(options: {
       voiceIntent++;
       voiceRequestEpoch++;
       voiceStartup?.abort();
+      if (providers instanceof BackendProviders) providers.beginShutdown();
+      const bounded = (work: Promise<unknown>, ms: number) => Promise.race([work, new Promise(resolve => setTimeout(resolve, ms).unref?.())]);
       try {
-        if (voiceEnabled || captureMayBeOn || voiceShutdownPending) await native.request("stopListening");
+        if (voiceEnabled || captureMayBeOn || voiceShutdownPending) await bounded(native.request("stopListening"), 10000);
       } catch (e) {
         emit({ type: "notice", message: String(e) });
       }
-      thoughtSchedule.close();
+      const schedulePass = thoughtSchedule.close();
       speech.close();
       closed = true;
       voiceEnabled = false;
       native.close();
       await input.saved();
-      await input.settled();
-      await agent.stopSession();
-      await agent.drain();
+      // initialize() re-checkpoints and recovers on the next start, so shutdown starts no finalize or provider work.
+      await bounded(Promise.all([input.settled(), agent.drain(), schedulePass]), 3000);
+      if (providers instanceof BackendProviders) providers.close();
+      await bounded(agent.drain(), 1000);
     },
   };
 }

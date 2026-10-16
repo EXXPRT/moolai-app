@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, writeFile, unlink } from "node:fs/promises";
+import { unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,13 +90,15 @@ let closing = false;
 async function shutdown(exitCode=0) {
   if (closing) return;
   closing = true;
-  await host.close();
+  // Shutdown can never outlast start-moo's wait or the macOS logout grace.
+  setTimeout(() => {
+    try { ownership.release(); } catch {}
+    try { unlinkSync(path.join(dir, "runtime.json")); } catch {}
+    process.exit(exitCode || 1);
+  }, 20000).unref();
   runtime.server.closeAllConnections();
   runtime.server.close();
-  await Promise.race([
-    agent.drain(),
-    new Promise((resolve) => setTimeout(resolve, 3000)),
-  ]);
+  await host.close();
   await brain.close();
   await unlink(path.join(dir, "runtime.json")).catch(() => {});
   ownership.release();

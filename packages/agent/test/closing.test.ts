@@ -58,7 +58,10 @@ for(const storage of ['memory','sqlite'] as const) {
         if(check==='provider failure')await assert.rejects(finishing!,/simulated unavailable/);
         else await finishing;
         release();await f.agent.drain();
-        const shouldClose=['accept','restart','finish work','cancel work'].includes(check);
+        // A restart ends the study session; the next Start opens a new one, so a closing question asked before the
+        // restart is stale and the reply keeps the conversation open (16 Oct 2026, decision 4).
+        const shouldClose=['accept','finish work','cancel work'].includes(check);
+        if(check==='restart')assert.ok(f.observed.speech.some(s=>s.includes('kept the conversation open')));
         assert.equal(!f.agent.getState().conversationId,shouldClose);
         assert.equal(f.agent.getState().listening,true,'closing never stops capture');
         assert.ok(await brain.getRecord(conversation),'same source remains retained');

@@ -3,6 +3,7 @@ export class ThoughtSchedule {
   private initial?: ReturnType<typeof setTimeout>;
   private periodic: ReturnType<typeof setInterval>;
   private running=false;
+  private pass:Promise<void>=Promise.resolve();
   private closed=false;
   private dirty=false;
   private attempted=false;
@@ -26,12 +27,14 @@ export class ThoughtSchedule {
     this.attempted ||= this.dirty;
     this.dirty=false;
     this.running=true;
-    try {await this.p.run();} catch(error){this.p.onError(error);} finally {
+    const pass=this.p.run();this.pass=pass.catch(()=>{});
+    try {await pass;} catch(error){this.p.onError(error);} finally {
       this.running=false;
       // New source may arrive after the running pass took its snapshot. Preserve one follow-up,
       // including typed work while periodic processing is disabled.
       if(this.dirty)this.draftAvailable();
     }
   }
-  close() {this.closed=true;this.dirty=false;clearInterval(this.periodic);if(this.initial)clearTimeout(this.initial);this.initial=undefined;}
+  /** Stops scheduling and returns the pass still running, if any. */
+  close() {this.closed=true;this.dirty=false;clearInterval(this.periodic);if(this.initial)clearTimeout(this.initial);this.initial=undefined;return this.pass;}
 }

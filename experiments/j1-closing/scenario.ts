@@ -18,7 +18,9 @@ export async function prepare(brain:BrainPort, item:Case, policy:'current'|'cont
   if(policy==='current'&&state.pendingOffer?.kind==='close') {
     state.pendingOffer=undefined;await brain.setState('agent',state);
   }
-  f.agent=new Agent({...f.options,closingPolicy:policy});await f.agent.initialize();await f.agent.drain();await f.agent.startSession();
+  // Switching policy needs a fresh Agent. Each Start after a restart opens a new session, so the contextual policy keeps
+  // its instance and the closing question stays in the session that receives the reply.
+  if(policy!=='contextual'){f.agent=new Agent({...f.options,closingPolicy:policy});await f.agent.initialize();await f.agent.drain();await f.agent.startSession();}
   f.hooks.generation.respond=async()=>({text:'The requested follow-up is retained.',toolCalls:[]});
   if(item.context==='busy') {
     let entered!:()=>void;const started=new Promise<void>(r=>entered=r);

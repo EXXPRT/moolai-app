@@ -330,11 +330,13 @@ export class ThoughtConsolidator {
       const record=await this.p.brain.getRecord(id); if(record?.summary && !record.suppressed && record.thoughtStatus!=="draft")await this.p.enrich(record);
     }
   }
-  async process(sessionId: string, finalize = false, retry = false): Promise<void> {
-    if(this.active) { await this.active; if(finalize) return this.process(sessionId,true,retry); return; }
+  /** stillFinal: a finalize pass stops early (leaving speech pending, unfailed) once it returns false. */
+  async process(sessionId: string, finalize = false, retry = false, stillFinal?: () => boolean): Promise<void> {
+    if(this.active) { await this.active; if(finalize) return this.process(sessionId,true,retry,stillFinal); return; }
     const work=(async()=>{
       let stoppedWithoutProgress=false,deferred=false;
       for(let batch=0;batch<(finalize?4:1);batch++) {
+        if(finalize && stillFinal && !stillFinal()){deferred=true;break;}
         const before=JSON.stringify((await this.state(sessionId)).spans);
         if(await this.run(sessionId,finalize,retry && batch===0)==="deferred"){deferred=true;break;}
         const after=await this.state(sessionId);

@@ -31,6 +31,13 @@ export class BackendProviders
 {
   private availability: ProcessingAvailability = { status: "checking" };
   private healthInFlight?: Promise<void>;
+  private stopping = false;
+  private shutdown = new AbortController();
+  private static readonly stoppedReason = "Moolai stopped before this request finished; your source is saved.";
+  /** Step one of shutdown: refuse new paid work. Routing and acceptance may still finish. */
+  beginShutdown() { this.stopping = true; }
+  /** Step two: abort calls still running. Interrupted organization is offered as Retry, never re-sent automatically. */
+  close() { this.stopping = true; this.shutdown.abort(new Error(BackendProviders.stoppedReason)); }
   private healthCheckedAt = -Infinity;
   constructor(
     private url: string,
@@ -73,6 +80,8 @@ export class BackendProviders
       throw new Error(
         "MOOLAI_BACKEND_TOKEN is not configured. Configure backend/.env and start the backend.",
       );
+    if (this.shutdown.signal.aborted || (this.stopping && path !== "/v1/route" && path !== "/v1/records/accept"))
+      throw new Error(BackendProviders.stoppedReason);
     const response = await fetch(new URL(path, this.url), {
       method: "POST",
       headers: {
@@ -80,9 +89,7 @@ export class BackendProviders
         Authorization: `Bearer ${this.token}`,
       },
       body: JSON.stringify(body),
-      signal: signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(90000)])
-        : AbortSignal.timeout(90000),
+      signal: AbortSignal.any([this.shutdown.signal, AbortSignal.timeout(90000), ...(signal ? [signal] : [])]),
     });
     if (!response.ok) {
       const data = (await response

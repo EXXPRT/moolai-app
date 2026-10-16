@@ -22,7 +22,7 @@ export class NativeBridge {
       turnId?: string;
       [key: string]: unknown;
     }) => void,
-    private timeouts: { request?: number; speech?: number; drain?: number; flush?: number } = {},
+    private timeouts: { request?: number; speech?: number; drain?: number; flush?: number; start?: number } = {},
   ) {}
   private fail(child: ChildProcessWithoutNullStreams, message: string) {
     if (this.process !== child) return;
@@ -109,6 +109,8 @@ export class NativeBridge {
             ? (this.timeouts.flush ?? 60000)
           : method === "stopListening"
             ? (this.timeouts.drain ?? 40000)
+          : method === "startListening"
+            ? (this.timeouts.start ?? 120000)
             : (this.timeouts.request ?? 20000),
       );
       this.pending.set(id, { resolve, reject, timer });

@@ -13,6 +13,8 @@ export function actionMessage(error: unknown, action: string): string {
   const detail = String(error);
   if (/changed|revision|conflict/i.test(detail)) return "This note changed. Reopen it before saving your edit.";
   if (action === "/api/input") return "Your message could not be confirmed as saved. It is still in the input box.";
+  if (action === "/api/voice" && /confirm all voice output and capture stopped|Voice shutdown is unconfirmed/i.test(detail))
+    return "Moo couldn't confirm the microphone stopped. Click the microphone again to retry.";
   if (action === "/api/voice") return /local (?:speech recognition|ASR)/i.test(detail)
     ? "Speech recognition is not ready. Start the local ASR service, then turn the microphone on again."
     : "The microphone could not connect. Check its permission and connection, then try again.";

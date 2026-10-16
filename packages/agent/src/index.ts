@@ -112,6 +112,7 @@ export class Agent {
   private jobs = new Set<Promise<unknown>>();
   private enriching = new Set<string>();
   private accepting = new Set<string>();
+  private opening?: Promise<void>;
   private task?: AbortController;
   private taskEpoch = 0;
   private endAfterWork = false;
@@ -227,6 +228,12 @@ export class Agent {
     await this.restoreNarration();
     await this.persist();
     if(this.state.sessionId) await this.thoughts?.recover(this.state.sessionId);
+    // recover() marks sent work failed (Retry), commits an already-paid staged result, and leaves unsent work pending.
+    for (const id of await this.p.brain.getState<string[]>("session-closeout") ?? []) {
+      if (id === this.state.sessionId) continue;
+      await this.thoughts?.recover(id);
+      this.track(this.closeOutSession(id));
+    }
     const operations = await this.p.brain.listOperations();
     for (const op of operations.filter(o => o.kind === "enrich" && o.status === "running")) {
       await this.p.brain.putOperation({...op, status: "failed", error: "Interrupted provider work requires explicit retry."});
@@ -303,29 +310,49 @@ export class Agent {
     await this.writes;
     if(this.state.sessionId) await this.thoughts?.process(this.state.sessionId,finalize,retry);
   }
+  /** A study session runs from Start to Stop; quitting or restarting also ends it. Each Start opens a new session record. */
   async startSession() {
-    if (!this.state.sessionId) {
-      const id = this.p.id();
-      await this.p.brain.createRecord({
-        id,
-        kind: "session",
-        createdAt: this.p.now(),
-      });
-      this.state.sessionId = id;
-    }
-    this.state.listening = true;
-    await this.persist();
+    // One in-flight start: a double Start rotates once.
+    if (this.opening) return this.opening;
+    this.opening = (async () => {
+      if (!this.state.sessionId || !this.state.listening) {
+        const previous = this.state.sessionId;
+        const id = this.p.id();
+        await this.p.brain.createRecord({ id, kind: "session", createdAt: this.p.now() });
+        this.state.sessionId = id;
+        // A session that was never stopped (quit, restart) is closed out now; after a Stop this is a cheap no-op.
+        if (previous) this.track(this.closeOutSession(previous));
+      }
+      this.state.listening = true;
+      await this.persist();
+    })().finally(() => { this.opening = undefined; });
+    return this.opening;
   }
+  /** Stop returns at once; the stopped session stays visible and is closed out in the background. */
   async stopSession() {
+    const id = this.state.sessionId;
     this.state.listening = false;
     await this.p.speech.stop();
     await this.persist();
     await this.checkpointConversation("session stopped; conversation remains open");
-    await this.consolidateThoughts(true);
-    if (this.state.sessionId) {
-      const record = await this.p.brain.getRecord(this.state.sessionId);
+    if (id) this.track(this.closeOutSession(id));
+  }
+  /** Finalize a session's organization, then queue its acceptance. Idempotent; recovered at startup after a crash. */
+  private async closeOutSession(id: string) {
+    await this.markCloseOut(id, true);
+    try {
+      await this.writes;
+      await this.thoughts?.process(id, true, false, () => !(this.state.listening && this.state.sessionId === id));
+      const record = await this.p.brain.getRecord(id);
       if (record) await this.queueAcceptance(record);
-    }
+    } finally { await this.markCloseOut(id, false); }
+  }
+  private async markCloseOut(id: string, open: boolean) {
+    await this.serial(async () => {
+      const ids = await this.p.brain.getState<string[]>("session-closeout") ?? [];
+      const next = open ? [...new Set([...ids, id])] : ids.filter(item => item !== id);
+      if (JSON.stringify(next) !== JSON.stringify(ids)) await this.p.brain.setState("session-closeout", next);
+    });
   }
   private async recentDictation() {
     if (!this.state.sessionId) return [];
@@ -500,7 +527,7 @@ export class Agent {
       .join(" ")
       .trim();
     if (!text) return;
-    await this.queueAcceptance(session);
+    this.track(this.queueAcceptance(session));
     const turnOwner=await this.p.brain.getState<string>(`turn-record:${turnId}`);
     const currentPlaybackTurn=sourceSessionId===this.state.sessionId && (!turnOwner || turnOwner===this.state.conversationId);
     const playbackConversation=this.state.conversationId;
@@ -589,7 +616,7 @@ export class Agent {
           );
         await this.p.brain.setState(`turn-record:${turnId}`, conversation.id);
         this.emit({ type: "record", record: conversation });
-        await this.queueAcceptance(conversation);
+        this.track(this.queueAcceptance(conversation));
       }
     }
     const priorWebAllowed=this.state.webAllowed;
@@ -2352,12 +2379,13 @@ export class Agent {
       status: "pending",
       attempts: 0,
     };
-    if (
-      (await this.p.brain.listOperations()).some(
-        (existing) => existing.id === op.id,
-      )
-    )
-      return;
+    const operations = await this.p.brain.listOperations();
+    if (operations.some((existing) => existing.id === op.id)) return;
+    // A newer local revision supersedes older failed snapshots of the same record; ones in flight are left alone.
+    for (const older of operations.filter(o => o.kind === "accept" && o.recordId === record.id && o.status === "failed" && !this.accepting.has(o.id))) {
+      await this.p.brain.putOperation({...older, status: "done", error: "Superseded by a newer local revision"});
+      await this.p.brain.setState(`accept-payload:${older.id}`, null);
+    }
     await this.p.brain.setState(`accept-payload:${op.id}`, record);
     await this.p.brain.putOperation(op);
     this.track(this.accept(record, op));
@@ -2383,19 +2411,22 @@ export class Agent {
         status: "done",
         attempts: op.attempts + 1,
       });
+      await this.p.brain.setState(`accept-payload:${op.id}`, null);
     } catch (e) {
       const current = await this.p.brain.getRecord(record.id);
       if (
         current &&
         record.revision > 0 &&
         current.acceptedRevision >= record.revision
-      )
+      ) {
         await this.p.brain.putOperation({
           ...op,
           status: "done",
           attempts: op.attempts + 1,
           error: "Superseded by an accepted newer revision",
         });
+        await this.p.brain.setState(`accept-payload:${op.id}`, null);
+      }
       else {
         await this.p.brain.putOperation({
           ...op,

@@ -155,7 +155,29 @@ createInterface({input:process.stdin}).on('line',s=>{const c=JSON.parse(s);if(c.
  try{await host.voice('start');await assert.rejects(host.voice('stop'),/Could not confirm/);
  const health=await host.nativeHealth() as {listening:boolean;stops:number};assert.equal(health.stops,1);assert.equal(speechStops,1);
  assert.equal(host.nativeSnapshot().phase,'error');assert.equal(host.nativeSnapshot().listening,failed==='capture');assert.equal(health.listening,failed==='capture');
- if(failed==='capture'){await assert.rejects(host.voice('start'),/unconfirmed/);await host.voice('stop');assert.equal(host.nativeSnapshot().listening,false);}
+ if(failed==='capture'){
+  // Start first re-runs the unconfirmed stop (HRV-01); here it succeeds, so the microphone starts cleanly.
+  await host.voice('start');
+  const after=await host.nativeHealth() as {listening:boolean;stops:number};
+  assert.equal(after.stops,2);assert.equal(after.listening,true);
+  await host.voice('stop');assert.equal(host.nativeSnapshot().listening,false);
+ }
+ }finally{await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
+});
+
+test('Start still refuses when the re-run of an unconfirmed stop fails again (fail closed)',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'moolai-stop-closed-'));const nativePath=join(directory,'companion.mjs');
+ await writeFile(nativePath,`#!${process.execPath}
+import{createInterface}from'node:readline';let starts=0;
+createInterface({input:process.stdin}).on('line',s=>{const c=JSON.parse(s);if(c.method==='startListening')starts++;
+if(c.method==='stopListening'){console.log(JSON.stringify({id:c.id,error:'capture stop failed'}));return;}
+console.log(JSON.stringify({id:c.id,result:c.method==='health'?{starts}:{}}));});`,{mode:0o700});
+ const brain=new MemoryBrain();
+ const host=await createAgentHost({brain,providers:new FixtureProviders(),nativePath,onEvent:()=>{},waitForAsr:async()=>{},speech:{async warm(){},async speak(){},async stop(){},close(){}}});
+ try{
+  await host.voice('start');await assert.rejects(host.voice('stop'),/Could not confirm/);
+  await assert.rejects(host.voice('start'),/Could not confirm/);
+  assert.equal(((await host.nativeHealth()) as {starts:number}).starts,1,'No second startListening while capture-off is unconfirmed');
  }finally{await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
 });
 
@@ -250,4 +272,26 @@ createInterface({input:process.stdin}).on('line',line=>{
     const buffer=await brain.getState<{spans?:{segmentId:string}[]}>(`thought-buffer:${host.agent.getState().sessionId}`);
     assert.deepEqual(buffer?.spans?.map(s=>s.segmentId),['A','B']);
   }finally{await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
+});
+
+test('Mic Off returns while an organization call is still running',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'moolai-mic-off-'));const nativePath=join(directory,'companion.mjs');
+  await writeFile(nativePath,`#!${process.execPath}
+import{createInterface}from'node:readline';
+createInterface({input:process.stdin}).on('line',s=>{const c=JSON.parse(s);console.log(JSON.stringify({id:c.id,result:{}}));});`,{mode:0o700});
+  const brain=new MemoryBrain(),providers=new FixtureProviders();
+  let release!:()=>void;const held=new Promise<void>(r=>release=r);let calls=0;
+  const consolidate=providers.consolidate.bind(providers);
+  providers.consolidate=async input=>{calls++;await held;return consolidate(input);};
+  const host=await createAgentHost({brain,providers,nativePath,onEvent:()=>{},waitForAsr:async()=>{},speech:{async warm(){},async speak(){},async stop(){},close(){}}});
+  try{
+    await host.voice('start');
+    await host.agent.submitText('A dictated thought about enzymes.');
+    const organizing=host.agent.consolidateThoughts();
+    for(let i=0;i<100 && !calls;i++) await new Promise(r=>setTimeout(r,2));
+    assert.equal(calls,1,'An organizer call is in flight');
+    const returned=await Promise.race([host.voice('stop').then(()=>true),new Promise(r=>setTimeout(()=>r(false),500))]);
+    assert.equal(returned,true,'Mic Off does not wait for the organizer call');
+    release();await organizing;
+  }finally{release();await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
 });

@@ -56,6 +56,7 @@ Summary quality is Pending, Ready or Needs review. Fidelity and understandable c
 
 ## Persistence and failure handling
 
+- A study session runs from Start to Stop; quitting or restarting also ends it, and each Start opens a new session record. Stop returns at once and closes the previous session out in a tracked background job (finalize organization, then queue acceptance), recovered at startup after a crash without repeating work that was already sent. Acknowledged acceptance payloads are cleared, and a newer revision supersedes older failed snapshots of the same record.
 - Each input first updates the durable session transcript; active conversations are also updated continuously. SQLite uses transactions and full synchronization. Returned records are detached from adapter state.
 - Source revisions change only when a newer segment revision arrives. Record revisions support compare-and-set enrichment and manual edits. Stale provider results are superseded, and protected manual fields survive later generated patches.
 - Server acceptance is separate from local saving. Acknowledgments update synchronization metadata without creating another content revision. Each acceptance operation retains its original serialized payload; retry never reuses an operation ID with newer content.

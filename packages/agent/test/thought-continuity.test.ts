@@ -88,7 +88,9 @@ async function agentFixture(kind: "memory" | "sqlite") {
   });
   await agent.initialize(); await agent.startSession();
   return {
-    ...f, agent, get routes() { return routes; }, get summaries() { return summaries; }, get tags() { return tags; },
+    // Each Start opens a new session record, so read the buffer of the Agent's current session.
+    ...f, async state() { return (await f.brain.getState<BufferState>(`thought-buffer:${agent.getState().sessionId}`))!; },
+    agent, get routes() { return routes; }, get summaries() { return summaries; }, get tags() { return tags; },
     get failOrganization() { return failOrganization; }, get failTags() { return failTags; },
     set failOrganization(value: boolean) { failOrganization = value; },
     set failTags(value: boolean) { failTags = value; },

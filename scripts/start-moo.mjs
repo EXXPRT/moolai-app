@@ -114,10 +114,13 @@ export async function startMoo(options = {}) {
     }
     await requireFreePort(config.port);
     const backup = path.join(dataDir, 'backups', new Date().toISOString().replaceAll(':', '-'));
-    try { await access(path.join(dataDir, 'brain.sqlite'));
+    let hasDatabase = true;
+    try { await access(path.join(dataDir, 'brain.sqlite')); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; hasDatabase = false; }
+    if (hasDatabase) {
       await mkdir(backup, { recursive: true, mode: 0o700 });
       await command('python3', ['-c', 'import sqlite3,sys\ns=sqlite3.connect(sys.argv[1]);d=sqlite3.connect(sys.argv[2]);s.backup(d);d.close();s.close()', path.join(dataDir, 'brain.sqlite'), path.join(backup, 'brain.sqlite')]);
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
     console.log('Refreshing Moolai backend; saved data and database volumes stay in place…');
     await command('docker', [...compose, 'up', '-d', '--wait', 'postgres'], env);
     await command('docker', [...compose, 'up', '-d', '--no-deps', '--force-recreate', 'api'], env);
