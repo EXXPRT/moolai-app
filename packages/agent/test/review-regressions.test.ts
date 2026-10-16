@@ -111,7 +111,7 @@ for(const kind of ['memory','sqlite']) {
   const e=new ThoughtConsolidator({brain:t.brain,now:()=>at,emit:()=>{},notice:()=>{},context:async()=>JSON.stringify({originalRequest:'x'.repeat(65000)}),enrich:async()=>{},generation:{summarize:async()=>({title:'Summary',summary:'Summary'}),respond:async()=>({text:'',toolCalls:[]}),consolidate:async i=>{calls++;return organized(i);}}});
   try {await t.brain.createRecord({id:'study',kind:'session',createdAt:at});const source=segment('a','Use the retained original discussion and preserve uncertainty.');await t.brain.upsertSegment('study',source);await e.append('study',[source]);
    await e.process('study');await e.process('study');await e.recover('study');
-   const state=await t.brain.getState<any>('thought-buffer:study');assert.equal(calls,0);assert.equal(state.status,'failed');assert.match(state.error,/exceed.*limit/);assert.equal(state.spans[0].end,source.text.length);
+   const state=await t.brain.getState<any>('thought-buffer:study');assert.equal(calls,0);assert.equal(state.status,'failed');assert.match(state.error,/too large for one organization request/);assert.equal(state.spans[0].end,source.text.length);
    assert.equal((await t.brain.getRecord('study'))!.segments[0]!.text,source.text);assert.ok((await t.brain.listRecords()).some(r=>r.kind==='dictation'&&r.summary.includes('preserve uncertainty')));
   }finally{await t.close();}
  });

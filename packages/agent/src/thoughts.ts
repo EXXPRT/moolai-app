@@ -3,6 +3,7 @@ import type { BrainPort, BrainRecord, GenerationProvider, Segment, SourceSpan, T
 import { inputDigest } from "./evidence.js";
 import { thoughtPreview } from "./thought-preview.js";
 import { safeEnd, safeStart } from "../../contracts/src/records.js";
+import { ORGANIZER_REQUEST, echoSummary, fitsOrganizerRequest, payloadBytes } from "./organizer-budget.js";
 
 interface BufferState {
   retentionRevision?: number;
@@ -69,9 +70,18 @@ export function thoughtExcerpt(text: string, profile?: "compact"): {sourceExcerp
   const tail=text.slice(safeStart(text,text.length-tailBudget));
   return {sourceExcerpt:head+EXCERPT_OMISSION+tail,sourceTruncated:true};
 }
+/** A smaller old-note excerpt for request packing: the baseline head:tail shape, at most maxChars of source. */
+export function fitExcerpt(text: string, maxChars: number): {sourceExcerpt: string; sourceTruncated: boolean} {
+  if(text.length<=maxChars)return {sourceExcerpt:text,sourceTruncated:false};
+  const headChars=Math.floor(maxChars/3);
+  const head=text.slice(0,safeEnd(text,headChars));
+  const tail=text.slice(safeStart(text,text.length-(maxChars-headChars)));
+  return {sourceExcerpt:head+EXCERPT_OMISSION+tail,sourceTruncated:true};
+}
 /** Bound requests without dropping text or making the cut a semantic boundary. */
-export function thoughtBatch(spans: SourceSpan[], segments: Pick<Segment,"id"|"revision"|"text">[], profile?: "compact"): SourceSpan[] {
-  const bounds=ORGANIZATION_BOUNDS[profile ?? "baseline"];
+export function thoughtBatch(spans: SourceSpan[], segments: Pick<Segment,"id"|"revision"|"text">[], profile?: "compact", maxCharacters?: number): SourceSpan[] {
+  const base=ORGANIZATION_BOUNDS[profile ?? "baseline"];
+  const bounds={...base,characters:Math.min(base.characters,maxCharacters ?? base.characters)};
   const selected: SourceSpan[]=[]; let remaining=bounds.characters;
   for(const span of spans) {
     if(!remaining || selected.length===bounds.spans)break;
@@ -81,9 +91,11 @@ export function thoughtBatch(spans: SourceSpan[], segments: Pick<Segment,"id"|"r
     assertUnicode(source.text);
     if((span.start>0 && /[\uDC00-\uDFFF]/.test(source.text[span.start]!)) || safeEnd(source.text,span.end)!==span.end)
       throw Error("Saved source coverage splits a Unicode character; source retained for review.");
-    const end=safeEnd(source.text,Math.min(span.end,span.start+remaining));
+    let end=safeEnd(source.text,Math.min(span.end,span.start+remaining));
     if(end===span.start)break; // Carry the entire character into the next request, never an empty segment.
-    selected.push({...span,end});remaining-=end-span.start;
+    // Never leave only whitespace behind: a whitespace-only batch is not organizable.
+    if(end<span.end && !source.text.slice(end,span.end).trim())end=span.end;
+    selected.push({...span,end});remaining=Math.max(0,remaining-(end-span.start));
     if(end<span.end)break; // A batch must consume an ordered prefix, including at a Unicode boundary.
   }
   if(spans.length && !selected.length)throw Error("No complete source character fits the organization batch; source retained for review.");
@@ -152,6 +164,8 @@ export class ThoughtConsolidator {
     enrich: (record: BrainRecord) => Promise<void>;
     context: (segments: Segment[]) => Promise<string>;
     sourceRecords?: (segments: Segment[]) => Promise<BrainRecord[]>;
+    /** Request turns whose answer is still running; their tool outcomes may still change the context. */
+    answering?: () => Set<string>;
   }) {}
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const next = this.lock.then(fn); this.lock = next.catch(() => {}); return next;
@@ -319,17 +333,17 @@ export class ThoughtConsolidator {
   async process(sessionId: string, finalize = false, retry = false): Promise<void> {
     if(this.active) { await this.active; if(finalize) return this.process(sessionId,true,retry); return; }
     const work=(async()=>{
-      let stoppedWithoutProgress=false;
+      let stoppedWithoutProgress=false,deferred=false;
       for(let batch=0;batch<(finalize?4:1);batch++) {
         const before=JSON.stringify((await this.state(sessionId)).spans);
-        await this.run(sessionId,finalize,retry && batch===0);
+        if(await this.run(sessionId,finalize,retry && batch===0)==="deferred"){deferred=true;break;}
         const after=await this.state(sessionId);
         if(after.status==="failed" || !after.spans.length)break;
         if(JSON.stringify(after.spans)===before){stoppedWithoutProgress=true;break;}
       }
       if(finalize)await this.serial(async()=>{
         const remaining=await this.state(sessionId);
-        if(remaining.spans.length && remaining.status!=="failed") {
+        if(remaining.spans.length && remaining.status!=="failed" && !deferred) {
           remaining.status="failed";
           remaining.continuationRequired=stoppedWithoutProgress?undefined:true;
           remaining.error=stoppedWithoutProgress
@@ -343,13 +357,19 @@ export class ThoughtConsolidator {
     })(); this.active=work;
     try { await work; } finally { if(this.active===work)this.active=undefined; }
   }
-  private async run(sessionId:string,finalize:boolean,retry:boolean) {
+  private async run(sessionId:string,finalize:boolean,retry:boolean): Promise<"deferred" | void> {
     let retentionRevision: number | undefined;
     try {
       // Preparation mutates the same buffer as append/commit. Keep every read-modify-write
       // inside their lock, including no-source finalization, for asynchronous Brain adapters.
       const prepared = await this.serial(async () => {
         const current = await this.state(sessionId);
+        if(current.status === "running" && !current.staged && !retry) {
+          // A stored 'running' with no call in flight means the failure marker was never written; never re-send automatically.
+          current.status="failed";current.error="Interrupted organization request; source retained. Retry explicitly.";
+          await this.p.brain.setState(key(sessionId),current);await this.failOperation(sessionId,current);
+          return undefined;
+        }
         if(current.status === "failed" && !retry)return undefined;
         if (current.staged && retry && current.status === "failed") {
           await this.p.brain.setState(`thought-rejected:${current.staged.operation}`,current.staged);
@@ -375,43 +395,59 @@ export class ThoughtConsolidator {
       if(state.staged){await this.commit(sessionId,state.staged);return;}
       const session = await this.p.brain.getRecord(sessionId);
       if (!session) return;
-      const sourceSpans = thoughtBatch(state.spans,session.segments,this.p.strategy ? "compact" : this.p.profile);
+      const profile=this.p.strategy ? "compact" : this.p.profile;
+      // BGN-02: a turn whose answer is still running stays pending; its tool outcomes may still change the context.
+      const answering=this.p.answering?.() ?? new Set<string>();
+      const runningAt=state.spans.findIndex(span=>answering.has(session.segments.find(s=>s.id===span.segmentId)?.turnId ?? ""));
+      if(runningAt===0)return "deferred";
+      const organizable=runningAt<0 ? state.spans : state.spans.slice(0,runningAt);
       const previous=state.activeId ? await this.p.brain.getRecord(state.activeId) : undefined;
       if(state.activeId && (!previous || previous.archived || previous.suppressed))throw Error("The growing note is unavailable; review the pending text before retrying.");
       const draft=state.draftId ? await this.p.brain.getRecord(state.draftId) : undefined;
       const targetStamp=previous ? noteStamp(previous) : undefined;
       const draftStamp=draft ? manualStamp(draft) : undefined;
-      const segments = sourceSpans.map(span => {
-        const s = session.segments.find(s => s.id === span.segmentId);
-        if (!s || s.revision !== span.revision || span.end > s.text.length) throw Error("Source changed; review the pending thought.");
-        return {...s, text:s.text.slice(span.start,span.end)};
-      });
-      const sourceText=previous?.segments.map(s=>`${s.speaker}: ${s.text}`).join("\n") ?? "";
-      const excerpt=thoughtExcerpt(sourceText,this.p.strategy ? "compact" : this.p.profile);
-      const input: ThoughtInput = {sessionId, segments, incremental:true, finalize:finalize && !consume(state.spans,sourceSpans).length,
-        context:await this.p.context(segments), ...(previous?{activeNote:{id:previous.id,title:previous.title,summary:previous.summary,
-          sourceRevision:previous.sourceRevision,...excerpt}}:{})};
-      assertInputUnicode(input);
-      const stamp = await inputDigest(JSON.stringify(input));
-      if (state.checked === stamp && !retry) return;
-      const operation = `consolidate:${sessionId}:${stamp}`;
-      await this.serial(async () => {
-        state = await this.state(sessionId);
-        if((state.retentionRevision ?? 0)!==retentionRevision)throw Error("Retention policy changed");
-        Object.assign(state, {operation,status:"pending",finalize,error:undefined,continuationRequired:undefined});
-        await this.p.brain.setState(key(sessionId),state);
-        await this.p.brain.putOperation({id:operation,kind:"consolidate",recordId:sessionId,sourceRevision:session.sourceRevision,status:"pending",attempts:0});
-      });
-      if (JSON.stringify(input).length > 60000) throw Error("Pending thoughts exceed the consolidation limit; all source retained for review.");
-      await this.serial(async () => {
-        state = await this.state(sessionId); state.status = "running";
-        if((state.retentionRevision ?? 0)!==retentionRevision)throw Error("Retention policy changed");
-        await this.p.brain.setState(key(sessionId),state);
-        await this.p.brain.putOperation({id:operation,kind:"consolidate",recordId:sessionId,sourceRevision:session.sourceRevision,status:"running",attempts:1});
-      });
-      const result = this.p.strategy === "plan_then_summarize"
-        ? await plannedThoughts(this.p.brain,this.p.generation,input,operation,previous)
-        : await this.p.generation.consolidate!(input);
+      let sourceSpans: SourceSpan[]=[], segments: Segment[]=[], input!: ThoughtInput, operation="", result!: ThoughtResult;
+      // Requests are packed to the backend's byte bound. A 413 is refused before any provider call,
+      // so repacking smaller in the same pass costs nothing (decision 7); every other failure stops here.
+      for(let attempt=0, bytes=ORGANIZER_REQUEST.bytes as number;;attempt++) {
+        ({spans:sourceSpans,input}=await this.pack({sessionId,session,spans:organizable,all:state.spans,profile,previous,finalize,bytes}));
+        segments=input.segments;
+        if(segments.every(s=>!s.text.trim())) {
+          // Only whitespace is pending here (left by an older cut): nothing to organize; the transcript keeps it.
+          await this.serial(async()=>{state=await this.state(sessionId);state.spans=consume(state.spans,sourceSpans);await this.p.brain.setState(key(sessionId),state);});
+          return;
+        }
+        assertInputUnicode(input);
+        const stamp = await inputDigest(JSON.stringify(input));
+        if (state.checked === stamp && !retry) return;
+        operation = `consolidate:${sessionId}:${stamp}`;
+        await this.serial(async () => {
+          state = await this.state(sessionId);
+          if((state.retentionRevision ?? 0)!==retentionRevision)throw Error("Retention policy changed");
+          Object.assign(state, {operation,status:"pending",finalize,error:undefined,continuationRequired:undefined});
+          await this.p.brain.setState(key(sessionId),state);
+          await this.p.brain.putOperation({id:operation,kind:"consolidate",recordId:sessionId,sourceRevision:session.sourceRevision,status:"pending",attempts:0});
+        });
+        await this.serial(async () => {
+          state = await this.state(sessionId); state.status = "running";
+          if((state.retentionRevision ?? 0)!==retentionRevision)throw Error("Retention policy changed");
+          await this.p.brain.setState(key(sessionId),state);
+          await this.p.brain.putOperation({id:operation,kind:"consolidate",recordId:sessionId,sourceRevision:session.sourceRevision,status:"running",attempts:1});
+        });
+        try {
+          result = this.p.strategy === "plan_then_summarize"
+            ? await plannedThoughts(this.p.brain,this.p.generation,input,operation,previous)
+            : await this.p.generation.consolidate!(input);
+          break;
+        } catch(error) {
+          if((error as {status?:number}).status!==413 || attempt>=2) throw error;
+          const op=(await this.p.brain.listOperations()).find(o=>o.id===operation);
+          if(op)await this.p.brain.putOperation({...op,status:"done",error:"Refused before dispatch (no provider call); repacked smaller."});
+          const measured=/([\d,]+) bytes, over its ([\d,]+)-byte/.exec(String(error));
+          const over=measured ? Number(measured[1]!.replaceAll(",",""))-Number(measured[2]!.replaceAll(",","")) : 0;
+          bytes=over>0 ? bytes-over-1024 : Math.floor(bytes/2);
+        }
+      }
       await this.p.brain.setState(`thought-output:${operation}`,result);
       validateThoughts(input,result);
       const current = await this.p.brain.getRecord(sessionId);
@@ -436,6 +472,39 @@ export class ThoughtConsolidator {
         this.p.previewChanged?.();
       });
     }
+  }
+  private async pack(o:{sessionId:string;session:BrainRecord;spans:SourceSpan[];all:SourceSpan[];profile?:"compact";previous?:BrainRecord;finalize:boolean;bytes:number}) {
+    const slice=(spans:SourceSpan[])=>spans.map(span => {
+      const s = o.session.segments.find(s => s.id === span.segmentId);
+      if (!s || s.revision !== span.revision || span.end > s.text.length) throw Error("Source changed; review the pending thought.");
+      return {...s, text:s.text.slice(span.start,span.end)};
+    });
+    const sourceText=o.previous?.segments.map(s=>`${s.speaker}: ${s.text}`).join("\n") ?? "";
+    const full=thoughtExcerpt(sourceText,o.profile);
+    const fullChars=full.sourceTruncated ? full.sourceExcerpt.length-EXCERPT_OMISSION.length : sourceText.length;
+    const excerpt=(chars:number)=>chars>=fullChars ? full : fitExcerpt(sourceText,chars);
+    const build=(spans:SourceSpan[],chars:number,context:string):ThoughtInput=>({sessionId:o.sessionId, segments:slice(spans), incremental:true,
+      finalize:o.finalize && !consume(o.all,spans).length, context, ...(o.previous?{activeNote:{id:o.previous.id,title:o.previous.title,
+        summary:echoSummary(o.previous.summary),sourceRevision:o.previous.sourceRevision,...excerpt(chars)}}:{})});
+    const fits=(input:ThoughtInput)=>fitsOrganizerRequest(input,o.bytes);
+    const largest=(lo:number,hi:number,ok:(n:number)=>boolean)=>{while(lo<hi){const mid=Math.ceil((lo+hi)/2);if(ok(mid))lo=mid;else hi=mid-1;}return lo;};
+    const length=(spans:SourceSpan[])=>spans.reduce((n,s)=>n+s.end-s.start,0);
+    const natural=thoughtBatch(o.spans,o.session.segments,o.profile);
+    const naturalContext=await this.p.context(slice(natural));
+    let input=build(natural,fullChars,naturalContext);
+    if(fits(input))return {spans:natural,input};
+    // Too large: shrink the old-note excerpt to its floor first, then defer later speech. Source is never clipped.
+    const floor=largest(0,fullChars,k=>payloadBytes(excerpt(k).sourceExcerpt)<=ORGANIZER_REQUEST.excerptFloorBytes);
+    const prefix=(chars:number)=>thoughtBatch(o.spans,o.session.segments,o.profile,chars);
+    const fitting=(limit:number,context:string)=>largest(0,limit,n=>n>0 && fits(build(prefix(n),floor,context)));
+    let chars=fitting(length(natural),naturalContext);
+    // A heavy linked context in the natural batch can leave no room; shorter prefixes carry their own, smaller context.
+    for(let k=natural.length-1;!chars && k>=1;k--) chars=fitting(length(natural.slice(0,k)),await this.p.context(slice(natural.slice(0,k))));
+    if(!chars)throw Error("This speech and its linked evidence are too large for one organization request. The transcript is saved.");
+    const spans=prefix(chars),context=await this.p.context(slice(spans));
+    input=build(spans,largest(0,fullChars,k=>fits(build(spans,k,context))),context);
+    if(!fits(input))throw Error("This speech and its linked evidence are too large for one organization request. The transcript is saved.");
+    return {spans,input};
   }
   private async failOperation(sessionId: string, state: BufferState) {
     if (state.operation) {

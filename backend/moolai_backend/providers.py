@@ -690,7 +690,8 @@ class NebiusProvider:
             # and message framing. Reject before dispatch; never clip source.
             size = len(json.dumps(payload, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8'))
             if size > max_request_bytes:
-                raise ServiceError(f'Generation request exceeds its {max_request_bytes:,}-byte limit; source remains saved locally', 413)
+                # The measured size lets the client repack by the actual overshoot (refused before any provider call).
+                raise ServiceError(f'Generation request is {size:,} bytes, over its {max_request_bytes:,}-byte limit; source remains saved locally', 413)
         if model not in await self.models():
             raise ServiceError(f'Configured Nebius model is unavailable: {model}', 503)
         settings = self.gateway.settings
@@ -972,6 +973,8 @@ class NebiusProvider:
                         'spans': [span_by_id[u] for u in group.unitIds]})
                 return ThoughtResult(groups=groups, remainder=[span_by_id[u] for u in result.remainder])
             for i, group in enumerate(result.groups):
+                if not any(units[int(u[1:])]['text'].strip() for u in group.unitIds):
+                    raise ValueError('Organization must publish a useful nonempty group')
                 if group.continuesActive and (i != 0 or item.activeNote is None):
                     raise ValueError('Invalid active note continuation')
                 if group.ongoing and (item.finalize or i != len(result.groups)-1):

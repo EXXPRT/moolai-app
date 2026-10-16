@@ -90,9 +90,10 @@ export class BackendProviders
         .catch(() => ({ detail: `HTTP ${response.status}` }))) as {
         detail?: unknown;
       };
-      throw new Error(
+      // The status lets callers tell a request refused before dispatch (413) from a provider failure.
+      throw Object.assign(new Error(
         `Backend ${response.status}: ${typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)}`,
-      );
+      ), { status: response.status });
     }
     return response.json() as Promise<T>;
   }
@@ -197,9 +198,13 @@ export class FixtureProviders
   async consolidate(input: import("../../contracts/src/index.js").ThoughtInput): Promise<import("../../contracts/src/index.js").ThoughtResult> {
     const spans=input.segments.map(s=>({segmentId:s.id,revision:s.revision,start:0,end:s.text.length}));
     // Fixture continuity is deliberately simple; it does not claim semantic topic detection.
-    if(input.incremental)return {groups:[{spans,title:input.activeNote?.title ?? "Saved study thought",
-      summary:[input.activeNote?.summary,...input.segments.map(s=>`${s.speaker}: ${s.text}`)].filter(Boolean).join("\n"),
-      topicSuggestions:[],continuesActive:!!input.activeNote,ongoing:!input.finalize}],remainder:[]};
+    if(input.incremental) {
+      // The Agent echoes at most 4,000 summary characters; keep the fixture's own summary within that by dropping its oldest lines.
+      const lines=[...(input.activeNote?.summary ? input.activeNote.summary.split("\n") : []),...input.segments.map(s=>`${s.speaker}: ${s.text}`)];
+      while(lines.length>1 && lines.join("\n").length>4000)lines.shift();
+      return {groups:[{spans,title:input.activeNote?.title ?? "Saved study thought",summary:lines.join("\n"),
+        topicSuggestions:[],continuesActive:!!input.activeNote,ongoing:!input.finalize}],remainder:[]};
+    }
     return input.finalize ? {groups:[{spans,title:"Saved study thought",summary:input.segments.map(s=>`${s.speaker}: ${s.text}`).join("\n"),topicSuggestions:[]}],remainder:spans.slice(0,0)} : {groups:[],remainder:spans};
   }
   async route(input: RouteInput): Promise<RouteDecision> {

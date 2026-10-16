@@ -8,6 +8,7 @@ import type { BrainPort, Segment, SourceSpan, ThoughtInput, ThoughtResult } from
 import { ThoughtConsolidator, thoughtBatch, thoughtExcerpt } from "../src/thoughts.js";
 import { Agent } from "../src/index.js";
 import { FixtureProviders } from "../../agent-host/src/providers.js";
+import { ORGANIZER_REQUEST, organizerRequestBytes } from "../src/organizer-budget.js";
 
 const now = () => "2026-10-03T01:00:00Z";
 const segment = (id: string, text: string, revision = 1): Segment =>
@@ -45,7 +46,11 @@ async function fixture(kind: "memory" | "sqlite", profile?: "compact") {
     generation: {
       summarize: async () => { throw Error("Unexpected summary call"); },
       respond: async () => { throw Error("Unexpected Agent call"); },
-      consolidate: async input => { inputs.push(structuredClone(input)); return infer(input); },
+      // Like the backend, refuse (413, before any provider call) a request over the byte bound.
+      consolidate: async input => {
+        if (organizerRequestBytes(input) > ORGANIZER_REQUEST.bytes) throw Object.assign(Error("Backend 413: request too large"), { status: 413 });
+        inputs.push(structuredClone(input)); return infer(input);
+      },
     },
   });
   let engine = make();

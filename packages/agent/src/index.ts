@@ -183,6 +183,7 @@ export class Agent {
     if (p.generation.consolidate) this.thoughts = new ThoughtConsolidator({
       brain:p.brain,generation:p.generation,now:p.now,emit:r=>{this.emit({type:"record",record:r});if(r.suppressed)this.track(this.queueAcceptance(r));},notice:m=>this.notice(m),
       pending:p.onThoughtsPending,profile:p.thoughtOrganizationProfile,strategy:p.thoughtStrategy,
+      answering:()=>this.answeringTurns(),
       previewChanged:()=>{this.track(this.emitThoughtPreview());},
       enrich:async r=>{
         await p.brain.setState(`summarized-input:${r.id}`, (await this.summarySource(r)).stamp);
@@ -273,6 +274,11 @@ export class Agent {
   private async persist() {
     await this.p.brain.setState("agent", this.state);
     this.emit({ type: "state", state: this.getState() });
+  }
+  /** Request turns whose answer is still running; organization leaves them pending until it finishes. */
+  private answeringTurns() {
+    const request=this.state.busy ? this.activeRequest : undefined;
+    return new Set(request ? [request.turnId, ...(request.constraintTurns ?? []).map(t=>t.turnId)] : []);
   }
   private notice(message: string) {
     this.emit({ type: "notice", message });
