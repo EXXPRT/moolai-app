@@ -151,6 +151,9 @@ export function createRuntimeServer(options: {
         case "/api/speech/stop":
           await options.agent.stopSpeech();
           break;
+        case "/api/response/cancel":
+          await options.agent.interrupt();
+          break;
         case "/api/voice": {
           if (
             body.action !== "start" &&

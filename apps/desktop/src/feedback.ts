@@ -33,3 +33,9 @@ export function readableNotice(value: string): string | undefined {
 export function clearAcknowledgedDraft(current: string, submitted: string): string {
   return current === submitted ? "" : current;
 }
+/** Playback stop and response cancel stay separate: while Moo speaks, Stop only ends playback. */
+export function stopControl(speaking: boolean, busy: boolean): { label: string; path: string } | undefined {
+  if (speaking) return { label: "Stop speech", path: "/api/speech/stop" };
+  if (busy) return { label: "Stop response", path: "/api/response/cancel" };
+  return undefined;
+}

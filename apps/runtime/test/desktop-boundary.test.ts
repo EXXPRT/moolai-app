@@ -44,6 +44,12 @@ test("renderer can list and revoke folders but cannot grant arbitrary paths", ()
   ]) assert.equal(allowedRequest("POST", path), false, path);
 });
 
+test("renderer can stop speech and cancel a response as separate requests", () => {
+  assert.equal(allowedRequest("POST", "/api/speech/stop"), true);
+  assert.equal(allowedRequest("POST", "/api/response/cancel"), true);
+  assert.equal(allowedRequest("GET", "/api/response/cancel"), false);
+});
+
 test("archived desktop features are denied by the renderer request allowlist", () => {
   for(const path of ["/api/notes","/api/brain/query","/api/snapshot/export","/api/snapshot/import"])
     assert.equal(allowedRequest("POST",path),false,path);

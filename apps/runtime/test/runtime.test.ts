@@ -54,6 +54,9 @@ async function runtime(localFiles?: LocalFilesPort, processingStatus?: () => {st
     stopSpeech: async () => {
       actions.push({ name: "speech-stop" });
     },
+    interrupt: async () => {
+      actions.push({ name: "response-cancel" });
+    },
     editRecord: async (id: string, revision: number, patch: RecordPatch) => {
       actions.push({ name: "edit", value: { id, revision, patch } });
       return { id, revision, ...patch };
@@ -166,6 +169,15 @@ test("explicit microphone stop checkpoints after capture stops; flush and speech
     assert.deepEqual(host.actions.slice(-2), [
       { name: "voice", value: "stop" }, { name: "session-stop" },
     ]);
+  } finally { await host.close(); }
+});
+
+test("stopping speech and cancelling a response are separate routes", async () => {
+  const host = await runtime();
+  try {
+    assert.equal((await host.post("/api/speech/stop", {})).status, 200);
+    assert.equal((await host.post("/api/response/cancel", {})).status, 200);
+    assert.deepEqual(host.actions, [{ name: "speech-stop" }, { name: "response-cancel" }]);
   } finally { await host.close(); }
 });
 

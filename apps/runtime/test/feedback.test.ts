@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clearAcknowledgedDraft, actionMessage, connectionAfterRefresh, processingMessage, readableNotice } from "../../desktop/src/feedback.js";
+import { clearAcknowledgedDraft, actionMessage, connectionAfterRefresh, processingMessage, readableNotice, stopControl } from "../../desktop/src/feedback.js";
 
 test("successful refresh clears a disconnected state without claiming failed processing succeeded", () => {
   assert.equal(connectionAfterRefresh(false), "disconnected");
@@ -29,4 +29,10 @@ test("a delayed save acknowledgement cannot erase text typed while waiting", () 
 test('voice errors distinguish local recognition availability from microphone permission',()=>{
   assert.match(actionMessage('Local speech recognition is unavailable','/api/voice'),/ASR service/);
   assert.match(actionMessage('Microphone permission is required','/api/voice'),/permission/);
+});
+test("Stop ends playback while Moo speaks and cancels only a response being prepared", () => {
+  assert.deepEqual(stopControl(true, true), { label: "Stop speech", path: "/api/speech/stop" });
+  assert.deepEqual(stopControl(true, false), { label: "Stop speech", path: "/api/speech/stop" });
+  assert.deepEqual(stopControl(false, true), { label: "Stop response", path: "/api/response/cancel" });
+  assert.equal(stopControl(false, false), undefined);
 });

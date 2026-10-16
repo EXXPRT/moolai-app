@@ -49,7 +49,7 @@ function allowedRequest(method, path) {
   return (
     [
       "/api/session", "/api/input", "/api/end", "/api/end/resolve",
-      "/api/subject", "/api/retry", "/api/speech/stop", "/api/voice",
+      "/api/subject", "/api/retry", "/api/speech/stop", "/api/response/cancel", "/api/voice",
       "/api/local-folders/revoke",
     ].includes(path) || /^\/api\/record\/[a-zA-Z0-9_-]+$/.test(path)
   );

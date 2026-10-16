@@ -2,7 +2,7 @@ import { MarkdownContent } from "./MarkdownContent.js";
 import { BrainWorkspace } from "./BrainWorkspace.js";
 import { useChatFollow } from "./useChatFollow.js";
 import React, { useEffect, useRef, useState } from "react";
-import { actionMessage, connectionAfterRefresh, processingMessage, readableNotice, clearAcknowledgedDraft, type ConnectionStatus } from "./feedback.js";
+import { actionMessage, connectionAfterRefresh, processingMessage, readableNotice, clearAcknowledgedDraft, stopControl, type ConnectionStatus } from "./feedback.js";
 import { createRoot } from "react-dom/client";
 import type {
   AgentEvent,
@@ -122,13 +122,13 @@ function App() {
     if (!api) return;
     setError("");
     try {
-      await api.request("POST", "/api/speech/stop");
       await act("/api/voice", { action: "start" });
     } catch (e) {
       setError(actionMessage(e, "/api/voice"));
     }
   }
   const state = snapshot?.state;
+  const stop = stopControl(Boolean(snapshot?.native?.speaking), Boolean(state?.busy));
   const records = [...(snapshot?.records || [])].sort((a, b) =>
     b.updatedAt.localeCompare(a.updatedAt),
   );
@@ -388,7 +388,7 @@ function App() {
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg>
                   {micRequested ? "Mic on" : "Mic off"}
                 </button>
-                {(snapshot?.native?.speaking || state?.busy) && <button className="text-button" onClick={() => void act("/api/speech/stop")}>{state?.busy ? "Stop response" : "Stop speech"}</button>}
+                {stop && <button className="text-button" onClick={() => void act(stop.path)}>{stop.label}</button>}
               </div>
               <button
                 className="primary"

@@ -341,8 +341,10 @@ export class Agent {
     this.state.currentSubject = subject.trim() || undefined;
     await this.persist();
   }
+  /** Stop speech ends playback only; response work, the conversation and walkthrough offers stay. interrupt() is the explicit cancel. */
   async stopSpeech() {
-    await this.interrupt();
+    this.playbackEpoch++;
+    await this.p.speech.stop();
   }
   /** Explicit Stop cancels response work, never the conversation or retained source. */
   async interrupt() {
@@ -401,7 +403,9 @@ export class Agent {
   }
   async submitText(text: string) {
     if (!text.trim()) return;
+    // Typing interrupts Moo like speaking does: a running answer waits for this turn; a reading stops.
     if (this.state.busy) await this.speechStarted();
+    else await this.stopSpeech();
     const turnId = this.p.id();
     await this.ingest({
       id: this.p.id(),
