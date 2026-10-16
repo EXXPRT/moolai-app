@@ -214,3 +214,40 @@ import{createInterface}from'node:readline';import{existsSync}from'node:fs';let l
   const last=events.filter(e=>e.type==='voice').at(-1)!;assert.equal(last.voice?.phase,'listening');assert.equal(last.voice?.error,null);
  }finally{await writeFile(releasePath,'release');await host.nativeHealth();await first;await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
 });
+
+test('a real speech_started while J1 routes a dictated turn keeps both sentences for the growing note',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'moolai-onset-host-'));
+  const nativePath=join(directory,'companion.mjs');
+  // Each health request makes the fake companion emit its next scripted batch, as the Swift companion would.
+  await writeFile(nativePath,`#!${process.execPath}
+import {createInterface} from 'node:readline';
+const at=new Date().toISOString();
+const seg=(id,text)=>({id,turnId:id,revision:1,speaker:'user',text,final:true,createdAt:at});
+const batches=[
+  [{event:'speech_started',interruptedPlayback:false},{event:'transcript',segment:seg('A','The enzyme works best at 37 degrees.')},{event:'turn_end',turnId:'A'}],
+  [{event:'speech_started',interruptedPlayback:false}],
+  [{event:'transcript',segment:seg('B','Above 45 degrees it denatures.')},{event:'turn_end',turnId:'B'}],
+];
+let step=0;
+createInterface({input:process.stdin}).on('line',line=>{
+  const r=JSON.parse(line);
+  if(r.method==='health') for(const e of batches[step++]??[]) console.log(JSON.stringify(e));
+  console.log(JSON.stringify({id:r.id,result:{step}}));
+});`,{mode:0o700});
+  const brain=new MemoryBrain(),providers=new FixtureProviders();
+  const route=providers.route.bind(providers);
+  let entered!:()=>void,release!:()=>void;
+  const inFlight=new Promise<void>(r=>entered=r),gate=new Promise<void>(r=>release=r);
+  providers.route=async input=>{if(input.text.startsWith('The enzyme')){entered();await gate;}return route(input);};
+  const host=await createAgentHost({brain,providers,nativePath,onEvent:()=>{},waitForAsr:async()=>{},
+    speech:{async warm(){},async speak(){},async stop(){},close(){}}});
+  try{
+    await host.nativeHealth();await inFlight;   // A finished; J1(A) is in flight
+    await host.nativeHealth();                  // a real speech_started for the next utterance
+    await new Promise(r=>setTimeout(r,20));release();
+    await host.nativeHealth();                  // B final and turn_end
+    for(let i=0;i<200 && !(await brain.getState('thought-eligible:B'));i++) await new Promise(r=>setTimeout(r,5));
+    const buffer=await brain.getState<{spans?:{segmentId:string}[]}>(`thought-buffer:${host.agent.getState().sessionId}`);
+    assert.deepEqual(buffer?.spans?.map(s=>s.segmentId),['A','B']);
+  }finally{await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
+});

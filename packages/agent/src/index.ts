@@ -117,6 +117,7 @@ export class Agent {
   private endAfterWork = false;
   private closing?: Promise<void>;
   private speechEpoch = 0;
+  private stopEpoch = 0;
   private playbackEpoch = 0;
   private thoughtPreviewEpoch = 0;
   private policyEpoch = 0;
@@ -125,6 +126,7 @@ export class Agent {
   private thoughts?: ThoughtConsolidator;
   private attention?: { done: Promise<void>; release: () => void; timer: ReturnType<typeof setTimeout>; previous?: AgentState['activity'] };
   private activeRequest?: UserTurnSnapshot;
+  private heldHelp?: { conversationId: string; sourceId: string; request: UserTurnSnapshot; signal: AbortSignal; captured: boolean };
   private get timeZone() { return this.p.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone; }
   private async trace(action: string, detail: Record<string,unknown> = {}) {
     await this.serial(async()=> {
@@ -141,7 +143,7 @@ export class Agent {
       const done=new Promise<void>(resolve=>release=resolve);
       const timer=setTimeout(()=> {
         // A lost recognition event must not leave a task suspended forever or publish through unknown speech.
-        void this.interrupt().then(()=>this.notice("I couldn’t interpret the interruption. Your request is saved; please say it again."));
+        void this.interrupt().then(()=>this.notice("I couldn’t interpret the interruption. Your request is saved; please say it again.")).catch(e=>this.notice(errorText(e)));
       },60000);
       timer.unref?.();
       this.attention={done,release,timer,previous:this.state.activity};
@@ -219,6 +221,7 @@ export class Agent {
         lastError: stored.busy
           ? "Previous task interrupted; source text is saved."
           : stored.lastError,
+        pendingOffer: stored.pendingOffer?.kind === "end_work" ? undefined : stored.pendingOffer,
       };
     await this.restoreNarration();
     await this.persist();
@@ -354,6 +357,8 @@ export class Agent {
   async interrupt() {
     this.playbackEpoch++;
     this.speechEpoch++;
+    this.stopEpoch++;
+    if (this.state.pendingOffer?.kind === "end_work") this.state.pendingOffer = undefined;
     this.task?.abort();
     this.releaseAttention();
     this.state.narration = undefined;
@@ -430,10 +435,11 @@ export class Agent {
     sourceSessionId?: string,
     retry?: PendingOperation,
   ) {
+    const routing = {speech: this.speechEpoch, stop: this.stopEpoch};
     const next = this.controls.then(async () => {
       if (retry && !(await this.canRetryRoute(retry))) return;
-      const onset=this.speechEpoch;
-      try { await this.handleTurn(turnId, sourceSessionId); }
+      const onset=routing.speech;
+      try { await this.handleTurn(turnId, sourceSessionId, routing); }
       catch(error) { if(onset===this.speechEpoch && this.attention && this.state.busy) await this.interrupt(); throw error; }
       finally { if(onset===this.speechEpoch)this.releaseAttention(); await this.persist(); }
     });
@@ -472,7 +478,7 @@ export class Agent {
     this.notice(message);
     return false;
   }
-  private async handleTurn(turnId: string, sourceSessionId = this.state.sessionId) {
+  private async handleTurn(turnId: string, sourceSessionId = this.state.sessionId, routing = {speech: this.speechEpoch, stop: this.stopEpoch}) {
     if (!sourceSessionId) return;
     const session = await this.p.brain.getRecord(sourceSessionId);
     if (!session) return;
@@ -504,7 +510,7 @@ export class Agent {
         !await this.isSourceTurnCurrent({sessionId:sourceSessionId,conversationId:playbackConversation ?? "",turnId,revisionKey,text}))
         await this.handleTurn(turnId,sourceSessionId);
     };
-    const playback=currentPlaybackTurn ? await resolveAnswerNarration(this.p.brain,this.state.conversationId,text) : undefined;
+    const playback=currentPlaybackTurn && this.state.conversationId ? await resolveAnswerNarration(this.p.brain,this.state.conversationId,text) : undefined;
     if(playback) {
       if(!await playbackCurrent()) {await reconsiderPlayback();return;}
       await this.p.brain.setState(`handled:${turnId}`,revisionKey);
@@ -634,7 +640,7 @@ export class Agent {
     await this.p.brain.putOperation(operation);
     const retentionScope=await this.thoughts?.retentionScope(session.id);
     let decision: RouteDecision;
-    const speechEpoch = this.speechEpoch;
+    const speechEpoch = routing.speech;
     try {
       decision = await this.p.decisions.route({
         text,
@@ -653,9 +659,28 @@ export class Agent {
       });
       throw error;
     }
-    if (speechEpoch !== this.speechEpoch) {
+    const newSpeech = () => speechEpoch !== this.speechEpoch;
+    const stillCurrent = async () => !newSpeech();
+    const offerUnchanged = () => JSON.stringify(this.state.pendingOffer ?? null) === JSON.stringify(pending ?? null);
+    const needsClarification = () => (decision.confidence < this.threshold && !(decision.route === "continue_agent" && this.state.conversationId && (!pending || pending.kind === "close")) && !(decision.route === "dictate" && !this.state.conversationId && !pending)) ||
+      decision.route === "unclear";
+    // New speech only invalidates a close, a reply to an end/close question, or a result that would ask something new.
+    // Dictation and requests the user made are still applied; a response waits on the attention hold.
+    const applies = () => routing.stop === this.stopEpoch && ((!newSpeech() && offerUnchanged()) || (
+      pending?.kind !== "end_work" && pending?.kind !== "close" &&
+      (decision.route === "check_status" ? !!constrainedRequest && !!this.state.conversationId :
+        !needsClarification() && ["dictate","start_agent","continue_agent","no_action","suppress_note"].includes(decision.route))));
+    const appendToNotes = async () => {
+      if(this.thoughts && !/^(?:hey\s+)?moo[.!?,\s]*$/i.test(text) && ["dictate","start_agent","continue_agent","offer_help","unclear"].includes(decision.route)) {
+        for(const s of segments) await this.p.brain.setState(`thought-eligible:${s.id}`,true);
+        await this.thoughts.append(session.id,segments);
+      }
+    };
+    const retainOnly = async () => { if (pending?.kind !== "note_suppression") await appendToNotes(); };
+    if (!applies()) {
       await this.p.brain.putOperation({...operation, status:"done", error:"New speech superseded this routing result; source retained."});
       await this.p.brain.setState(`handled:${turnId}`, revisionKey);
+      await retainOnly();
       return;
     }
     // An ASR correction arriving during routing invalidates the old decision.
@@ -671,7 +696,7 @@ export class Agent {
         .join(",") !== revisionKey
     ) {
       await this.p.brain.putOperation({ ...operation, status: "done", error: "Superseded by a newer transcript revision" });
-      await this.handleTurn(turnId, sourceSessionId);
+      await this.handleTurn(turnId, sourceSessionId, routing);
       return;
     }
     if (pending && "recordId" in pending && pending.sourceRevision !== undefined &&
@@ -697,7 +722,7 @@ export class Agent {
     await this.p.brain.setState(`handled:${turnId}`, revisionKey);
     await this.p.brain.putOperation({ ...operation, status: "done" });
     await this.trace("route",{turnId,route:decision.route,confidence:decision.confidence});
-    if(speechEpoch!==this.speechEpoch)return;
+    if(!applies()) { await retainOnly(); return; }
     // A quoted command alone cannot authorize retention, even if J1 mislabels it.
     if(decision.route==="suppress_note" && pending?.kind!=="note_suppression") {
       const unquoted=text.replace(/"[^"]*"|“[^”]*”|‘[^’]*’|(?<!\p{L})'[^']*'(?!\p{L})|`[^`]*`/gu,"");
@@ -708,18 +733,27 @@ export class Agent {
       const result=retentionScope ? await this.thoughts?.suppress(session.id,pending?.kind==="note_suppression"?pending.proposalId:undefined,
         retentionScope,decision.confidence<this.threshold) : undefined;
       if(result?.status==="clarify") {
-        this.state.pendingOffer={kind:"note_suppression",proposalId:result.proposalId,question:result.question};
-        await this.persist();await this.say(result.question);
+        const offer={kind:"note_suppression" as const,proposalId:result.proposalId,question:result.question};
+        if(!await this.say(result.question,stillCurrent,()=>{this.state.pendingOffer=offer;}))
+          this.notice("Say “don’t save that” again when you’ve finished, and I’ll ask which note you mean.");
       } else {
-        this.state.pendingOffer=undefined;
+        if(offerUnchanged()) this.state.pendingOffer=undefined;
         await this.persist();
-        await this.say(result?.status==="suppressed" ? "I won’t keep a note of that. The transcript is retained." : "There isn’t a single current growing note to suppress. Please identify the thought you mean.");
+        const reply=result?.status==="suppressed" ? "I won’t keep a note of that. The transcript is retained." : "There isn’t a single current growing note to suppress. Please identify the thought you mean.";
+        if(!await this.say(reply,stillCurrent)) this.notice(reply);
       }
       return;
     }
     if(pending?.kind==="note_suppression") {
-      if(decision.route==="unclear" || decision.confidence<this.threshold) {await this.say(pending.question);return;}
-      this.state.pendingOffer=undefined;await this.persist();
+      if(decision.route==="unclear" && text.split(/\s+/).filter(Boolean).length>=4) {
+        if(offerUnchanged()) this.state.pendingOffer=undefined;
+        await this.persist();await appendToNotes();
+        this.notice("I’ll keep the note for now. Say “don’t save that” again if you still want it hidden.");
+        return;
+      }
+      if(decision.route==="unclear" || decision.confidence<this.threshold) {await this.say(pending.question,stillCurrent);return;}
+      if(offerUnchanged()) this.state.pendingOffer=undefined;
+      await this.persist();
       if(decision.route==="no_action") {await this.say("Okay. I’ll keep the note.");return;}
     }
     if (decision.route === "check_status" && this.state.conversationId) {
@@ -728,20 +762,17 @@ export class Agent {
         // this is user-requested work, not an automatic retry of a failed provider call.
         this.task?.abort();
         const conversationId=this.state.conversationId;
-        await this.say(this.state.webAllowed ? "I’ll continue with web research allowed." : "I’ll continue using only your notes and selected folders.");
-        if(speechEpoch===this.speechEpoch && conversationId===this.state.conversationId)
+        await this.say(this.state.webAllowed ? "I’ll continue with web research allowed." : "I’ll continue using only your notes and selected folders.",stillCurrent);
+        if(conversationId===this.state.conversationId)
           this.startResponse(conversationId,undefined,{...constrainedRequest,
             constraintTurns:[...(constrainedRequest.constraintTurns ?? []),{turnId,revisionKey,text}]});
         return;
       }
       const activity=this.attention?.previous ?? this.state.activity;
-      await this.say(this.state.busy ? activity === "searching" ? "I’m still searching for your request." : "I’m preparing the answer to your request." : this.state.lastError ? "I’m here. The last response could not finish; your request is saved." : "I’m here and listening.");
+      await this.say(this.state.busy ? activity === "searching" ? "I’m still searching for your request." : "I’m preparing the answer to your request." : this.state.lastError ? "I’m here. The last response could not finish; your request is saved." : "I’m here and listening.",stillCurrent);
       return;
     }
-    if(this.thoughts && !/^(?:hey\s+)?moo[.!?,\s]*$/i.test(text) && ["dictate","start_agent","continue_agent","offer_help","unclear"].includes(decision.route)) {
-      for(const s of segments) await this.p.brain.setState(`thought-eligible:${s.id}`,true);
-      await this.thoughts.append(session.id,segments);
-    }
+    await appendToNotes();
     if (previous?.error && this.state.lastError === previous.error) {
       this.state.lastError = undefined;
       await this.persist();
@@ -752,19 +783,21 @@ export class Agent {
     ) {
       // A clarification replaces the closing question; a later "yes" must not
       // inherit permission from a question that is no longer being asked.
-      if (pending?.kind === "close") {
+      if (pending?.kind === "close" && offerUnchanged()) {
         this.state.pendingOffer = undefined;
         await this.persist();
       }
       if (!this.state.conversationId && !pending) {
         const thought = await this.saveThought(segments);
-        this.state.pendingOffer = { kind: "clarification", recordId: thought.id };
-        await this.persist();
+        await this.say("Would you like Moo to answer that?", stillCurrent,
+          () => { this.state.pendingOffer = { kind: "clarification", recordId: thought.id }; });
+        return;
       }
       await this.say(
         this.state.conversationId
           ? "I saved that. Could you clarify what you want to do? This conversation is still open."
           : "Would you like Moo to answer that?",
+        stillCurrent,
       );
       return;
     }
@@ -773,12 +806,13 @@ export class Agent {
       await this.resolveEnding(decision);
       return;
     }
-    if (pending?.kind === "close") {
+    if (pending?.kind === "close" && offerUnchanged()) {
       this.state.pendingOffer = undefined;
       await this.persist();
     }
     if (decision.route === "no_action") {
-      this.state.pendingOffer = undefined;
+      // An offer created while J1 was running (for example by enrichment) stays pending (ACL-04).
+      if (offerUnchanged()) this.state.pendingOffer = undefined;
       await this.persist();
       if (pending && "recordId" in pending) {
         await this.p.brain.setState(`offered:${pending.recordId}`, true);
@@ -810,6 +844,7 @@ export class Agent {
       const record = await this.openConversation(
         segments,
         sourceId,
+        stillCurrent,
       );
       if (sourceId) {
         const source = await this.p.brain.getRecord(sourceId);
@@ -817,10 +852,8 @@ export class Agent {
         if (pending?.kind === "clarification") await this.queueEnrichment(sourceId);
       }
       if (acceptedHelp && pending && "recordId" in pending && (pending.kind === "help" || pending.screenQuestion)) {
-        this.startResponse(record.id, (signal) =>
-          this.answerSavedDoubt(record.id, pending.recordId, signal),
-          {sessionId:session.id,conversationId:record.id,turnId,revisionKey,text},
-        );
+        const request = {sessionId:session.id,conversationId:record.id,turnId,revisionKey,text};
+        this.startSavedDoubtHelp(record.id, pending.recordId, request);
       } else if (!/^\s*(?:hey\s+)?moo[.!?,\s]*$/i.test(text)) {
         this.startResponse(record.id, undefined, {sessionId:session.id,conversationId:record.id,turnId,revisionKey,text});
       }
@@ -831,31 +864,40 @@ export class Agent {
         ? await this.p.brain.getRecord(pending.recordId)
         : await this.saveThought(segments);
       if (thought) {
-        this.state.pendingOffer = { kind: "general_help", recordId: thought.id, sourceRevision: thought.sourceRevision,
+        const offer = { kind: "general_help" as const, recordId: thought.id, sourceRevision: thought.sourceRevision,
           ...(decision.screenHelp ? {screenQuestion: transcriptText(thought)} : {}) };
-        await this.p.brain.setState(`offered:${thought.id}`, true);
-        await this.persist();
         await this.queueEnrichment(thought.id);
-        await this.say(decision.screenHelp
+        const asked = await this.say(decision.screenHelp
           ? "Would you like me to look at your screen to help with that question?"
-          : "Would you like help with that? I'll wait for your answer.");
+          : "Would you like help with that? I'll wait for your answer.",
+          async () => !newSpeech() && offerUnchanged(),
+          () => { this.state.pendingOffer = offer; });
+        if (asked) await this.p.brain.setState(`offered:${thought.id}`, true);
+        else await retainOnly();
       }
       return;
     }
     if (this.state.conversationId) {
-      if (decision.route === "continue_agent") this.startResponse(this.state.conversationId, undefined, {sessionId:session.id,conversationId:this.state.conversationId,turnId,revisionKey,text});
+      if (decision.route === "continue_agent") {
+        const help = this.heldHelp;
+        if (help && help.conversationId === this.state.conversationId && help.signal === this.task?.signal && !help.signal.aborted && !help.captured)
+          this.startSavedDoubtHelp(help.conversationId, help.sourceId, {...help.request,
+            constraintTurns:[...(help.request.constraintTurns ?? []),{turnId,revisionKey,text}]});
+        else this.startResponse(this.state.conversationId, undefined, {sessionId:session.id,conversationId:this.state.conversationId,turnId,revisionKey,text});
+      }
       return;
     }
     if (decision.route !== "dictate") {
-      await this.say("Your words are saved. There is no active conversation to end or continue.");
+      await this.say("Your words are saved. There is no active conversation to end or continue.", stillCurrent);
       return;
     }
     if (pending?.kind === "clarification") await this.queueEnrichment(pending.recordId);
     if(this.thoughts) {
-      this.state.pendingOffer=undefined; await this.persist(); return;
+      if(offerUnchanged()) this.state.pendingOffer=undefined;
+      await this.persist(); return;
     }
     const record = await this.saveThought(segments);
-    this.state.pendingOffer = undefined;
+    if(offerUnchanged()) this.state.pendingOffer = undefined;
     await this.persist();
     await this.queueEnrichment(record.id);
   }
@@ -881,7 +923,7 @@ export class Agent {
     await this.p.brain.setState(key, [...refs, {id:record.id,at:this.p.now()}].slice(-5));
     return (await this.p.brain.getRecord(record.id))!;
   }
-  private async openConversation(segments: Segment[], sourceId?: string) {
+  private async openConversation(segments: Segment[], sourceId?: string, stillQuiet?: () => Promise<boolean>) {
     let record = this.state.conversationId
       ? await this.p.brain.getRecord(this.state.conversationId)
       : undefined;
@@ -913,7 +955,7 @@ export class Agent {
     this.state.pendingOffer = undefined;
     await this.persist();
     if (isNewConversation)
-      await this.say("I'm listening. Say ‘Moo, finish conversation’ when you're done.");
+      await this.say("I'm listening. Say ‘Moo, finish conversation’ when you're done.", stillQuiet);
     return record;
   }
   private async closeOfferCurrent(offer: Extract<NonNullable<AgentState["pendingOffer"]>, {kind: "close"}>) {
@@ -949,6 +991,10 @@ export class Agent {
     await this.closeConversation();
   }
   async resolveEnd(action: "finish" | "cancel" | "continue") {
+    if (this.state.pendingOffer?.kind !== "end_work") {
+      this.notice("There is no running work to finish or cancel. The conversation is still open.");
+      return;
+    }
     await this.resolveEnding({
       route: "end_agent",
       confidence: 1,
@@ -967,10 +1013,12 @@ export class Agent {
       return;
     }
     if (d.endAction === "cancel") {
-      this.taskEpoch++;
-      this.task?.abort();
-      this.state.busy = false;
-      if (this.state.conversationId) await this.p.brain.setState(`work-status:${this.state.conversationId}`, "Cancelled by user; unfinished work was not completed.");
+      if (this.state.busy) {
+        this.taskEpoch++;
+        this.task?.abort();
+        this.state.busy = false;
+        if (this.state.conversationId) await this.p.brain.setState(`work-status:${this.state.conversationId}`, "Cancelled by user; unfinished work was not completed.");
+      }
       await this.closeConversation();
       return;
     }
@@ -1013,8 +1061,9 @@ export class Agent {
       const source = await this.p.brain.getRecord(sourceId);
       if (!source) return;
       acceptedTurn = this.activeRequest ?? await this.latestUserTurn(conversationId);
-      const question = `Original request:\n${transcriptText(source)}\nAcceptance and added constraints:\n${acceptedTurn?.text ?? ""}`;
-      if (screenCaptureRevoked(acceptedTurn?.text ?? "")) {
+      const acceptance = [acceptedTurn?.text ?? "", ...(acceptedTurn?.constraintTurns ?? []).map(t => t.text)].filter(Boolean).join("\n");
+      const question = `Original request:\n${transcriptText(source)}\nAcceptance and added constraints:\n${acceptance}`;
+      if (screenCaptureRevoked(acceptance)) {
         await this.p.brain.setState(`context:${conversationId}`, `Original retained request:\n${transcriptText(source)}\nUser declined screen capture; no image was obtained. Ask for a description if needed.`);
         return;
       }
@@ -1026,6 +1075,7 @@ export class Agent {
       };
       helpCall = { id: `help:${conversationId}`, name: "capture_screen", arguments: { question, mode: "visual" } };
       await this.validateTool(helpCall, conversationId, new Set(), true);
+      if (this.heldHelp?.signal === signal) this.heldHelp.captured = true;
       const evidence = this.p.previewTool
         ? { executed: false, previewOnly: true, fixture: await this.p.previewTool(helpCall, { allowed: true }) }
         : await this.captureEvidence(conversationId, question, signal, current, "visual");
@@ -1045,18 +1095,24 @@ export class Agent {
       );
     }
   }
+  private startSavedDoubtHelp(conversationId: string, sourceId: string, request: UserTurnSnapshot) {
+    this.startResponse(conversationId, (signal) => this.answerSavedDoubt(conversationId, sourceId, signal), request);
+    this.heldHelp = {conversationId, sourceId, request, signal: this.task!.signal, captured: false};
+  }
   private startResponse(
     conversationId: string,
     before?: (signal: AbortSignal) => Promise<void>,
     request?: UserTurnSnapshot,
   ) {
     this.task?.abort();
-    this.releaseAttention();
+    // scheduleTurn releases the attention hold only when no newer speech arrived; a started response waits on it.
     this.state.narration=undefined;
     this.state.understoodRequest=undefined;
     this.activeRequest=request;
+    this.heldHelp=undefined;
     this.track(this.trace("response_started",{requestTurnId:request?.turnId}));
-    this.state.activity="preparing";
+    if (!this.attention) this.state.activity="preparing";
+    else this.attention.previous="preparing";
     const controller = new AbortController();
     this.task = controller;
     const epoch = ++this.taskEpoch;
@@ -1065,7 +1121,7 @@ export class Agent {
     this.endAfterWork = false;
     this.state.busy = true;
     this.state.lastError = undefined;
-    let verifiedClose: UserTurnSnapshot | undefined;
+    let verifiedClose: {snapshot: UserTurnSnapshot; epoch: number} | undefined;
     this.track(
       this.persist()
         .then(async () => {
@@ -1093,7 +1149,15 @@ export class Agent {
             await this.queueEnrichment(conversationId);
           }
           if (this.endAfterWork) await this.closeConversation();
-          else if (verifiedClose && await this.isLatestUserTurn(verifiedClose)) await this.requestEnd();
+          // A verified close still needs silence since the verification (MOO-030 on the hybrid path, ACL-02).
+          else if (verifiedClose && verifiedClose.epoch === this.speechEpoch && !this.attention && await this.isLatestUserTurn(verifiedClose.snapshot)) await this.requestEnd();
+          else if (this.state.pendingOffer?.kind === "end_work") {
+            // The finish/cancel/continue question no longer refers to running work (ACL-05).
+            this.state.pendingOffer = undefined;
+            await this.persist();
+            const ended = "The work ended. The conversation is still open.";
+            if (!await this.say(ended, async () => !this.attention)) this.notice(ended);
+          }
           else if (this.proposedCloseOffer?.epoch === epoch) await this.offerClose(this.proposedCloseOffer.turn);
           if (this.thoughts && !this.state.listening) this.track(this.consolidateThoughts(true));
         }),
@@ -1588,7 +1652,8 @@ export class Agent {
     return !!latest && latest.sessionId === snapshot.sessionId && latest.turnId === snapshot.turnId && latest.revisionKey === snapshot.revisionKey;
   }
   private async verifyClosure(snapshot: UserTurnSnapshot, reason: string, signal: AbortSignal) {
-    if (!(await this.isLatestUserTurn(snapshot)) || this.state.pendingOffer) return;
+    if (!(await this.isLatestUserTurn(snapshot)) || this.state.pendingOffer || this.attention) return;
+    const epoch = this.speechEpoch;
     const id = `verify-close:${snapshot.sessionId}:${snapshot.conversationId}:${snapshot.turnId}:${snapshot.revisionKey}`;
     if ((await this.p.brain.listOperations()).some(op => op.id === id)) return;
     const session = (await this.p.brain.getRecord(snapshot.sessionId))!;
@@ -1599,10 +1664,10 @@ export class Agent {
       // Deliberately exclude the assistant's proposal from J1's evidence.
       const decision = await this.p.decisions.route({ text: snapshot.text,
         recentContext: session.segments.filter(s => s.speaker === "user").slice(-20).map(s => `user: ${s.text}`).join("\n"), activeConversation: true }, signal);
-      const current = !signal.aborted && await this.isLatestUserTurn(snapshot) && !this.state.pendingOffer;
+      const current = !signal.aborted && epoch === this.speechEpoch && !this.attention && await this.isLatestUserTurn(snapshot) && !this.state.pendingOffer;
       await this.p.brain.setState(`closure-decision:${id}`, { decision, current });
       await this.p.brain.putOperation({ ...operation, status: "done", error: current ? undefined : "Superseded user turn or conversation" });
-      if (current && decision.route === "end_agent" && decision.confidence >= this.threshold) return snapshot;
+      if (current && decision.route === "end_agent" && decision.confidence >= this.threshold) return {snapshot, epoch};
     } catch (error) {
       await this.p.brain.putOperation({ ...operation, status: "failed", error: errorText(error) });
       this.notice("Closing verification failed. Your conversation remains open.");
