@@ -1,13 +1,13 @@
 name: Verify application
 on:
   push:
-    branches: [main, codex/agent-phase, codex/brain-phase]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: verify-${{ github.head_ref || github.ref_name }}
+  group: verify-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
   build-and-test:

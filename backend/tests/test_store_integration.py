@@ -9,6 +9,10 @@ import pytest
 from moolai_backend.providers import ServiceError
 from moolai_backend.store import PostgresStore
 
+# Locally the check is opt-in; in GitHub Actions a missing database is a configuration error, not a skip.
+if os.getenv('GITHUB_ACTIONS') == 'true' and not os.getenv('TEST_DATABASE_URL'):
+    pytest.fail('CI must provide TEST_DATABASE_URL for the real Postgres check', pytrace=False)
+
 
 @pytest.mark.skipif(not os.getenv('TEST_DATABASE_URL'), reason='TEST_DATABASE_URL is not configured')
 async def test_accept_replay_restart_conflict_and_concurrency(record):

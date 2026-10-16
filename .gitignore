@@ -27,3 +27,17 @@ obsidian-notes/
 !/docs/architecture.md
 !/docs/whisper-integration.md
 !/docs/whisper-artifacts.json
+
+# Experiments follow the same allowlist rule as docs/. A new experiment folder
+# stays local until it has been reviewed and added here.
+/experiments/*
+!/experiments/agent-closeout/
+!/experiments/agent-final-regression/
+!/experiments/brain-verification/
+!/experiments/canary-comparison/
+!/experiments/contextual-help/
+!/experiments/evaluation/
+!/experiments/fixtures/
+!/experiments/harness-comparison/
+!/experiments/j1-closing/
+!/experiments/router-harness/

@@ -1,5 +1,6 @@
 import httpx
 import pytest
+from fastapi.routing import APIRoute
 
 from moolai_backend.app import create_app
 from moolai_backend.settings import Settings
@@ -20,6 +21,25 @@ async def test_auth_health_unconfigured_models_and_no_secrets():
             assert result.json()['nebius']['verified'] is False
             assert 'local-test-token' not in result.text
             assert (await client.get('/docs')).status_code == 404
+
+
+async def test_every_api_route_requires_the_backend_token():
+    class UnusedStore:
+        async def accept(self, *_args):
+            pytest.fail('Unauthenticated request reached the store')
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(no_network)) as upstream:
+        app = create_app(Settings(backend_token='t'), http_client=upstream, store=UnusedStore())
+        routes = [route for route in app.routes if isinstance(route, APIRoute)]
+        assert {route.path for route in routes if not route.path.startswith('/v1/')} == {'/health'}
+        api = [(method, route.path) for route in routes if route.path.startswith('/v1/') for method in sorted(route.methods)]
+        assert len(api) >= 10
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            for method, path in api:
+                for headers in [{}, {'Authorization': 'Bearer wrong'}, {'Authorization': 't'}]:
+                    body = {} if method == 'POST' else None
+                    response = await client.request(method, path, headers=headers, json=body)
+                    assert response.status_code == 401, (method, path, headers, response.status_code)
 
 
 async def test_unconfigured_server_fails_closed():
