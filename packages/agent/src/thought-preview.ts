@@ -1,10 +1,11 @@
 import type { Segment } from "../../contracts/src/index.js";
+import { safeEnd } from "../../contracts/src/records.js";
 
 const compact = (value:string) => value.replace(/\s+/g," ").trim();
 const excerpt = (value:string, limit:number) => {
   if(value.length<=limit)return value;
-  const cut=value.slice(0,limit);const space=cut.lastIndexOf(" ");
-  return cut.slice(0,space>limit/2?space:limit).trimEnd()+"…";
+  const end=safeEnd(value,limit),cut=value.slice(0,end),space=cut.lastIndexOf(" ");
+  return cut.slice(0,space>limit/2?space:end).trimEnd()+"…";
 };
 const quote = (value:string) => value.replace(/([\\`*_{}\[\]<>#])/g,"\\$1");
 /** Extractive preview only: selected attributed source, never invented or marked as a Nano summary. */

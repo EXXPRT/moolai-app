@@ -14,6 +14,7 @@ import { resolveNoteReferences } from "./references.js";
 import { spokenAnswer, narrationDecision, compactToolOutcome, speechOutline, narratePoints, narrationReply, walkthroughOffer, requestsFullNarration } from "./response-output.js";
 import { validateEdit } from "../../contracts/src/workspace.js";
 import { transcriptText } from "../../contracts/src/index.js";
+import { safeEnd } from "../../contracts/src/records.js";
 import type {
   AcceptancePort,
   AgentEvent,
@@ -332,10 +333,13 @@ export class Agent {
   async recognitionContext() {
     const session = this.state.sessionId ? await this.p.brain.getRecord(this.state.sessionId) : undefined;
     const corrections = (session?.segments ?? []).filter(s => s.speaker === "user").slice(-12)
-      .flatMap(s => [...s.text.matchAll(/(?:I (?:said|meant)|the (?:word|term) is|correction[: ,]+)\s*([^.!?\n]{1,65})/gi)].map(m => m[1]));
+      .flatMap(s => [...s.text.matchAll(/(?:I (?:said|meant)|the (?:word|term) is|correction[: ,]+)\s*([^.!?\n]{1,65})/giu)].map(m => m[1]));
     const evidence = this.state.conversationId ? await loadEvidence(this.p.brain, this.state.conversationId) : undefined;
     const titles = [...(evidence?.notes.map(n => n.title) ?? []), ...(await this.recentDictation()).map(n => n.title)];
-    return [...new Set([this.state.currentSubject, ...corrections.reverse(), ...titles].filter(Boolean))].join(". ").slice(0, 400);
+    // The bridge bounds context in UTF-16 units; it must never end in, or carry, a lone surrogate.
+    const context = [...new Set([this.state.currentSubject, ...corrections.reverse(), ...titles].filter(Boolean))].join(". ")
+      .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+    return context.slice(0, safeEnd(context, 400));
   }
   async setSubject(subject: string) {
     this.state.currentSubject = subject.trim() || undefined;

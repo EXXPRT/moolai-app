@@ -1,6 +1,9 @@
 import type { BrainRecord, RecordPatch, RecordRevision, Segment } from "./index.js";
 
 export const copy = <T>(value: T): T => structuredClone(value);
+/** Cut points that never split a UTF-16 surrogate pair (a lone surrogate poisons durable records). */
+export const safeEnd = (text: string, end: number) => end>0 && end<text.length && /[\uD800-\uDBFF]/.test(text[end-1]!) ? end-1 : end;
+export const safeStart = (text: string, start: number) => start>0 && /[\uDC00-\uDFFF]/.test(text[start] ?? "") ? start+1 : start;
 
 function revisionContent(record: BrainRecord): string {
   // Acceptance can advance without a content revision. Compare persisted source
@@ -363,7 +366,8 @@ export function validateRecord(record: BrainRecord): void {
 
 /** A stable ID is a tool address, never a user-facing fallback title. */
 export function noteTitle(record: BrainRecord, peers: BrainRecord[] = []): string {
-  const title = record.title.trim() || (record.body || record.segments.find(s => s.speaker === "user")?.text || "Saved thought").replace(/\s+/g, " ").slice(0, 70);
+  const fallback = (record.body || record.segments.find(s => s.speaker === "user")?.text || "Saved thought").replace(/\s+/g, " ");
+  const title = record.title.trim() || fallback.slice(0, safeEnd(fallback, 70));
   return peers.some(r => r.id !== record.id && r.title.trim() === title)
     ? `${title} · ${record.createdAt.replace("T", " ").slice(0, 19)}` : title;
 }

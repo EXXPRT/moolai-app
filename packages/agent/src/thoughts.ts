@@ -2,6 +2,7 @@ import {plannedThoughts} from "./thought-planning.js";
 import type { BrainPort, BrainRecord, GenerationProvider, Segment, SourceSpan, ThoughtGroup, ThoughtInput, ThoughtResult, RecordPatch, LiveThoughtPreview } from "../../contracts/src/index.js";
 import { inputDigest } from "./evidence.js";
 import { thoughtPreview } from "./thought-preview.js";
+import { safeEnd, safeStart } from "../../contracts/src/records.js";
 
 interface BufferState {
   retentionRevision?: number;
@@ -58,8 +59,6 @@ function assertInputUnicode(value: unknown): void {
   if(typeof value==="string")assertUnicode(value);
   else if(value && typeof value==="object")for(const child of Object.values(value))assertInputUnicode(child);
 }
-const safeEnd = (text: string, end: number) => end>0 && end<text.length && /[\uD800-\uDBFF]/.test(text[end-1]!) ? end-1 : end;
-const safeStart = (text: string, start: number) => start>0 && /[\uDC00-\uDFFF]/.test(text[start] ?? "") ? start+1 : start;
 export function thoughtExcerpt(text: string, profile?: "compact"): {sourceExcerpt: string; sourceTruncated: boolean} {
   assertUnicode(text);
   const compact=profile==="compact";
