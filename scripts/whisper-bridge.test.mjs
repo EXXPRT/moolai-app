@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import WebSocket from 'ws';
-import { createWhisperBridge, decodeWhisper, pcmWav, repetitiveOutput, resamplePcm } from './whisper-bridge.mjs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { createWhisperBridge, decodeWhisper, pcmWav, repetitiveOutput, resamplePcm, whisperRequestPath } from './whisper-bridge.mjs';
+import { whisperServerArgs } from './start-asr.mjs';
 
 const config = { model: 'large-v3-turbo', language: 'en', initialPrompt: 'Moo.', port: 0, inferencePort: 8177,
   endpointSilenceMs: 100, maxUtteranceSeconds: 2, rmsThreshold: 0.008, preRollMs: 40 };
@@ -368,3 +371,26 @@ test('live preview is opt-in and final queue bounds remain enforced while previe
 test('direct bridge configuration cannot opt Whisper into unsupported preview cancellation', () => {
   assert.throws(() => createWhisperBridge({ ...config, livePreview: true }), /cancellation acknowledgements/);
 });
+
+test('Whisper routes live under a per-launch secret path that only the bridge receives', async () => {
+  const requestPath = '/' + 'a1'.repeat(16);
+  const args = whisperServerArgs({ model: 'model.bin', vad: 'vad.bin', config, requestPath });
+  assert.equal(args[args.indexOf('--request-path') + 1], requestPath);
+  assert.equal(args[args.indexOf('--host') + 1], '127.0.0.1');
+  assert.equal(whisperRequestPath(requestPath), requestPath);
+  for (const bad of [undefined, '', '/', '/health', '/' + 'a'.repeat(31), '/' + 'A1'.repeat(16), requestPath + '/x'])
+    assert.throws(() => whisperRequestPath(bad), /per-launch request path/, String(bad));
+  await decodeWhisper(pcm(100), config, { requestPath, fetchImpl: async url => {
+    assert.equal(url, `http://127.0.0.1:8177${requestPath}/inference`);
+    return Response.json({ text: 'Moo.' });
+  } });
+});
+
+test('the Whisper bridge refuses to start without its request path', () => {
+  const env = { ...process.env }; delete env.MOOLAI_WHISPER_REQUEST_PATH;
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./whisper-bridge.mjs', import.meta.url))],
+    { env, encoding: 'utf8', timeout: 10000 });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /per-launch request path/);
+});
+

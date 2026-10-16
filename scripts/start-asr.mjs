@@ -1,9 +1,9 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { access, constants, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { asrConfigPath, readAsrConfig } from './asr-config.mjs';
 import { existingAsr, requireFreePort } from './asr-service.mjs';
 
@@ -25,12 +25,19 @@ async function requireArtifact(artifact) {
   return filename;
 }
 
-async function ready(port, signal, timeoutMs = 60000) {
+/** Whisper's HTTP routes (including /load) answer only under a per-launch secret path, so web pages cannot reach them. */
+export function whisperServerArgs({ model, vad, config, requestPath }) {
+  return ['-m', model, '--host', '127.0.0.1', '--port', String(config.inferencePort), '--request-path', requestPath,
+    '-t', '8', '-l', config.language, '-fa', '-nf', '-bo', '1', '-bs', String(config.beamSize ?? 1), '--prompt', config.initialPrompt,
+    '--vad', '-vm', vad];
+}
+
+async function ready(port, signal, timeoutMs = 60000, route = '/health') {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     signal.throwIfAborted();
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.any([signal, AbortSignal.timeout(1000)]) });
+      const response = await fetch(`http://127.0.0.1:${port}${route}`, { signal: AbortSignal.any([signal, AbortSignal.timeout(1000)]) });
       if (response.ok) return;
     } catch { signal.throwIfAborted(); }
     await delay(150);
@@ -78,9 +85,9 @@ async function main() {
   const onSignal = () => stop();
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
-  function launch(name, executable, args, quiet = false) {
+  function launch(name, executable, args, quiet = false, env = {}) {
     const child = spawn(executable, args, { cwd: root,
-      env: { ...process.env, MOOLAI_ASR_CONFIG: asrConfigPath(root) },
+      env: { ...process.env, MOOLAI_ASR_CONFIG: asrConfigPath(root), ...env },
       stdio: quiet ? ['ignore', 'ignore', 'pipe'] : ['ignore', 'inherit', 'inherit'] });
     let diagnostic = '';
     child.stderr?.on('data', data => { diagnostic = (diagnostic + data).slice(-4000); });
@@ -92,11 +99,11 @@ async function main() {
   let failure;
   try {
     console.log(`Loading ${config.model} with Metal and Silero VAD...`);
-    launch('Whisper', server, ['-m', model, '--host', '127.0.0.1', '--port', String(config.inferencePort),
-      '-t', '8', '-l', config.language, '-fa', '-nf', '-bo', '1', '-bs', String(config.beamSize ?? 1), '--prompt', config.initialPrompt,
-      '--vad', '-vm', vad], true);
-    await ready(config.inferencePort, abort.signal);
-    launch('Speech bridge', process.execPath, [path.join(root, 'scripts/whisper-bridge.mjs')]);
+    const requestPath = '/' + randomBytes(16).toString('hex');
+    launch('Whisper', server, whisperServerArgs({ model, vad, config, requestPath }), true);
+    await ready(config.inferencePort, abort.signal, 60000, `${requestPath}/health`);
+    // The bridge receives the path through its environment; its own /health never reports it.
+    launch('Speech bridge', process.execPath, [path.join(root, 'scripts/whisper-bridge.mjs')], false, { MOOLAI_WHISPER_REQUEST_PATH: requestPath });
     await ready(config.port, abort.signal);
     console.log(`Local ASR ready: ${config.model} + Silero VAD at ws://127.0.0.1:${config.port}/v1/audio/transcriptions/realtime`);
     failure = await stopping;
@@ -121,4 +128,5 @@ async function main() {
   if (failure) throw failure;
 }
 
-main().catch(error => { console.error(error.message); process.exitCode = 1; });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+  main().catch(error => { console.error(error.message); process.exitCode = 1; });

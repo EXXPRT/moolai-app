@@ -48,13 +48,20 @@ export async function resamplePcm(pcm, sampleRate, { signal, spawnProcess = spaw
   });
 }
 
-export async function decodeWhisper(pcm16k, config, { signal, fetchImpl = fetch } = {}) {
+/** The per-launch Whisper route prefix from start-asr: '/' plus 32 hex characters. */
+export function whisperRequestPath(value) {
+  if (typeof value !== 'string' || !/^\/[0-9a-f]{32}$/.test(value))
+    throw new Error('Local Whisper needs its per-launch request path; start ASR with npm run asr');
+  return value;
+}
+
+export async function decodeWhisper(pcm16k, config, { signal, fetchImpl = fetch, requestPath = '' } = {}) {
   const form = new FormData();
   form.set('file', new Blob([pcmWav(pcm16k)], { type: 'audio/wav' }), 'in-memory.wav');
   const fields = { response_format: 'json', language: config.language, prompt: config.initialPrompt,
     temperature: '0', temperature_inc: '0', best_of: '1', beam_size: String(config.beamSize ?? 1), vad: 'true' };
   for (const [key, value] of Object.entries(fields)) form.set(key, String(value));
-  const response = await fetchImpl(`http://127.0.0.1:${config.inferencePort}/inference`, { method: 'POST', body: form, signal });
+  const response = await fetchImpl(`http://127.0.0.1:${config.inferencePort}${requestPath}/inference`, { method: 'POST', body: form, signal });
   if (!response.ok) throw new Error(`Local Whisper returned HTTP ${response.status}`);
   let bytes = 0; const chunks = [];
   for await (const part of response.body) {
@@ -292,7 +299,10 @@ export function createWhisperBridge(config, dependencies = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { readAsrConfig } = await import('./asr-config.mjs');
   const config = await readAsrConfig();
-  const bridge = createWhisperBridge(config);
+  // Keep the secret out of child processes (ffmpeg) and every response.
+  const requestPath = whisperRequestPath(process.env.MOOLAI_WHISPER_REQUEST_PATH);
+  delete process.env.MOOLAI_WHISPER_REQUEST_PATH;
+  const bridge = createWhisperBridge(config, { decode: (pcm, settings, options) => decodeWhisper(pcm, settings, { ...options, requestPath }) });
   await bridge.listen();
   console.log(JSON.stringify({ event: 'whisper_bridge_ready', url: `ws://127.0.0.1:${config.port}${REALTIME_PATH}`, model: config.model, audioFilesCreated: false }));
   for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { void bridge.close().then(() => process.exit(0)); });
