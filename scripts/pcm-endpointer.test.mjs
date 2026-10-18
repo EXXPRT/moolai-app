@@ -52,12 +52,32 @@ test('retained buffers are owned: later caller mutation cannot rewrite the utter
   assert.deepEqual(received[0].pcm, original);
 });
 
-test('invalid payloads and resource overflow fail instead of silently dropping captured audio', () => {
-  const endpoint = new PcmEndpointer({ ...config, maxUtteranceSeconds: 0.02 }, 16000, () => assert.fail('No partial success'));
+test('invalid payloads fail; speech with no gap is split at the limit and never dropped', () => {
+  const received = [];
+  const endpoint = new PcmEndpointer({ ...config, maxUtteranceSeconds: 0.1 }, 16000, u => received.push(u));
   assert.throws(() => endpoint.push(Buffer.alloc(3)), /even byte/);
-  const raw = Buffer.alloc(1280); for (let i = 0; i < raw.length; i += 2) raw.writeInt16LE(2000, i);
-  assert.throws(() => endpoint.push(raw), /duration limit/);
-  endpoint.discard();
+  const raw = Buffer.alloc(8000); for (let i = 0; i < raw.length; i += 2) raw.writeInt16LE(2000, i);
+  endpoint.push(raw); endpoint.commit();
+  assert.deepEqual(received.map(u => u.trigger), ['limit', 'limit', 'commit']);
+  assert.deepEqual(received.map(u => u.utteranceSequence), [1, 2, 3]);
+  assert.ok(received.every(u => u.pcm.length <= 3200), 'No utterance exceeds the limit');
+  assert.deepEqual(Buffer.concat(received.map(u => u.pcm)), raw);
+});
+
+test('reading aloud with only sentence gaps ends at a gap once the utterance is long (MOO-074)', () => {
+  const received = [];
+  const endpoint = new PcmEndpointer({ ...config, maxUtteranceSeconds: 4 }, 16000, u => received.push(u));
+  const tone = ms => { const b = Buffer.alloc(ms * 32); for (let i = 0; i < b.length; i += 2) b.writeInt16LE(2000, i); return b; };
+  const parts = [];
+  for (let i = 0; i < 8; i++) parts.push(tone(800), Buffer.alloc(400 * 32));
+  parts.push(tone(800));
+  const raw = Buffer.concat(parts);
+  endpoint.push(raw); endpoint.commit();
+  assert.ok(received.length >= 3);
+  assert.ok(received[0].pcm.length >= 0.75 * 4 * 32000, 'Sentence gaps do not end a short utterance');
+  assert.ok(received.slice(0, -1).every(u => u.trigger === 'pause'), 'Long utterances end at a sentence gap, not at the limit');
+  assert.ok(received.every(u => u.pcm.length <= 4 * 32000));
+  assert.deepEqual(Buffer.concat(received.map(u => u.pcm)), raw, 'Every captured sample reaches ASR once');
 });
 
 test('comparison reports speed and segmentation risks separately, never an invented accuracy gain', () => {

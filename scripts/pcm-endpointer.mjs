@@ -1,5 +1,10 @@
 // Energy endpointing only, not a speech classifier. Keep analysis frames independent
 // of transport packets so packet size cannot change which audio reaches ASR.
+// Reading aloud rarely pauses for the full endpoint. Past three quarters of the utterance limit a
+// sentence gap ends the utterance; at the limit it is emitted as it stands and the next frame starts
+// a new one, so continuous speech is split and never dropped (MOO-074).
+const LONG_UTTERANCE_SHARE = 0.75;
+const SENTENCE_GAP_MS = 300;
 export class PcmEndpointer {
   constructor(config, sampleRate, onUtterance, onPreview) {
     this.config = config;
@@ -69,9 +74,11 @@ export class PcmEndpointer {
     this.chunks.push(Buffer.from(frame)); this.bytes += frame.length;
     this.silenceSamples = voiced ? 0 : this.silenceSamples + frame.length / 2;
     if (voiced) this.lastVoicedSample = this.samples;
-    if (this.bytes > this.sampleRate * 2 * this.config.maxUtteranceSeconds)
-      throw new Error('Local ASR utterance exceeded its configured duration limit. Use Send or pause; this capture was not committed.');
-    if (this.silenceSamples * 1000 >= this.sampleRate * this.config.endpointSilenceMs) this.emit('pause');
+    const limit = this.sampleRate * 2 * this.config.maxUtteranceSeconds;
+    const endpointMs = this.bytes >= limit * LONG_UTTERANCE_SHARE
+      ? Math.min(SENTENCE_GAP_MS, this.config.endpointSilenceMs) : this.config.endpointSilenceMs;
+    if (this.silenceSamples * 1000 >= this.sampleRate * endpointMs) this.emit('pause');
+    else if (this.bytes + this.frameBytes > limit) this.emit('limit');
     else if (voiced && this.onPreview && !this.committed &&
       (this.samples - this.startSample - this.previewSamples) * 1000 >= this.sampleRate * (this.config.previewIntervalMs ?? 2000)) {
       this.previewSamples = this.samples - this.startSample;

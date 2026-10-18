@@ -127,10 +127,15 @@ test('abandoned unconfigured clients expire without decoding or preventing the n
   assert.equal(decodes, 1); assert.equal(fresh.events.some(e => e.type === 'error'), false);
 });
 
-test('duration overflow fails visibly and never reports a successful commit', async t => {
-  const { connect } = await harness(t, { maxUtteranceSeconds: 0.1 });
-  const c = await connect(); await c.configure(); c.socket.send(pcm(120));
-  const error = await c.wait('error'); assert.match(error.error.message, /duration limit/); assert.equal(c.events.some(e => e.type === commit), false);
+test('speech past the duration limit is split into finals and the capture stays open (MOO-074)', async t => {
+  const lengths = [];
+  const { connect } = await harness(t, { maxUtteranceSeconds: 0.1 }, { decode: async raw => { lengths.push(raw.length); return 'Moo, a complete thought.'; } });
+  const c = await connect(); await c.configure(); c.socket.send(pcm(150));
+  await c.wait(completed);
+  c.send({ type: 'input_audio_buffer.commit' }); await c.wait(commit);
+  assert.deepEqual(lengths, [3200, 1600]);
+  assert.equal(c.events.filter(e => e.type === completed).length, 2);
+  assert.equal(c.events.some(e => e.type === 'error'), false);
 });
 
 test('pending work is bounded; overload aborts active decoding instead of an unbounded queue', async t => {
