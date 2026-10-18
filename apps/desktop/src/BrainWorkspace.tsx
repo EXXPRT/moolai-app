@@ -4,6 +4,7 @@ import type { BrainRecord, BrainQuery, LiveThoughtPreview, RecordPatch } from ".
 import { noteTitle, queryRecords } from "../../../packages/contracts/src/records.js";
 import { connectionDismissals, connectionsFor, originalSources, readerError, sourceGroups } from "./note-reader.js";
 import { useLiveNoteFollow } from "./useLiveNoteFollow.js";
+import { sessionHubs } from "./session-hubs.js";
 
 const Graph = lazy(() => import("./BrainGraph.js"));
 type Api = NonNullable<Window["moolai"]>;
@@ -129,7 +130,7 @@ export function BrainWorkspace({ records, api, refresh, requestedNote, processin
           {!notes.length ? <p className="recent-empty">{activeFilters ? "No thoughts match these filters." : "Your saved thoughts will appear here."}</p> : null}
         </div>
       </aside>
-      <div className="graph-area"><Suspense fallback={<p className="hint">Opening your connections…</p>}><Graph records={notes} record={record} onSelect={select} overview /></Suspense></div>
+      <div className="graph-area"><Suspense fallback={<p className="hint">Opening your connections…</p>}><Graph records={notes} record={record} onSelect={select} sessions={sessionHubs(records, notes)} overview /></Suspense></div>
       {record ? <article key={record.id} ref={inspector} className="brain-document" aria-label="Note inspector" onKeyDown={event => { if (event.key === "Escape" && !editor) close(); }}>
         <div className="inspector-header"><h3>{noteTitle(record, records)}</h3><button className="icon-button close-inspector" aria-label="Close note" title="Close note" onClick={close}>×</button></div>
         <div className="view-switch" role="tablist" aria-label="Note views">
