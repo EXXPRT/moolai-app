@@ -6,7 +6,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {MemoryBrain,SQLiteBrain} from '../../brain/src/index.js';
-import type {AcceptancePort,BrainPort,ThoughtInput,ThoughtResult} from '../../contracts/src/index.js';
+import type {AcceptancePort,BrainPort,RouteInput,ThoughtInput,ThoughtResult} from '../../contracts/src/index.js';
 import {Agent} from '../src/index.js';
 import {BackendProviders,FixtureProviders} from '../../agent-host/src/providers.js';
 
@@ -16,17 +16,20 @@ for(const kind of ['memory','sqlite']) {
   async function rig(options:{acceptance?:AcceptancePort}={}) {
     const dir=await mkdtemp(join(tmpdir(),'moolai-sessions-'));
     let brain:BrainPort=kind==='memory'?new MemoryBrain():new SQLiteBrain(dir);
-    const p=new FixtureProviders();let n=0;const organized:ThoughtInput[]=[];
-    let hold:Promise<void>|undefined,failWith:Error|undefined;
+    const p=new FixtureProviders();let n=0;const organized:ThoughtInput[]=[];const routes:RouteInput[]=[];const spoken:string[]=[];
+    let hold:Promise<void>|undefined,answerHold:Promise<void>|undefined,failWith:Error|undefined;
     const consolidate=p.consolidate.bind(p);
     p.consolidate=async(input):Promise<ThoughtResult>=>{organized.push(input);if(hold)await hold;if(failWith)throw failWith;return consolidate(input);};
+    const route=p.route.bind(p);p.route=async input=>{routes.push(structuredClone(input));return route(input);};
+    const respond=p.respond.bind(p);p.respond=async messages=>{if(answerHold)await answerHold;return respond(messages);};
     const make=()=>new Agent({brain,decisions:p,generation:p,search:p,vision:p,acceptance:options.acceptance,
-      capture:{async capture(){throw Error('unused')}},speech:{async speak(){},async stop(){}},id:()=>`${kind}-${++n}`,now});
+      capture:{async capture(){throw Error('unused')}},speech:{async speak(text){spoken.push(text);},async stop(){}},id:()=>`${kind}-${++n}`,now});
     let agent=make();await agent.initialize();
     const sessions=async()=>(await brain.listRecords()).filter(r=>r.kind==='session').map(r=>r.id);
     const buffer=async(id:string)=>await brain.getState<{spans:unknown[];status?:string;error?:string}>(`thought-buffer:${id}`);
-    return {get brain(){return brain},get agent(){return agent},organized,sessions,buffer,
+    return {get brain(){return brain},get agent(){return agent},organized,routes,spoken,sessions,buffer,
       hold(){let release!:()=>void;hold=new Promise<void>(r=>release=r);return ()=>{hold=undefined;release();};},
+      holdAnswer(){let release!:()=>void;answerHold=new Promise<void>(r=>release=r);return ()=>{answerHold=undefined;release();};},
       fail(error?:Error){failWith=error;},
       /** New calls run normally; a call already held (the crashed one) never completes. */
       unhold(){hold=undefined;},
@@ -67,6 +70,52 @@ for(const kind of ['memory','sqlite']) {
       await t.agent.stopSession();await t.agent.drain();
       await Promise.all([t.agent.startSession(),t.agent.startSession()]);
       assert.equal((await t.sessions()).length,2,'One new session, not two');
+    }finally{await t.close();}
+  });
+
+  test(`${kind}: Start quietly closes a conversation left open by the previous session (MOO-075)`,async()=>{
+    const t=await rig();try{
+      await t.agent.startSession();
+      await t.agent.submitText('Moo, explain glycolysis.');await t.agent.drain();
+      const conversation=t.agent.getState().conversationId!;
+      assert.ok(conversation,'The request opened a conversation');
+      await t.agent.stopSession();await t.agent.drain();
+      assert.equal(t.agent.getState().conversationId,conversation,'Stop keeps the conversation open');
+      await t.agent.startSession();
+      assert.equal(t.agent.getState().conversationId,undefined,'Start closes it');
+      assert.ok(await t.brain.getRecord(conversation),'Its transcript is kept');
+      assert.ok(!t.spoken.some(s=>/Conversation closed/.test(s)),'Closing at Start is not announced aloud');
+      await t.agent.submitText('Glycolysis makes two ATP.');await t.agent.drain();
+      assert.equal(t.routes.at(-1)!.activeConversation,false,'New dictation is not routed as a reply');
+    }finally{await t.close();}
+  });
+
+  test(`${kind}: after a restart, Start closes the conversation recovered from before (MOO-075)`,async()=>{
+    const t=await rig();try{
+      await t.agent.startSession();
+      await t.agent.submitText('Moo, explain glycolysis.');await t.agent.drain();
+      const conversation=t.agent.getState().conversationId!;
+      await t.restart();
+      assert.equal(t.agent.getState().conversationId,conversation,'The open conversation is recovered');
+      await t.agent.startSession();
+      assert.equal(t.agent.getState().conversationId,undefined);
+      await t.agent.submitText('Glycolysis makes two ATP.');await t.agent.drain();
+      assert.equal(t.routes.at(-1)!.activeConversation,false);
+    }finally{await t.close();}
+  });
+
+  test(`${kind}: a conversation whose answer is still being prepared stays open across Stop and Start`,async()=>{
+    const t=await rig();try{
+      await t.agent.startSession();
+      const release=t.holdAnswer();
+      const asking=t.agent.submitText('Moo, explain glycolysis.');
+      for(let i=0;i<100 && !t.agent.getState().busy;i++) await new Promise(r=>setTimeout(r,2));
+      assert.equal(t.agent.getState().busy,true,'The answer is being prepared');
+      const conversation=t.agent.getState().conversationId!;
+      await t.agent.stopSession();await t.agent.startSession();
+      assert.equal(t.agent.getState().conversationId,conversation,'The answer keeps its conversation');
+      release();await asking;await t.agent.drain();
+      assert.ok((await t.brain.getRecord(conversation))!.segments.some(s=>s.speaker==='assistant'),'The answer is saved');
     }finally{await t.close();}
   });
 

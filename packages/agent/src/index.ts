@@ -317,6 +317,9 @@ export class Agent {
     this.opening = (async () => {
       if (!this.state.sessionId || !this.state.listening) {
         const previous = this.state.sessionId;
+        // A new session starts without the previous conversation, which would otherwise turn new dictation into a
+        // reply (MOO-075). One whose answer is still being prepared stays open for that answer.
+        if (this.state.conversationId && !this.state.busy) await this.closeConversation(false);
         const id = this.p.id();
         await this.p.brain.createRecord({ id, kind: "session", createdAt: this.p.now() });
         this.state.sessionId = id;
@@ -1064,7 +1067,7 @@ export class Agent {
       );
     } else await this.closeConversation();
   }
-  private async closeConversation() {
+  private async closeConversation(announce = true) {
     if (this.closing) return this.closing;
     const id = this.state.conversationId;
     if (!id) return;
@@ -1079,7 +1082,8 @@ export class Agent {
       this.endAfterWork = false;
       this.state.webAllowed = true;
       await this.persist();
-      await this.say("Conversation closed. Your transcript is saved.");
+      if (announce) await this.say("Conversation closed. Your transcript is saved.");
+      else this.notice("The previous conversation was closed for this session. Its transcript is saved.");
     })().finally(() => { this.closing = undefined; });
     return this.closing;
   }

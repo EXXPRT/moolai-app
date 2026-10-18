@@ -6,7 +6,8 @@ export type Case = {id:string;text:string|null;context?:string;expected:'open'|'
 export async function prepare(brain:BrainPort, item:Case, policy:'current'|'contextual') {
   const f=rig(brain,'paired');
   let release:()=>void=()=>{};
-  f.agent=new Agent({...f.options,closingPolicy:'contextual'});
+  const options={...f.options,closingPolicy:'contextual' as 'current'|'contextual'};
+  f.agent=new Agent(options);
   f.hooks.generation.respond=async()=>item.context==='closing'
     ? {text:'The two ideas are saved separately.',toolCalls:[],controlProposal:{action:'offer_close',reason:'The requested explanation is complete.'}}
     : {text:item.context==='task'?'Would you like the shorter version?':'The two ideas are saved separately.',toolCalls:[]};
@@ -14,13 +15,14 @@ export async function prepare(brain:BrainPort, item:Case, policy:'current'|'cont
   await f.agent.submitText('Moo, help me distinguish these two study ideas.');await f.agent.drain();
   // Both methods see exactly the same stored dialogue, including the closing question.
   // Only the candidate retains the typed question state. No expected labels reach J1.
+  // The policy is switched on the same instance: a restart would end the session, and the next Start closes the
+  // conversation (MOO-075). The closing question stays in the session that receives the reply.
+  options.closingPolicy=policy;
   const state=f.agent.getState();
   if(policy==='current'&&state.pendingOffer?.kind==='close') {
+    (f.agent as unknown as {state:typeof state}).state.pendingOffer=undefined;
     state.pendingOffer=undefined;await brain.setState('agent',state);
   }
-  // Switching policy needs a fresh Agent. Each Start after a restart opens a new session, so the contextual policy keeps
-  // its instance and the closing question stays in the session that receives the reply.
-  if(policy!=='contextual'){f.agent=new Agent({...f.options,closingPolicy:policy});await f.agent.initialize();await f.agent.drain();await f.agent.startSession();}
   f.hooks.generation.respond=async()=>({text:'The requested follow-up is retained.',toolCalls:[]});
   if(item.context==='busy') {
     let entered!:()=>void;const started=new Promise<void>(r=>entered=r);
