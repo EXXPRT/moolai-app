@@ -67,10 +67,12 @@ for(const kind of ['memory','sqlite'] as const) {
       await t.ask('Moo, research enzymes on the web.',call('search-a','search_web',{query:'enzymes'}),answer('Found three sources.'));
       const own=t.frames.filter(frame=>frame.request===1).at(-1)!;
       assert.match(JSON.stringify(own.messages),/SNIPPET_enzymes_0/,'The result is in its tool message');
-      assert.doesNotMatch(own.messages[0]!.content,/"callId":"search-a"/,'and not again as a receipt in the same request');
+      assert.doesNotMatch(own.messages[0]!.content,/example\.test\/enzymes/,'and not again as a receipt in the same request');
       await t.ask('Open the second result.',call('extract-b','extract_web',{urls:['https://example.test/enzymes/1']}),answer('It explains enzyme kinetics.'));
       assert.deepEqual(t.extracted,[['https://example.test/enzymes/1']],'A URL from the earlier search may be opened');
-      assert.match(t.frames.filter(frame=>frame.request===2)[0]!.messages[0]!.content,/"callId":"search-a"/,'The later request sees the receipt');
+      const later=t.frames.filter(frame=>frame.request===2)[0]!.messages[0]!.content;
+      assert.match(later,/example\.test\/enzymes\/0/,'The later request sees the receipt');
+      assert.doesNotMatch(later,/callId|requestTurnId/,'Bookkeeping fields are not shown to the model');
     }finally{await t.close();}
   });
 

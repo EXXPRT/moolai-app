@@ -33,6 +33,13 @@ function retainedOutcome(outcome: unknown, requestTurnIds: readonly string[] = [
   }};
   return outcome;
 }
+/** Call, request and time bookkeeping stays in storage. Shown to the model, it was copied into a printed tool
+ * call instead of a real one (19 Oct paid check). */
+function modelFacing(outcome: unknown): unknown {
+  if (!outcome || typeof outcome !== 'object') return outcome;
+  const {callId: _call, requestTurnId: _turn, at: _at, ...shown} = outcome as Record<string, unknown>;
+  return shown;
+}
 /** Pages an earlier web search in this conversation returned may be opened by a follow-up (ATR-11). */
 export async function earlierSearchUrls(brain: BrainPort, id: string) {
   const index = await brain.getState<EvidenceIndex>(`evidence-index:${id}`) ?? {refs: [], outcomes: []};
@@ -70,7 +77,7 @@ export async function loadEvidence(brain: BrainPort, id: string, local?: LocalFi
   const recentOutcomes = (webAllowed ? index.outcomes : index.outcomes.filter(outcome =>
     !outcome || typeof outcome !== 'object' || !('tool' in outcome) || !['search_web','extract_web'].includes(String(outcome.tool)))
   ).filter((outcome: any) => !(typeof outcome?.callId === 'string' && runCallIds.has(outcome.callId)))
-    .map(outcome => retainedOutcome(outcome, requestTurnIds));
+    .map(outcome => modelFacing(retainedOutcome(outcome, requestTurnIds)));
   return {notes, files, unavailableFiles, recentOutcomes};
 }
 export async function rememberEvidence(brain: BrainPort, id: string, event: ExperimentToolEvent,
