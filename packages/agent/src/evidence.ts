@@ -33,11 +33,20 @@ function retainedOutcome(outcome: unknown, requestTurnIds: readonly string[] = [
   }};
   return outcome;
 }
-/** Call, request and time bookkeeping stays in storage. Shown to the model, it was copied into a printed tool
- * call instead of a real one (19 Oct paid check). */
+/** Call, request and time bookkeeping stays in storage, and web and screen receipts reach the model as one
+ * sentence. Shown as tool-shaped JSON, Ultra copied them into a printed tool call instead of calling the
+ * tool (19 Oct paid check, MOO-059). */
 function modelFacing(outcome: unknown): unknown {
   if (!outcome || typeof outcome !== 'object') return outcome;
-  const {callId: _call, requestTurnId: _turn, at: _at, ...shown} = outcome as Record<string, unknown>;
+  const {callId: _call, requestTurnId: _turn, at: _at, ...shown} = outcome as Record<string, any>;
+  const result = shown.result;
+  if ((shown.tool === 'search_web' || shown.tool === 'extract_web') && Array.isArray(result?.pages))
+    return `Earlier ${shown.tool === 'search_web' ? 'web search' : 'page reading'}${typeof shown.query === 'string' ? ` for "${cut(shown.query, 200)}"` : ''}, `+
+      `receipt only (page text not kept; fetch again only if this request needs it): ` +
+      (result.pages.map((page: any) => `${page.title || 'Untitled'} <${page.url}>${page.characters ? ` (${page.characters} characters)` : ''}`).join('; ') || 'no pages');
+  if (shown.tool === 'capture_screen' && typeof result?.source === 'string')
+    return `Earlier screen reading captured ${result.capturedAt ?? 'earlier'}${typeof result.observationCount === 'number' ? ` with ${result.observationCount} observations` : ''}; `+
+      'its values were not kept and do not describe the screen now. A new screen capture needs a new user request.';
   return shown;
 }
 /** Pages an earlier web search in this conversation returned may be opened by a follow-up (ATR-11). */

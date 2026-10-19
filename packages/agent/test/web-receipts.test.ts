@@ -83,8 +83,9 @@ for(const kind of ['memory','sqlite'] as const) {
       await t.ask('What is on my screen now?',answer('I would need a new screenshot.'));
       const next=t.frames.filter(frame=>frame.request===2)[0]!;
       assert.doesNotMatch(JSON.stringify(next.messages),/A-17/);
-      assert.match(next.messages[0]!.content,/capturedAt/);
+      assert.match(next.messages[0]!.content,/Earlier screen reading captured 2026-10-19T09:00:00Z/);
       assert.match(next.messages[0]!.content,/new screen capture needs a new user request/);
+      assert.doesNotMatch(next.messages[0]!.content,/"tool":"capture_screen"/,'A receipt is a sentence, not a tool-shaped object');
     }finally{await t.close();}
   });
 
@@ -96,7 +97,8 @@ for(const kind of ['memory','sqlite'] as const) {
       const loaded=JSON.stringify((await loadEvidence(t.brain,'old')).recentOutcomes);
       assert.doesNotMatch(loaded,/RAW_SNIPPET|RAW_BODY/);
       assert.match(loaded,/example\.test\/a/);
-      assert.match(loaded,/"characters":16000/);
+      assert.match(loaded,/16000 characters/);
+      assert.doesNotMatch(loaded,/"tool":"(?:search|extract)_web"/,'A receipt is a sentence, not a tool-shaped object');
       assert.ok(!loaded.includes('A'.repeat(121)),'Titles are cut to 120 characters');
     }finally{await t.close();}
   });
@@ -109,7 +111,7 @@ for(const kind of ['memory','sqlite'] as const) {
       assert.match(JSON.stringify((await loadEvidence(t.brain,'conversation',undefined,true,['turn-1'])).recentOutcomes),/A-17/);
       const other=JSON.stringify((await loadEvidence(t.brain,'conversation',undefined,true,['turn-2'])).recentOutcomes);
       assert.doesNotMatch(other,/A-17/);
-      assert.match(other,/"capturedAt":"2026-10-19T09:00:00Z"/);
+      assert.match(other,/captured 2026-10-19T09:00:00Z/);
       await rememberEvidence(t.brain,'conversation',{call:{id:'web',name:'search_web',arguments:{query:'q'}},status:'success',result:[]},{requestTurnId:'turn-2',at});
       assert.doesNotMatch(JSON.stringify(await t.brain.getState('evidence-index:conversation')),/A-17/,'A later request stores only the receipt');
     }finally{await t.close();}
