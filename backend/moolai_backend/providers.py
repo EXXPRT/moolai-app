@@ -20,6 +20,9 @@ from .request_lifetime import dispatch_checkpoint
 from .prompts import instruction
 
 logger = logging.getLogger(__name__)
+# One constant drives the units organizer's schema, prompt and validator. The opt-in compact format and the
+# planner stay at 1,000 characters (14 Oct scope). Re-adopting 4,000 is gated (decision 9).
+GROUP_SUMMARY_CHARS = 1000
 
 
 class _DeliveredSpokenPoint(SpokenPoint):
@@ -954,7 +957,7 @@ class NebiusProvider:
             .replace('_TopLevelThoughtResult', 'ThoughtWireResult'))
         if item.incremental:
             schema['properties']['groups']['maxItems'] = 6
-            schema['$defs']['ThoughtWireGroup']['properties']['summary']['maxLength'] = 1000
+            schema['$defs']['ThoughtWireGroup']['properties']['summary']['maxLength'] = GROUP_SUMMARY_CHARS
         if top_level:
             if item.incremental:
                 schema['properties']['groups']['minItems'] = 1
@@ -973,7 +976,7 @@ class NebiusProvider:
                 for child in value: strict(child)
         strict(schema)
         prompt = self._thought_topic_instructions(top_level=top_level) + (
-            'In incremental mode return at most six groups, each summary at most 1000 characters; put any remaining units '
+            f'In incremental mode return at most six groups, each summary at most {GROUP_SUMMARY_CHARS} characters; put any remaining units '
             'in remainder for the next bounded request. If finalize=true, cover every unit in at most six groups. '
             'In legacy mode (incremental=false), keep the last unfinished topic in remainder unless finalize=true. '
             'Every unit ID must appear exactly once, in original order, in groups followed by remainder. '
@@ -990,7 +993,7 @@ class NebiusProvider:
             ordered = [u for group in result.groups for u in group.unitIds] + result.remainder
             if ordered != list(span_by_id) or (item.finalize and result.remainder):
                 raise ValueError('Organization must partition all source units in order')
-            if item.incremental and (len(result.groups)>6 or any(len(g.summary)>1000 for g in result.groups)):
+            if item.incremental and (len(result.groups)>6 or any(len(g.summary)>GROUP_SUMMARY_CHARS for g in result.groups)):
                 raise ValueError('Incremental output exceeds its bounded group budget')
             if top_level:
                 if item.incremental and not result.groups:

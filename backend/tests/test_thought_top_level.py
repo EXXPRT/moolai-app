@@ -178,3 +178,18 @@ async def test_complete_request_bound_is_unchanged_and_checked_before_dispatch()
     async with httpx.AsyncClient(transport=httpx.MockTransport(unexpected)) as client:
         with pytest.raises(ServiceError, match='32,000-byte limit'):
             await NebiusProvider(Gateway(settings, client)).consolidate(item)
+
+
+@pytest.mark.parametrize('bound', [1000, 4000])
+async def test_one_constant_drives_schema_prompt_and_validator(bound, monkeypatch):
+    # Re-adopting a longer group summary is one constant, never three literals drifting apart (BGN-10).
+    from moolai_backend import providers
+    monkeypatch.setattr(providers, 'GROUP_SUMMARY_CHARS', bound)
+    for length, accepted in ((bound, True), (bound + 1, False), (1001, bound >= 1001)):
+        reply = output()
+        reply['groups'][0]['summary'] = 'x' * length
+        result, body = await execute(thought(), reply)
+        schema = body['response_format']['json_schema']['schema']
+        assert schema['$defs']['ThoughtWireGroup']['properties']['summary']['maxLength'] == bound
+        assert f'each summary at most {bound} characters' in body['messages'][0]['content']
+        assert isinstance(result, ServiceError) is (not accepted), (length, result)
