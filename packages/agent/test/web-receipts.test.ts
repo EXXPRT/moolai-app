@@ -71,7 +71,8 @@ for(const kind of ['memory','sqlite'] as const) {
       await t.ask('Open the second result.',call('extract-b','extract_web',{urls:['https://example.test/enzymes/1']}),answer('It explains enzyme kinetics.'));
       assert.deepEqual(t.extracted,[['https://example.test/enzymes/1']],'A URL from the earlier search may be opened');
       const later=t.frames.filter(frame=>frame.request===2)[0]!.messages[0]!.content;
-      assert.match(later,/example\.test\/enzymes\/0/,'The later request sees the receipt');
+      assert.match(later,/\[2\] Result 1 for enzymes <https:\/\/example\.test\/enzymes\/1>/,'The later request sees numbered results');
+      assert.match(later,/open its URL with extract_web/);
       assert.doesNotMatch(later,/callId|requestTurnId/,'Bookkeeping fields are not shown to the model');
     }finally{await t.close();}
   });
