@@ -243,9 +243,10 @@ test('a response completed after session stop is consolidated without losing ass
  assert.equal(agent.getState().listening,false);await brain.close();
 });
 
-// Organization continues while Moo answers, except for the request being answered: its tool outcomes can still
-// change the organizer context, so that turn waits for its answer (BGN-02, 16 Oct 2026).
-test('background organization publishes and connects earlier speech while Moo is still answering; the request waits for its answer',async()=>{
+// Background organization waits while Moo answers, so an answer that read a growing note is not discarded when
+// that note changes (decision 5, 19 Oct 2026; this reverses the 2 Oct rule). The held pass runs once the answer ends,
+// and the request is organized with its answer (BGN-02).
+test('background organization waits while Moo answers, then publishes and connects earlier speech with the request and answer',async()=>{
   const brain=new MemoryBrain(),p=new FixtureProviders();let n=0,release!:(v:any)=>void;
   p.respond=()=>new Promise(r=>release=r);
   p.connect=async(_r,c)=>Object.fromEntries(c.map(note=>[note.id,.95]));
@@ -254,12 +255,12 @@ test('background organization publishes and connects earlier speech while Moo is
   await agent.initialize();await agent.startSession();await agent.submitText('Hamstring muscles run down the back of the thigh.');
   await agent.submitText('Moo, explain hamstring anatomy.');while(!release)await new Promise(r=>setTimeout(r,1));
   assert.equal(agent.getState().busy,true);await agent.consolidateThoughts();
+  assert.ok(!(await brain.listRecords()).some(r=>r.thoughtStatus==='growing' && r.summary),'Nothing is organized while Moo answers');
+  release({text:'Hamstrings flex the knee.',toolCalls:[]});await agent.drain();
   let note=(await brain.listRecords()).find(r=>r.thoughtStatus==='growing')!;
-  assert.ok(note?.summary,'Summary is published before the answer finishes');const id=note.id;
+  assert.ok(note?.summary,'The held pass runs once the answer ends, without another request');const id=note.id;
   for(let i=0;i<30 && (await brain.getRecord(id))?.connectionStatus==='pending';i++)await new Promise(r=>setTimeout(r,1));
   assert.ok((await brain.getRecord(id))!.links.some(l=>l.targetId===prior.id && l.decision==='accepted'));
-  assert.ok(!(await brain.getRecord(id))!.segments.some(s=>/explain hamstring anatomy/.test(s.text)),'The request is not organized mid-answer');
-  release({text:'Hamstrings flex the knee.',toolCalls:[]});await agent.drain();await agent.consolidateThoughts();await agent.drain();
   note=(await brain.getRecord(id))!;
   assert.ok(note.segments.some(s=>/explain hamstring anatomy/.test(s.text)) && note.segments.some(s=>s.speaker==='assistant'),'The request and answer are organized afterwards');
   assert.equal((await brain.listRecords()).filter(r=>r.thoughtStatus==='growing').length,1);

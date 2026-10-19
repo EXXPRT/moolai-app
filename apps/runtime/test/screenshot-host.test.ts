@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {MemoryBrain, SQLiteBrain} from '../../../packages/brain/src/index.js';
 import {createAgentHost, FixtureProviders} from '../../../packages/agent-host/src/index.js';
 import type {ChatMessage, AgentReply, VisionEvidence} from '../../../packages/contracts/src/index.js';
+import {captureOptions} from '../src/capture-options.js';
 
 // Exercise the real host, NativeBridge protocol, Agent and persistence without
 // opening a microphone, capturing the desktop or calling a model provider.
@@ -104,3 +105,85 @@ createInterface({input:process.stdin}).on('line',line=>{
     });
   }
 }
+
+// Blocker 5: the desktop leaves its own window out of screen help, and says so only when the companion confirms it.
+for (const companion of ['current', 'older'] as const) {
+  test(`screenshot host asks the ${companion} companion to leave Moolai out and reports only what it confirms`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'moolai-screen-scope-'));
+    const nativePath = join(directory, 'companion.mjs');
+    await writeFile(nativePath, `#!${process.execPath}
+import {createInterface} from 'node:readline';
+const params=[];
+createInterface({input:process.stdin}).on('line',line=>{
+ const c=JSON.parse(line);let result={};
+ if(c.method==='capture'){
+  params.push(c.params ?? {});
+  result={mimeType:'image/png',dataBase64:Buffer.from([137,80,78,71]).toString('base64'),
+   ...(${JSON.stringify(companion)}==='current' && (c.params?.excludeBundleIds ?? []).length ? {excludedApplications:['Electron']} : {})};
+ }
+ if(c.method==='health')result={params,listening:false,requestedOn:false};
+ console.log(JSON.stringify({id:c.id,result}));
+});`, {mode: 0o700});
+    const brain = new MemoryBrain();
+    const frames: ChatMessage[][] = [];
+    let generation = 0;
+    const providers = Object.assign(new FixtureProviders(), {
+      async respond(messages: ChatMessage[]): Promise<AgentReply> {
+        frames.push(structuredClone(messages));
+        return ++generation === 1
+          ? {text: '', toolCalls: [{id: 'capture-1', name: 'capture_screen', arguments: {question: 'Read the weight.', mode: 'ocr'}}]}
+          : {text: 'Weight is 82 kg.', toolCalls: []};
+      },
+      async interpret(): Promise<VisionEvidence> {
+        return {raw: '', observations: [{field: 'Weight', status: 'readable', value: '82 kg', label: 'Weight', sourceExcerpt: 'Weight 82 kg'}],
+          interpretation: '', validated: true, validationErrors: []};
+      },
+    });
+    const host = await createAgentHost({brain, providers, nativePath, onEvent() {}, ...captureOptions('live'),
+      speech: {async warm() {}, async speak() {}, async stop() {}, close() {}}, waitForAsr: async () => {throw Error('Recognition must stay off');}});
+    try {
+      await host.agent.submitText('Moo, take a screenshot and read the weight.');
+      await host.agent.drain();
+      const health = await host.nativeHealth() as {params: {excludeBundleIds?: string[]}[]};
+      assert.deepEqual(health.params, [{excludeBundleIds: ['com.github.Electron']}]);
+      const context = JSON.stringify(frames[1]);
+      if (companion === 'current') assert.match(context, /not captured: the Moolai window/);
+      else assert.doesNotMatch(context, /not captured/, 'An older companion that ignores the request is not claimed to have left anything out');
+    } finally {
+      await host.close(); await brain.close(); await rm(directory, {recursive: true, force: true});
+    }
+  });
+}
+
+test('desktop fixture mode never asks the companion for a real screenshot (FU1-11)', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'moolai-screen-fixture-'));
+  const nativePath = join(directory, 'companion.mjs');
+  await writeFile(nativePath, `#!${process.execPath}
+import {createInterface} from 'node:readline';
+const methods=[];
+createInterface({input:process.stdin}).on('line',line=>{
+ const c=JSON.parse(line);methods.push(c.method);
+ console.log(JSON.stringify({id:c.id,result:c.method==='health'?{methods,listening:false,requestedOn:false}:{}}));
+});`, {mode: 0o700});
+  const brain = new MemoryBrain();
+  let generation = 0;
+  const providers = Object.assign(new FixtureProviders(), {
+    async respond(): Promise<AgentReply> {
+      return ++generation === 1
+        ? {text: '', toolCalls: [{id: 'capture-1', name: 'capture_screen', arguments: {question: 'Read the weight.', mode: 'ocr'}}]}
+        : {text: 'Done.', toolCalls: []};
+    },
+  });
+  const host = await createAgentHost({brain, providers, nativePath, onEvent() {}, ...captureOptions('fixture'),
+    speech: {async warm() {}, async speak() {}, async stop() {}, close() {}}, waitForAsr: async () => {throw Error('Recognition must stay off');}});
+  try {
+    await host.agent.submitText('Moo, take a screenshot and read the weight.');
+    await host.agent.drain();
+    const conversation = (await brain.getRecord(host.agent.getState().conversationId!))!;
+    assert.equal(conversation.attachmentIds.length, 1, 'The simulated image is kept as the attachment');
+    const health = await host.nativeHealth() as {methods: string[]};
+    assert.ok(!health.methods.includes('capture'));
+  } finally {
+    await host.close(); await brain.close(); await rm(directory, {recursive: true, force: true});
+  }
+});

@@ -10,6 +10,7 @@ import type { AgentEvent } from "../../../packages/contracts/src/index.js";
 import { BackendProviders, FixtureProviders } from "./providers.js";
 import { createAgentHost } from "../../../packages/agent-host/src/index.js";
 import { createRuntimeServer } from "./server.js";
+import { captureOptions } from "./capture-options.js";
 import { acquireRuntimeOwnership } from "./ownership.js";
 import { readAsrConfig } from "../../../scripts/asr-config.mjs";
 
@@ -52,6 +53,7 @@ const host = await createAgentHost({
       root,
       "native/build/Moolai Native.app/Contents/MacOS/MoolaiNative",
     ),
+  ...captureOptions(mode),
   onEvent: (event) => emit(event),
 });
 const { agent } = host;

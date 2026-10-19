@@ -157,6 +157,7 @@ class RouteDecision(WireModel):
     endAction: Literal['finish', 'cancel', 'continue'] | None = None
     substantiveText: str | None = None
     substantiveContentProbability: Probability | None = None
+    doubt: Probability | None = None
 
 
 class TagInput(WireModel):

@@ -17,7 +17,7 @@ npm run build:native
 MOOLAI_MODE=fixture npm run desktop
 ```
 
-The desktop starts the independent Agent runtime when needed. Type a thought and press **Send**. Try “Moo, help me understand this note,” followed by more turns, then **Finish conversation**. Fixture mode exercises saving, routing and UI behavior with clearly marked simulated generation; it is not a model-quality test.
+The desktop starts the independent Agent runtime when needed. Type a thought and press **Send**. Try “Moo, help me understand this note,” followed by more turns, then **Finish conversation**. Fixture mode exercises saving, routing and UI behavior with clearly marked simulated generation; it is not a model-quality test. Screen help in fixture mode uses a simulated image and never takes a real screenshot.
 
 The runtime can run without Electron:
 

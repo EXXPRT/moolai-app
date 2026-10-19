@@ -13,7 +13,7 @@ import {FixtureProviders} from '../../agent-host/src/providers.js';
 const at='2026-10-16T10:00:00.000Z';
 const seg=(id:string,text:string):Segment=>({id,turnId:id,revision:1,speaker:'user',text,final:true,createdAt:at});
 for(const kind of ['memory','sqlite']) {
-  async function rig() {
+  async function rig(options:{legacy?:boolean}={}) {
     const dir=await mkdtemp(join(tmpdir(),'moolai-onset-'));
     const brain:BrainPort=kind==='memory'?new MemoryBrain():new SQLiteBrain(dir);
     const p=new FixtureProviders();let n=0,captures=0;
@@ -27,7 +27,9 @@ for(const kind of ['memory','sqlite']) {
     };
     p.respond=async messages=>{requests.push(String(messages.at(-1)?.content));return {text:'Here is a complete answer to that request.',toolCalls:[]};};
     const vision={async interpret(_image:{mimeType:string;dataBase64:string},question:string){visionQuestions.push(question);return p.interpret();}};
-    const agent=new Agent({brain,decisions:p,generation:p,search:p,vision,
+    // Legacy mode (no organizer) is the only one where enrichment still makes help offers.
+    const generation=options.legacy?{summarize:(r:Parameters<typeof p.summarize>[0])=>p.summarize(r),respond:(...a:Parameters<typeof p.respond>)=>p.respond(...a)}:p;
+    const agent=new Agent({brain,decisions:p,generation,search:p,vision,
       capture:{async capture(){captures++;return {mimeType:'image/png',bytes:new Uint8Array([137,80,78,71])};}},
       speech:{async speak(text){spoken.push(text);},async stop(){}},id:()=>`id-${++n}`,now:()=>at});
     await agent.initialize();await agent.startSession();
@@ -96,12 +98,16 @@ for(const kind of ['memory','sqlite']) {
     }finally{await r.close();}
   });
 
+  // With growing notes, J1 decides doubt offers on the spoken turn and enrichment never offers (blocker 5),
+  // so this race remains only without the organizer, where J7 enrichment can offer while J1 routes.
   test(`${kind}: a help offer created while J1 routes later dictation survives (ACL-04)`,async()=>{
-    const r=await rig();try{
-      r.p.tag=async i=>({purpose:'Question',purposeConfidence:1,topics:{},doubt:JSON.stringify(i.record).includes('sky')?1:0,relevant:undefined,faithful:1,understandable:1});
-      await r.turn('A',"I don't understand why the sky is blue.");await r.agent.drain();
+    const r=await rig({legacy:true});try{
+      let tagged!:()=>void;const tagGate=new Promise<void>(res=>tagged=res);
+      r.p.tag=async i=>{await tagGate;return {purpose:'Question',purposeConfidence:1,topics:{},doubt:JSON.stringify(i.record).includes('sky')?1:0,relevant:undefined,faithful:1,understandable:1};};
+      r.overrides["I don't understand why the sky is blue."]={route:'dictate',confidence:1};
+      await r.turn('A',"I don't understand why the sky is blue.");
       const entered=r.gate();const b=r.turn('B','Next, the lecture covered refraction.');await entered();
-      await r.agent.consolidateThoughts(true);
+      tagged();
       for(let i=0;i<200 && !r.agent.getState().pendingOffer;i++) await new Promise(res=>setTimeout(res,5));
       assert.ok(r.agent.getState().pendingOffer,'Enrichment offers help while J1 runs');
       r.resolve({route:'dictate',confidence:1});await b;await r.agent.drain();

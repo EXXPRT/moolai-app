@@ -51,3 +51,12 @@ test("offline help replies require an actual pending offer", async () => {
   assert.equal((await fixture.route({ ...idle, text: "Yes." })).route, "unclear");
   assert.equal((await fixture.route({ ...idle, pendingOffer: { kind: "end_work" }, text: "Maybe." })).route, "unclear");
 });
+
+test("offline fixtures flag a specific dictated doubt, never vague confusion, and only on idle turns", async () => {
+  assert.equal((await fixture.route({ ...idle, text: "I'm not sure why sample A's minimum is lower." })).doubt, 1);
+  assert.equal((await fixture.route({ ...idle, text: "What's even going on?" })).doubt, 0);
+  assert.equal((await fixture.route({ ...idle, text: "I'm confused." })).doubt, 0);
+  assert.equal((await fixture.route({ ...idle, text: "The goalpost is 5m wide." })).doubt, 0);
+  assert.equal((await fixture.route({ ...idle, activeConversation: true, text: "I'm not sure why." })).doubt, undefined);
+  assert.equal((await fixture.route({ ...idle, text: "I'm not sure why.", pendingOffer: { kind: "clarification", recordId: "r" } })).doubt, undefined);
+});

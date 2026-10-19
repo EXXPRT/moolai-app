@@ -217,6 +217,8 @@ export interface RouteDecision {
   substantiveText?: string;
   /** Probability that a closing utterance also contains a substantive request or constraint. */
   substantiveContentProbability?: number;
+  /** Probability that an idle dictated turn states the user's own specific study doubt; used only to offer screen help. */
+  doubt?: number;
 }
 export interface TagInput {
   record: BrainRecord;
@@ -321,7 +323,8 @@ export interface VisionProvider {
   ): Promise<VisionEvidence | string>;
 }
 export interface CapturePort {
-  capture(): Promise<{ mimeType: string; bytes: Uint8Array }>;
+  /** `excluded` names what the capturing host confirms it left out of the image. */
+  capture(): Promise<{ mimeType: string; bytes: Uint8Array; excluded?: string[] }>;
 }
 export interface SpeechPort {
   speak(text: string): Promise<void>;

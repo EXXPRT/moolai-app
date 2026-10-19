@@ -263,12 +263,15 @@ export class FixtureProviders
     if (input.activeConversation && !input.pendingOffer && /^(?:moo|are you there|are you still (?:there|searching|working))[?!.\s]*$/i.test(input.text.trim())) return {route:"check_status",confidence:1};
     if (input.activeConversation)
       return { route: "continue_agent", confidence: 1 };
+    // Idle turns carry J1's doubt answer; only a specific stated doubt counts, never vague confusion.
+    const doubt = input.pendingOffer ? undefined : /\b(?:not sure why|(?:do not|don[’']t) understand why)\b/i.test(text) ? 1 : 0;
+    const assessed = doubt === undefined ? {} : { doubt };
     if (
       /^(?:what[’']s (?:even )?going on|i (?:do not|don[’']t) understand(?: this)?|i[’']m confused)[.!?\s]*$/i.test(
         text,
       )
     )
-      return { route: "offer_help", confidence: 1 };
+      return { route: "offer_help", confidence: 1, ...assessed };
     if (
       /^(?:(?:hey\s+)?moo\b|(?:can|could|would) you\b|please (?:explain|help|find|show|tell|summari[sz]e)\b|(?:explain|help me|tell me|show me)\b)/i.test(
         text,
@@ -281,7 +284,7 @@ export class FixtureProviders
       )
     )
       return { route: "unclear", confidence: 1 };
-    return { route: "dictate", confidence: 1 };
+    return { route: "dictate", confidence: 1, ...assessed };
   }
   async summarize(record: BrainRecord) {
     const user = record.segments

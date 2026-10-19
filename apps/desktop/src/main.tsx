@@ -325,10 +325,10 @@ function App() {
                   ? "Would you like help with your saved doubt? Accepting captures your main display for context."
                   : "Would you like help with that? Your thought is saved. Moo will wait for your answer."}
               </p>
-              <button onClick={() => void act("/api/input", { text: "Yes" })}>
+              <button disabled={working} onClick={() => void act("/api/input", { text: "Yes" })}>
                 Yes, help me
               </button>
-              <button onClick={() => void act("/api/input", { text: "No" })}>
+              <button disabled={working} onClick={() => void act("/api/input", { text: "No" })}>
                 Keep it for later
               </button>
             </div>
@@ -351,6 +351,7 @@ function App() {
               {["Finish", "Cancel", "Continue"].map((choice) => (
                 <button
                   key={choice}
+                  disabled={working}
                   onClick={() =>
                     void act("/api/end/resolve", {
                       action: choice.toLowerCase(),

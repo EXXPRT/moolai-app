@@ -284,6 +284,18 @@ def validate_vision(raw: str, mode: str | None = None) -> VisionEvidence:
             label_words = set(label.split()) - generic
             if not field_words or not label_words or not field_words.intersection(label_words):
                 issues.append('visible label does not support the named field')
+            # The visual path has no copied header/row support (FU1-02). A table-shaped excerpt, or a field
+            # qualifier the label lacks, cannot supply a value; the OCR path keeps its own table checks.
+            if mode != 'ocr':
+                if '|' in (observation.sourceExcerpt or '') or '\t' in (observation.sourceExcerpt or ''):
+                    issues.append('table excerpt has no aligned header/row support')
+                canon = {'min': 'minimum', 'max': 'maximum'}
+                qualifiers = {'minimum', 'maximum', 'planned', 'actual', 'start', 'end', 'target', 'observed',
+                              'lower', 'upper', 'initial', 'final', 'before', 'after', 'expected'}
+                wanted = {canon.get(word, word) for word in field_words} & qualifiers
+                shown = {canon.get(word, word) for word in label_words} & qualifiers
+                if wanted - shown:
+                    issues.append('named field qualifier is missing from the visible label')
             # A readable claim contradicted by the model's own field-specific
             # limitation must not supply a partial identifier as a complete one.
             limitations = extraction.interpretation + ' ' + (extraction.scene.limitation if extraction.scene else '')
@@ -378,7 +390,8 @@ class JevProvider:
     def __init__(self, gateway: Gateway):
         self.gateway = gateway
 
-    async def evaluate(self, state: dict, questions: dict) -> dict:
+    async def evaluate(self, state: dict, questions: dict, optional: tuple[str, ...] = ()) -> dict:
+        """An optional question's missing or invalid answer is dropped; it never fails the required ones."""
         settings = self.gateway.settings
         data = await self.gateway.request('TypeSafe', 'https://api.typesafe.ai/v1/systemone',
             settings.typesafe_api_key, {
@@ -388,24 +401,34 @@ class JevProvider:
         if data.get('model') != settings.jev_model:
             raise ServiceError('TypeSafe served a different or unidentified model')
         answers = data.get('answers')
-        if not isinstance(answers, dict) or set(questions) - set(answers):
+        if not isinstance(answers, dict) or set(questions) - set(optional) - set(answers):
             raise ServiceError('TypeSafe returned incomplete answers')
+        checked = {}
         for name, question in questions.items():
-            answer = answers[name]
-            if not isinstance(answer, dict) or answer.get('type') != question['type']:
-                raise ServiceError('TypeSafe returned an invalid answer type')
-            if question['type'] == 'noul':
-                probability(answer.get('noul'))
-            else:
-                if answer.get('choice') not in question['criteria']:
-                    raise ServiceError('TypeSafe returned an unknown choice')
-                probability(answer.get('confidence'))
-                distribution = answer.get('probabilities')
-                if not isinstance(distribution, dict) or set(distribution) != set(question['criteria']):
-                    raise ServiceError('TypeSafe returned an incomplete choice distribution')
-                if abs(sum(probability(item) for item in distribution.values()) - 1) > 0.02:
-                    raise ServiceError('TypeSafe returned an invalid choice distribution')
-        return answers
+            try:
+                if name not in answers:
+                    raise ServiceError('TypeSafe returned incomplete answers')
+                answer = answers[name]
+                if not isinstance(answer, dict) or answer.get('type') != question['type']:
+                    raise ServiceError('TypeSafe returned an invalid answer type')
+                if question['type'] == 'noul':
+                    probability(answer.get('noul'))
+                else:
+                    if answer.get('choice') not in question['criteria']:
+                        raise ServiceError('TypeSafe returned an unknown choice')
+                    probability(answer.get('confidence'))
+                    distribution = answer.get('probabilities')
+                    if not isinstance(distribution, dict) or set(distribution) != set(question['criteria']):
+                        raise ServiceError('TypeSafe returned an incomplete choice distribution')
+                    if abs(sum(probability(item) for item in distribution.values()) - 1) > 0.02:
+                        raise ServiceError('TypeSafe returned an invalid choice distribution')
+            except (ServiceError, ValueError, TypeError) as error:
+                if name not in optional:
+                    raise
+                logger.warning('Optional answer dropped: question=%s reason=%s', name, error)
+                continue
+            checked[name] = answers[name]
+        return checked
 
     async def route(self, item: RouteInput) -> RouteDecision:
         pending_kind = item.pendingOffer.kind if item.pendingOffer else None
@@ -528,6 +551,18 @@ class JevProvider:
                     'This independent assessment does not decide whether the conversation should close.'
                 ),
             }
+        if not item.activeConversation and not item.pendingOffer:
+            # The saved-doubt screen offer is decided on the newly spoken idle turn, in this same request.
+            questions['doubt'] = {
+                'type': 'noul',
+                'instructions': (
+                    'Does latestUserUtterance, newly spoken by the user, state the user\'s own specific unresolved '
+                    'doubt about something they are studying, for example why a value, step or claim is the way it is? '
+                    'Diffuse or general confusion with no specific object, such as what is even going on, does not count. '
+                    'Quoted, reported, hypothetical or rhetorical questions, assistant text and questions already '
+                    'answered in recentContext are not new user doubts. This independent assessment does not choose the route.'
+                ),
+            }
         if accepting_help:
             questions['route']['criteria']['accept_help'] = (
                 'User accepts the currently pending offer to help with the linked saved thought, for example '
@@ -554,12 +589,14 @@ class JevProvider:
         # explicit and place it after background history on the provider wire.
         state['recentContext'] = item.recentContext
         state['latestUserUtterance'] = item.text
-        answers = await self.evaluate(state, questions)
+        answers = await self.evaluate(state, questions, optional=('doubt',))
         route = answers['route']
         accepted_help = route['choice'] == 'accept_help'
         result = RouteDecision(route='start_agent' if accepted_help else 'offer_help' if route['choice'] == 'offer_screen_help' else route['choice'],
                                confidence=route['confidence'], helpAccepted=True if accepted_help else None,
                                screenHelp=True if route['choice'] == 'offer_screen_help' else None)
+        if 'doubt' in answers:
+            result.doubt = answers['doubt']['noul']
         if result.route == 'end_agent' and 'substantive_content' in answers:
             result.substantiveContentProbability = answers['substantive_content']['noul']
         if 'end_action' in answers and result.route != 'suppress_note':

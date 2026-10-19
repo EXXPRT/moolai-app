@@ -160,7 +160,7 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
                 recognitionContext = String((params["text"] as? String ?? "").prefix(400))
                 if socket != nil && configured { try await sendJSON(["type": "session.context", "context": recognitionContext]) }
                 result = ["updated": true]
-            case "capture": result = try await capture()
+            case "capture": result = try await capture(excludeBundleIds: params["excludeBundleIds"] as? [String] ?? [])
             default: throw NativeFailure(message: "Unknown native method")
             }
             emit(["id": id, "result": result])
@@ -382,6 +382,8 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
     private func fail(_ message: String) {
         socketError = message
         stopCapture()
+        // A failed capture leaves no socket behind, so the next stop succeeds (HRV-01).
+        disconnect()
         listening = false
         for output in assembler.cancelPending(reason: message) { emit(output) }
         diagnostic("capture_error", ["message": message])
@@ -517,7 +519,7 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
         Task { @MainActor in self.outputOnlyFinished(utterance) }
     }
 
-    private func capture() async throws -> [String: Any] {
+    private func capture(excludeBundleIds: [String]) async throws -> [String: Any] {
         guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
             throw NativeFailure(message: "Screen Recording permission is required for the requested screenshot. Enable Moolai Native in System Settings > Privacy & Security > Screen & System Audio Recording.")
         }
@@ -530,12 +532,14 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
         config.width = Int(Double(display.width) * scale)
         config.height = Int(Double(display.height) * scale)
         config.showsCursor = false
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        // The host's own app is left out by bundle id; the result names only what was actually excluded.
+        let excluded = content.applications.filter { excludeBundleIds.contains($0.bundleIdentifier) }
+        let filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         guard let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
             throw NativeFailure(message: "Screenshot encoding failed")
         }
-        return ["mimeType": "image/png", "dataBase64": png.base64EncodedString()]
+        return ["mimeType": "image/png", "dataBase64": png.base64EncodedString(), "excludedApplications": excluded.map { $0.applicationName }]
     }
 }
 

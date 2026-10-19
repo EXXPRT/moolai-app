@@ -14,7 +14,7 @@ import { resolveNoteReferences } from "./references.js";
 import { spokenAnswer, narrationDecision, compactToolOutcome, speechOutline, narratePoints, narrationReply, walkthroughOffer, requestsFullNarration } from "./response-output.js";
 import { validateEdit } from "../../contracts/src/workspace.js";
 import { transcriptText } from "../../contracts/src/index.js";
-import { safeEnd } from "../../contracts/src/records.js";
+import { safeEnd, safeStart } from "../../contracts/src/records.js";
 import type {
   AcceptancePort,
   AgentEvent,
@@ -127,7 +127,8 @@ export class Agent {
   private thoughts?: ThoughtConsolidator;
   private attention?: { done: Promise<void>; release: () => void; timer: ReturnType<typeof setTimeout>; previous?: AgentState['activity'] };
   private activeRequest?: UserTurnSnapshot;
-  private heldHelp?: { conversationId: string; sourceId: string; request: UserTurnSnapshot; signal: AbortSignal; captured: boolean };
+  private thoughtsHeld = false;
+  private heldHelp?: { conversationId: string; sourceId: string; request: UserTurnSnapshot; signal: AbortSignal; captured: boolean; mode: "ocr" | "visual" };
   private get timeZone() { return this.p.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone; }
   private async trace(action: string, detail: Record<string,unknown> = {}) {
     await this.serial(async()=> {
@@ -308,6 +309,9 @@ export class Agent {
   }
   async consolidateThoughts(finalize = false, retry = false) {
     await this.writes;
+    // A background pass waits while Moo answers, so an answer that read a growing note is not
+    // discarded when that note changes underneath it (ACA-06). It runs once the answer ends.
+    if(this.state.busy && !finalize && !retry) { this.thoughtsHeld = true; return; }
     if(this.state.sessionId) await this.thoughts?.process(this.state.sessionId,finalize,retry);
   }
   /** A study session runs from Start to Stop; quitting or restarting also ends it. Each Start opens a new session record. */
@@ -741,7 +745,7 @@ export class Agent {
       await this.p.brain.putOperation({...operation, status: "done", error: "Pending request was corrected; fresh acceptance required."});
       await this.p.brain.setState(`handled:${turnId}`, revisionKey);
       if (updated) this.state.pendingOffer = {...pending, sourceRevision: updated.sourceRevision,
-        screenQuestion: pending.screenQuestion ? transcriptText(updated) : undefined};
+        screenQuestion: pending.screenQuestion ? boundedScreenText(updated) : undefined};
       else this.state.pendingOffer = undefined;
       await this.persist();
       await this.say("The saved request changed. Would you like help with the corrected request" + (pending.screenQuestion ? " using a fresh screenshot?" : "?"));
@@ -757,7 +761,8 @@ export class Agent {
     }
     await this.p.brain.setState(`handled:${turnId}`, revisionKey);
     await this.p.brain.putOperation({ ...operation, status: "done" });
-    await this.trace("route",{turnId,route:decision.route,confidence:decision.confidence});
+    await this.trace("route",{turnId,route:decision.route,confidence:decision.confidence,
+      ...(decision.doubt !== undefined ? {doubt:decision.doubt} : {})});
     if(!applies()) { await retainOnly(); return; }
     // A quoted command alone cannot authorize retention, even if J1 mislabels it.
     if(decision.route==="suppress_note" && pending?.kind!=="note_suppression") {
@@ -825,6 +830,15 @@ export class Agent {
       }
       if (!this.state.conversationId && !pending) {
         const thought = await this.saveThought(segments);
+        // J1 is unsure of the action but confident this is the user's own study doubt: spoken doubts mostly
+        // route this way, so the clarifying question becomes the screen offer (blocker 5, 19 Oct J1 check).
+        if (this.statesDoubt(decision)) {
+          const offer = { kind: "help" as const, recordId: thought.id, sourceRevision: thought.sourceRevision, screenQuestion: boundedScreenText(thought) };
+          if (!this.thoughts) await this.queueEnrichment(thought.id);
+          if (await this.say(SAVED_DOUBT_OFFER, stillCurrent, () => { this.state.pendingOffer = offer; }))
+            await this.p.brain.setState(`offered:${thought.id}`, true);
+          return;
+        }
         await this.say("Would you like Moo to answer that?", stillCurrent,
           () => { this.state.pendingOffer = { kind: "clarification", recordId: thought.id }; });
         return;
@@ -889,7 +903,8 @@ export class Agent {
       }
       if (acceptedHelp && pending && "recordId" in pending && (pending.kind === "help" || pending.screenQuestion)) {
         const request = {sessionId:session.id,conversationId:record.id,turnId,revisionKey,text};
-        this.startSavedDoubtHelp(record.id, pending.recordId, request);
+        // A saved doubt is read as text with GLM OCR; a "what is this" offer keeps the visual model.
+        this.startSavedDoubtHelp(record.id, pending.recordId, request, pending.kind === "help" ? "ocr" : "visual");
       } else if (!/^\s*(?:hey\s+)?moo[.!?,\s]*$/i.test(text)) {
         this.startResponse(record.id, undefined, {sessionId:session.id,conversationId:record.id,turnId,revisionKey,text});
       }
@@ -900,10 +915,14 @@ export class Agent {
         ? await this.p.brain.getRecord(pending.recordId)
         : await this.saveThought(segments);
       if (thought) {
-        const offer = { kind: "general_help" as const, recordId: thought.id, sourceRevision: thought.sourceRevision,
-          ...(decision.screenHelp ? {screenQuestion: transcriptText(thought)} : {}) };
+        // A confident, specific doubt gets the screen offer; vague confusion keeps the general one.
+        const doubt = !decision.screenHelp && this.statesDoubt(decision);
+        const offer = doubt
+          ? { kind: "help" as const, recordId: thought.id, sourceRevision: thought.sourceRevision, screenQuestion: boundedScreenText(thought) }
+          : { kind: "general_help" as const, recordId: thought.id, sourceRevision: thought.sourceRevision,
+            ...(decision.screenHelp ? {screenQuestion: boundedScreenText(thought)} : {}) };
         await this.queueEnrichment(thought.id);
-        const asked = await this.say(decision.screenHelp
+        const asked = await this.say(doubt ? SAVED_DOUBT_OFFER : decision.screenHelp
           ? "Would you like me to look at your screen to help with that question?"
           : "Would you like help with that? I'll wait for your answer.",
           async () => !newSpeech() && offerUnchanged(),
@@ -918,7 +937,7 @@ export class Agent {
         const help = this.heldHelp;
         if (help && help.conversationId === this.state.conversationId && help.signal === this.task?.signal && !help.signal.aborted && !help.captured)
           this.startSavedDoubtHelp(help.conversationId, help.sourceId, {...help.request,
-            constraintTurns:[...(help.request.constraintTurns ?? []),{turnId,revisionKey,text}]});
+            constraintTurns:[...(help.request.constraintTurns ?? []),{turnId,revisionKey,text}]}, help.mode);
         else this.startResponse(this.state.conversationId, undefined, {sessionId:session.id,conversationId:this.state.conversationId,turnId,revisionKey,text});
       }
       return;
@@ -928,6 +947,16 @@ export class Agent {
       return;
     }
     if (pending?.kind === "clarification") await this.queueEnrichment(pending.recordId);
+    // The saved-doubt offer is decided on the turn just spoken, never on organizer output, so it
+    // does not wait for, fail with, or point at a growing note (blocker 5).
+    if (!pending && !this.state.conversationId && this.statesDoubt(decision)) {
+      const thought = await this.saveThought(segments);
+      const offer = { kind: "help" as const, recordId: thought.id, sourceRevision: thought.sourceRevision, screenQuestion: boundedScreenText(thought) };
+      if (!this.thoughts) await this.queueEnrichment(thought.id);
+      if (await this.say(SAVED_DOUBT_OFFER, async () => !newSpeech() && offerUnchanged(), () => { this.state.pendingOffer = offer; }))
+        await this.p.brain.setState(`offered:${thought.id}`, true);
+      return;
+    }
     if(this.thoughts) {
       if(offerUnchanged()) this.state.pendingOffer=undefined;
       await this.persist(); return;
@@ -936,6 +965,10 @@ export class Agent {
     if(offerUnchanged()) this.state.pendingOffer = undefined;
     await this.persist();
     await this.queueEnrichment(record.id);
+  }
+  /** J1 asks about a doubt only on idle turns; a missing answer never makes an offer. */
+  private statesDoubt(decision: RouteDecision) {
+    return typeof decision.doubt === "number" && decision.doubt >= this.threshold;
   }
   private async saveThought(segments: Segment[]) {
     const record = await this.p.brain.createRecord({
@@ -1091,6 +1124,7 @@ export class Agent {
     conversationId: string,
     sourceId: string,
     signal: AbortSignal,
+    mode: "ocr" | "visual",
   ) {
     let helpCall: ToolCall | undefined;
     let acceptedTurn: UserTurnSnapshot | undefined;
@@ -1099,7 +1133,8 @@ export class Agent {
       if (!source) return;
       acceptedTurn = this.activeRequest ?? await this.latestUserTurn(conversationId);
       const acceptance = [acceptedTurn?.text ?? "", ...(acceptedTurn?.constraintTurns ?? []).map(t => t.text)].filter(Boolean).join("\n");
-      const question = `Original request:\n${transcriptText(source)}\nAcceptance and added constraints:\n${acceptance}`;
+      // Only the user's own words, bounded so the question never reaches the 2,000-character vision limit.
+      const question = `Original request:\n${boundedScreenText(source, 1400)}\nAcceptance and added constraints:\n${boundedText(acceptance, 400)}`;
       if (screenCaptureRevoked(acceptance)) {
         await this.p.brain.setState(`context:${conversationId}`, `Original retained request:\n${transcriptText(source)}\nUser declined screen capture; no image was obtained. Ask for a description if needed.`);
         return;
@@ -1110,12 +1145,12 @@ export class Agent {
             (acceptedTurn && !await this.isSourceTurnCurrent(acceptedTurn)))
           throw new Error("Request or acceptance changed; screen evidence must not answer an obsolete request.");
       };
-      helpCall = { id: `help:${conversationId}`, name: "capture_screen", arguments: { question, mode: "visual" } };
+      helpCall = { id: `help:${conversationId}`, name: "capture_screen", arguments: { question, mode } };
       await this.validateTool(helpCall, conversationId, new Set(), true);
       if (this.heldHelp?.signal === signal) this.heldHelp.captured = true;
       const evidence = this.p.previewTool
         ? { executed: false, previewOnly: true, fixture: await this.p.previewTool(helpCall, { allowed: true }) }
-        : await this.captureEvidence(conversationId, question, signal, current, "visual");
+        : await this.captureEvidence(conversationId, question, signal, current, mode);
       await current();
       await this.retainToolOutcome(conversationId, helpCall, {status: "success", executed: !this.p.previewTool, result: evidence}, acceptedTurn?.turnId);
       await this.p.brain.setState(
@@ -1132,9 +1167,9 @@ export class Agent {
       );
     }
   }
-  private startSavedDoubtHelp(conversationId: string, sourceId: string, request: UserTurnSnapshot) {
-    this.startResponse(conversationId, (signal) => this.answerSavedDoubt(conversationId, sourceId, signal), request);
-    this.heldHelp = {conversationId, sourceId, request, signal: this.task!.signal, captured: false};
+  private startSavedDoubtHelp(conversationId: string, sourceId: string, request: UserTurnSnapshot, mode: "ocr" | "visual") {
+    this.startResponse(conversationId, (signal) => this.answerSavedDoubt(conversationId, sourceId, signal, mode), request);
+    this.heldHelp = {conversationId, sourceId, request, signal: this.task!.signal, captured: false, mode};
   }
   private startResponse(
     conversationId: string,
@@ -1197,6 +1232,7 @@ export class Agent {
           }
           else if (this.proposedCloseOffer?.epoch === epoch) await this.offerClose(this.proposedCloseOffer.turn);
           if (this.thoughts && !this.state.listening) this.track(this.consolidateThoughts(true));
+          else if (this.thoughts && this.thoughtsHeld) { this.thoughtsHeld = false; this.track(this.consolidateThoughts()); }
         }),
     );
   }
@@ -1908,7 +1944,9 @@ export class Agent {
     await this.p.brain.setState(`evidence:${attachment.id}`, {evidence, question, mode});
     signal?.throwIfAborted();
     await ensureCurrent?.();
-    return {attachmentId: attachment.id, ...usableVision(evidence)};
+    // Only what the capturing host confirms it left out is reported, so Moo can say what it could not see.
+    const captureScope = image.excluded?.length ? `Main display; not captured: ${image.excluded.join(", ")}` : undefined;
+    return {attachmentId: attachment.id, ...usableVision(evidence), ...(captureScope ? {captureScope} : {})};
   }
   private captureAttemptKey(id: string, turn: UserTurnSnapshot) {
     return `capture-attempt:${id}:${turn.turnId}:${turn.revisionKey}`;
@@ -2203,8 +2241,9 @@ export class Agent {
       if (!connectionError) await this.p.brain.setState(`enriched-input:${record.id}`, snapshot.stamp);
       this.emit({ type: "record", record });
       if (!summaryOnly) await this.queueAcceptance(record);
+      // With growing notes, J1 decides the offer on the spoken turn; J7 still marks open questions.
       if (
-        !summaryOnly &&
+        !summaryOnly && !this.thoughts &&
         record.kind === "dictation" &&
         record.doubt &&
         !this.state.conversationId &&
@@ -2212,9 +2251,9 @@ export class Agent {
         !(await this.p.brain.getState(`offered:${record.id}`))
       ) {
         await this.p.brain.setState(`offered:${record.id}`, true);
-        this.state.pendingOffer = { kind: "help", recordId: record.id, sourceRevision: record.sourceRevision, screenQuestion: transcriptText(record) };
+        this.state.pendingOffer = { kind: "help", recordId: record.id, sourceRevision: record.sourceRevision, screenQuestion: boundedScreenText(record) };
         await this.persist();
-        await this.say("I saved your thought. Would you like me to look at your screen to help with it?");
+        await this.say(SAVED_DOUBT_OFFER);
       }
     } catch (e) {
       const failedSource = await this.p.brain.getRecord(op.recordId);
@@ -2490,6 +2529,18 @@ export class Agent {
     }
     throw new Error("Concurrent record update; retry needed");
   }
+}
+const SAVED_DOUBT_OFFER = "I saved your thought. Would you like me to look at your screen to help with it?";
+/** A head and a tail with an omission marker, cut on whole characters. */
+function boundedText(text: string, max: number) {
+  const clean = text.trim();
+  if (clean.length <= max) return clean;
+  const head = Math.floor(max / 3), tail = max - head - 3;
+  return clean.slice(0, safeEnd(clean, head)) + " … " + clean.slice(safeStart(clean, clean.length - tail));
+}
+/** The screen question carries only what the user said, never Moo's lines. */
+function boundedScreenText(record: BrainRecord, max = 1400) {
+  return boundedText(record.segments.filter(s => s.speaker === "user").map(s => s.text).join(" "), max);
 }
 function screenCaptureRevoked(text: string): boolean {
   return /\b(?:don't|don’t|do not|never|stop|avoid|without|no)\b[^.!?]*\b(?:screenshots?|screen shots?|screen|captur(?:e|ing))\b/i.test(text);

@@ -25,6 +25,8 @@ export async function createAgentHost(options: {
   speech?: {speak(text:string):Promise<void>;stop():Promise<void>;warm():Promise<void>;close():void};
   waitForAsr?: (signal: AbortSignal) => Promise<void>;
   fixtureCapture?: () => Promise<{ mimeType: string; bytes: Uint8Array }>;
+  /** Apps the companion leaves out of screen captures, such as the host's own window, and how to name them. */
+  captureExclusions?: { bundleIds: string[]; label: string };
 }) {
   const { brain, providers } = options;
   let thoughtSchedule:ThoughtSchedule|undefined;
@@ -88,10 +90,13 @@ export async function createAgentHost(options: {
         const result = await native.request<{
           mimeType: string;
           dataBase64: string;
-        }>("capture");
+          excludedApplications?: string[];
+        }>("capture", options.captureExclusions ? { excludeBundleIds: options.captureExclusions.bundleIds } : {});
         return {
           mimeType: result.mimeType,
           bytes: Buffer.from(result.dataBase64, "base64"),
+          // Reported only from what the companion confirms; an older build that ignores the request reports nothing.
+          ...(options.captureExclusions && result.excludedApplications?.length ? { excluded: [options.captureExclusions.label] } : {}),
         };
       },
     },

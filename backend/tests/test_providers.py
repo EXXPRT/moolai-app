@@ -123,8 +123,12 @@ async def test_route_choices_follow_conversation_state_without_forcing_closure(a
         elif active:
             assert set(questions) == {'route', 'substantive_content'}
             answers['substantive_content'] = {'type': 'noul', 'noul': .1}
-        else:
+        elif offer:
             assert set(questions) == {'route'}
+        else:
+            # Idle turns also carry the independent doubt question.
+            assert set(questions) == {'route', 'doubt'}
+            answers['doubt'] = {'type': 'noul', 'noul': .3}
         return httpx.Response(200, json={'model': SETTINGS.jev_model, 'answers': answers})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
@@ -136,6 +140,7 @@ async def test_route_choices_follow_conversation_state_without_forcing_closure(a
     assert result.route == selected and result.endAction == end_action
     assert result.helpAccepted is None
     assert result.substantiveContentProbability == (.1 if selected == 'end_agent' and not end_action else None)
+    assert result.doubt == (None if active or offer else .3)
 
 
 @pytest.mark.parametrize('kind', ['help', 'general_help'])
@@ -725,14 +730,63 @@ async def test_excess_context_rejected_without_truncation_or_provider_call():
 async def test_screen_help_is_one_existing_j1_choice_and_preserves_offer_context():
     def respond(request):
         questions = json.loads(request.content)['questions']
-        assert set(questions) == {'route'}
+        assert set(questions) == {'route', 'doubt'}
         return httpx.Response(200, json={'model': SETTINGS.jev_model, 'answers': {
-            'route': choice(questions['route']['criteria'], 'offer_screen_help')}})
+            'route': choice(questions['route']['criteria'], 'offer_screen_help'), 'doubt': {'type': 'noul', 'noul': .2}}})
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         result = await JevProvider(Gateway(SETTINGS, client)).route(RouteInput(
             text='What breed is this bird?', recentContext='', activeConversation=False))
     assert result.route == 'offer_help' and result.screenHelp is True
     assert result.helpAccepted is None
+
+
+@pytest.mark.parametrize('answer', [None, {'type': 'noul'}, {'type': 'noul', 'noul': 1.5}, {'type': 'choice', 'choice': 'x'}])
+async def test_missing_or_malformed_doubt_answer_never_fails_routing(answer):
+    def respond(request):
+        questions = json.loads(request.content)['questions']
+        assert 'doubt' in questions
+        assert 'what is even going on' in questions['doubt']['instructions']
+        answers = {'route': choice(questions['route']['criteria'], 'dictate')}
+        if answer is not None:
+            answers['doubt'] = answer
+        return httpx.Response(200, json={'model': SETTINGS.jev_model, 'answers': answers})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        result = await JevProvider(Gateway(SETTINGS, client)).route(RouteInput(
+            text="I'm not sure why sample A's minimum is lower.", recentContext='', activeConversation=False))
+    assert result.route == 'dictate' and result.doubt is None
+
+
+async def test_idle_doubt_is_returned_and_never_asked_during_a_conversation_or_offer():
+    seen = []
+    def respond(request):
+        questions = json.loads(request.content)['questions']
+        seen.append(set(questions))
+        answers = {'route': choice(questions['route']['criteria'], 'dictate' if 'dictate' in questions['route']['criteria'] else 'continue_agent')}
+        if 'doubt' in questions:
+            answers['doubt'] = {'type': 'noul', 'noul': .92}
+        if 'substantive_content' in questions:
+            answers['substantive_content'] = {'type': 'noul', 'noul': .1}
+        return httpx.Response(200, json={'model': SETTINGS.jev_model, 'answers': answers})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        provider = JevProvider(Gateway(SETTINGS, client))
+        idle = await provider.route(RouteInput(text="I'm not sure why the minimum is lower.", recentContext='', activeConversation=False))
+        active = await provider.route(RouteInput(text="I'm not sure why the minimum is lower.", recentContext='', activeConversation=True))
+        offered = await provider.route(RouteInput(text="I'm not sure why.", recentContext='', activeConversation=False,
+                                                  pendingOffer={'kind': 'clarification', 'recordId': 'r'}))
+    assert idle.doubt == .92 and active.doubt is None and offered.doubt is None
+    assert ['doubt' in questions for questions in seen] == [True, False, False]
+
+
+def test_visual_path_withholds_a_value_from_the_wrong_table_column_and_keeps_a_plain_field():
+    excerpt = 'Sample | Pressure minimum (kPa) | Pressure maximum (kPa)\nA | 12 | 18'
+    raw = json.dumps({'observations': [
+        {'field': 'A pressure minimum', 'status': 'readable', 'value': '18', 'label': 'Pressure maximum (kPa)', 'sourceExcerpt': excerpt},
+        {'field': 'Batch number', 'status': 'readable', 'value': 'B-204', 'label': 'Batch number', 'sourceExcerpt': 'Batch number B-204'},
+    ], 'interpretation': '', 'scene': None})
+    visual = validate_vision(raw, 'visual')
+    assert visual.observations[0].value is None and not visual.validated
+    assert visual.observations[1].value == 'B-204'
+    assert any('qualifier' in error or 'table' in error for error in visual.validationErrors)
 
 
 def visual_raw(status='observed', refs=None):

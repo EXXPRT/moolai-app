@@ -19,7 +19,7 @@ Send one JSON object per stdin line: `{"id":1,"method":"health","params":{}}`. R
 | `speak` with `{text}` | While listening, synthesizes buffers into the capture engine’s player node and keeps voice-processed input active. Returns when output has finished or been stopped. Output-only calls with capture off use system synthesis and never start input. |
 | `stopSpeaking` | Stops queued playback and synthesis immediately. |
 | `recognitionContext` with `{text}` | Updates bounded (400-character) hints for the next utterance without resetting capture. |
-| `capture` | Takes a fresh main-display screenshot, maximum width 1920, returning `{mimeType,dataBase64}`. Only this method requests screen permission. |
+| `capture` with optional `{excludeBundleIds}` | Takes a fresh main-display screenshot, maximum width 1920, leaving out running apps with those bundle ids. Returns `{mimeType,dataBase64,excludedApplications}`, where `excludedApplications` names only the apps actually left out. The desktop runtime leaves its own Electron app out. Only this method requests screen permission. |
 
 Unsolicited `transcript` events contain a stable segment `id`, `turnId`, increasing `revision`, role, text, final flag and creation time. Legacy deltas append to the same segment; versioned `conversation.item.input_audio_transcription.partial` events replace its full provisional text. Each carries an `utterance_id` and increasing `revision`. A nonempty completed event replaces the preview, then emits `turn_end`; stale or already-completed events are ignored. New utterances get new identities, which are independent of the Agent's longer conversation identity. `status` events contain current `listening`/`speaking` state and any error.
 
