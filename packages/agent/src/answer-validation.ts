@@ -32,6 +32,8 @@ function protocol(value:unknown):boolean {
   if(has(value,['toolCallId','tool_call_id'])&&has(value,['status','result','output','content','error']))return true;
   if(has(value,['name','tool','tool_name','function','recipient'])&&has(value,['arguments','parameters','input','args']))return true;
   if(has(value,['tool','tool_name'])&&has(value,['query','queries','id','recordId','record_id','offset','length','revision','limit']))return true;
+  // A printed request envelope, as Ultra produced in the 19 Oct paid web check (MOO-059).
+  if(has(value,['tool','tool_name'])&&has(value,['request','requestTurnId','callId','urls']))return true;
   if(has(value,['executed'])&&has(value,['status','tool','result','output','error','retrieved']))return true;
   if(has(value,['tool','tool_name'])&&has(value,['status','result','output','retrieved','error']))return true;
   if(value.role==='tool'&&has(value,['content','result','output']))return true;

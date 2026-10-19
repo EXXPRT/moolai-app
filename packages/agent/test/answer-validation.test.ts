@@ -28,6 +28,7 @@ const rejects:[string,AgentReply,AnswerRejection][]=[
   ['tool object',reply('{"name":"search_notes","arguments":{"query":"reports"}}'),'protocol_only'],
   ['invented tool',reply('{"tool":"combine_findings","parameters":{"records":["x"]}}'),'protocol_only'],
   ['flat query tool',reply('{"tool":"search_notes","query":"trial evidence","limit":5}'),'protocol_only'],
+  ['printed request envelope (19 Oct paid check)',reply('\n{"tool":"extract_web","request":{"query":"what does denaturation mean for enzymes","maxPages":5,"freshnessDays":365},"requestTurnId":"web-10"}'),'protocol_only'],
   ['flat multiquery tool',reply('{"tool":"search_notes","queries":["trial","calibration"]}'),'protocol_only'],
   ['multiquery tools as JSONL',reply('{"tool":"search_notes","queries":["trial"]}\n{"tool":"search_notes","queries":["calibration"]}'),'protocol_only'],
   ['flat invented read',reply('{"tool":"open_note","id":"record-x","revision":-1}'),'protocol_only'],
