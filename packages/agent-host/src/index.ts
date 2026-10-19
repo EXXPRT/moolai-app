@@ -14,6 +14,10 @@ import { waitForLocalAsr } from "./asr-ready.js";
 import { ThoughtSchedule } from "./thought-schedule.js";
 export { BackendProviders, FixtureProviders } from "./providers.js";
 
+const VOICE_ROUTE_FAILED = "Moo saved what you said but couldn't act on it. Try saying it again in a moment.";
+const VOICE_SAVE_FAILED = "Moo couldn't save what you just said. Please say it again.";
+const ASR_STOPPED = "Speech recognition stopped, so I turned the microphone off. Anything already transcribed is saved. Turn the microphone on to continue.";
+
 /** Host assembly only. Storage, UI and conversation policy are supplied independently. */
 export async function createAgentHost(options: {
   brain: BrainPort;
@@ -50,8 +54,25 @@ export async function createAgentHost(options: {
         emit({ type: "notice", message });
       },
     },
-    (error) => emit({ type: "notice", message: String(error) }),
+    (error, stage) => {
+      if (stage === "diagnostic") { emit({ type: "notice", message: String(error) }); return; }
+      // Voice failures are said, not only shown (MOO-060); the raw error stays in the log.
+      console.error(`Voice turn ${stage} failed: ${String(error)}`);
+      void tell(stage === "save" ? VOICE_SAVE_FAILED : VOICE_ROUTE_FAILED);
+    },
   );
+  /** A notice that voice users also hear, through the same speech output Moo answers with. */
+  async function tell(message: string) {
+    emit({ type: "notice", message });
+    if (voiceEnabled && !closed) await speech.speak(message).catch(() => {});
+  }
+  /** A recognition failure mid-capture turns the microphone off and says so (MOO-074); the companion will not
+   * speak while capture is requested but not running, so the line plays once the microphone is off. */
+  async function recognitionStopped() {
+    emit({ type: "notice", message: ASR_STOPPED });
+    try { await voice("stop"); } catch {}
+    if (!closed) await speech.speak(ASR_STOPPED).catch(() => {});
+  }
   const native = new NativeBridge(options.nativePath, (event) => {
     if (event.event === "transcript" && event.segment)
       input.ingest(event.segment);
@@ -72,8 +93,10 @@ export async function createAgentHost(options: {
       status = { ...status, ...event };
       if (event.listening === true) captureMayBeOn = true;
       if (event.requestedOn === false && event.listening === false) captureMayBeOn = false;
+      const failedMidCapture = event.phase === "error" && event.listening === false && voiceEnabled && !voiceStartup && !stoppingCapture;
       if (event.phase === "error" && event.requestedOn === false) voiceEnabled = false;
       emit({ type: "voice", voice: {...status, enabled: voiceEnabled} });
+      if (failedMidCapture) void recognitionStopped();
     }
   });
   const speech = options.speech ?? new LocalSpeech(native, message=>emit({type:"notice",message}), options.speechRoot ? {config:join(options.speechRoot,"tts-config.json"),worker:join(options.speechRoot,"native/tts/worker.py")} : undefined);

@@ -36,3 +36,10 @@ test("Stop ends playback while Moo speaks and cancels only a response being prep
   assert.deepEqual(stopControl(false, true), { label: "Stop response", path: "/api/response/cancel" });
   assert.equal(stopControl(false, false), undefined);
 });
+test("typed input that was saved but not acted on says it was saved", () => {
+  assert.equal(actionMessage(new Error("Saved; Moo couldn't act on it: Backend 503"), "/api/input"),
+    "Your message is saved, but Moo couldn't act on it. Send it again to retry.");
+  assert.equal(actionMessage(new Error("Error: Saved; Moo couldn't act on it: revision conflict"), "/api/input"),
+    "Your message is saved, but Moo couldn't act on it. Send it again to retry.", "The saved rule comes before the revision rule");
+  assert.match(actionMessage(new Error("Invalid text"), "/api/input"), /could not be confirmed as saved/);
+});

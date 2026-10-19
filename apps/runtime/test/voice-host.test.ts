@@ -295,3 +295,60 @@ createInterface({input:process.stdin}).on('line',s=>{const c=JSON.parse(s);conso
     release();await organizing;
   }finally{release();await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
 });
+
+// Step 11 / MOO-060: voice failures are heard, not only shown.
+test('a recognition failure mid-capture turns the microphone off and says so',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'moolai-asr-fail-'));
+  const nativePath=join(directory,'companion.mjs');
+  await writeFile(nativePath,`#!${process.execPath}
+import {createInterface} from 'node:readline';
+const methods=[];const emit=x=>console.log(JSON.stringify(x));
+createInterface({input:process.stdin}).on('line',line=>{
+ const r=JSON.parse(line);methods.push(r.method);
+ if(r.method==='startListening'){
+  emit({event:'status',requestedOn:true,listening:true,speaking:false,phase:'listening'});
+  setTimeout(()=>emit({event:'status',requestedOn:true,listening:false,speaking:false,phase:'error',error:'Local ASR connection failed'}),20);
+ }
+ if(r.method==='stopListening')emit({event:'status',requestedOn:false,listening:false,speaking:false,phase:'off'});
+ emit({id:r.id,result:r.method==='health'?{methods}:{}});
+});`,{mode:0o700});
+  const brain=new MemoryBrain();const events:AgentEvent[]=[];const spoken:string[]=[];
+  const host=await createAgentHost({waitForAsr:async()=>{},speech:{async warm(){},async speak(text){spoken.push(text);},async stop(){},close(){}},
+    brain,providers:new FixtureProviders(),nativePath,onEvent:e=>events.push(e)});
+  try {
+    await host.voice('start');
+    for(let i=0;i<200&&!spoken.length;i++)await new Promise(r=>setTimeout(r,5));
+    assert.match(spoken[0]??'',/Speech recognition stopped, so I turned the microphone off/);
+    assert.ok(events.some(e=>e.type==='notice'&&/turned the microphone off/.test(e.message??'')));
+    assert.ok(((await host.nativeHealth()) as {methods:string[]}).methods.includes('stopListening'),'The microphone is switched off');
+    assert.equal(host.nativeSnapshot().enabled,false);
+  }finally{await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
+});
+
+test('a voice turn whose routing fails is said to be saved but not acted on',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'moolai-route-fail-'));
+  const nativePath=join(directory,'companion.mjs');
+  await writeFile(nativePath,`#!${process.execPath}
+import {createInterface} from 'node:readline';
+const emit=x=>console.log(JSON.stringify(x));
+createInterface({input:process.stdin}).on('line',line=>{
+ const r=JSON.parse(line);
+ if(r.method==='startListening'){
+  emit({event:'status',requestedOn:true,listening:true,speaking:false,phase:'listening'});
+  setTimeout(()=>{emit({event:'transcript',segment:{id:'s1',turnId:'t1',revision:1,speaker:'user',text:'Glycolysis makes two ATP.',final:true,createdAt:new Date().toISOString()}});emit({event:'turn_end',turnId:'t1'});},20);
+ }
+ if(r.method==='stopListening')emit({event:'status',requestedOn:false,listening:false,speaking:false,phase:'off'});
+ emit({id:r.id,result:{}});
+});`,{mode:0o700});
+  const brain=new MemoryBrain();const spoken:string[]=[];
+  const providers=Object.assign(new FixtureProviders(),{async route():Promise<never>{throw Error('Backend 503: TypeSafe is not configured');}});
+  const host=await createAgentHost({waitForAsr:async()=>{},speech:{async warm(){},async speak(text){spoken.push(text);},async stop(){},close(){}},
+    brain,providers,nativePath,onEvent:()=>{}});
+  try {
+    await host.voice('start');
+    for(let i=0;i<200&&!spoken.length;i++)await new Promise(r=>setTimeout(r,5));
+    assert.deepEqual(spoken,["Moo saved what you said but couldn't act on it. Try saying it again in a moment."]);
+    const session=(await brain.listRecords()).find(r=>r.kind==='session')!;
+    assert.ok(session.segments.some(s=>s.text==='Glycolysis makes two ATP.'),'The words are saved');
+  }finally{await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
+});

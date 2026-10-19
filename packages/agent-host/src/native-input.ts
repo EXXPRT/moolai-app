@@ -13,14 +13,15 @@ export class NativeInput {
   private turns: Promise<void> = Promise.resolve();
   constructor(
     private sink: TranscriptSink,
-    private onError: (error: unknown) => void,
+    /** The stage says what failed: saving speech, acting on a saved turn, or keeping rejected ASR text. */
+    private onError: (error: unknown, stage: "save" | "route" | "diagnostic") => void,
   ) {}
 
   ingest(segment: Segment): void {
     this.writes = this.writes
       .then(() => this.sink.ingest(segment))
       .then(() => {})
-      .catch(this.onError);
+      .catch(error => this.onError(error, "save"));
   }
   settleTurn(turnId: string): void {
     const precedingWrites = this.writes;
@@ -28,14 +29,14 @@ export class NativeInput {
       .then(() => precedingWrites)
       .then(() => this.sink.settleTurn(turnId))
       .then(() => {})
-      .catch(this.onError);
+      .catch(error => this.onError(error, "route"));
   }
   /** Rejected ASR text stays inspectable, but never becomes a routed user command. */
   retainDiagnostic(text: string, message: string): void {
     this.writes = this.writes.then(async () => {
       if (!this.sink.retainDiagnostic) throw new Error("ASR diagnostic storage is unavailable");
       await this.sink.retainDiagnostic(text, message);
-    }).catch(this.onError);
+    }).catch(error => this.onError(error, "diagnostic"));
   }
   saved(): Promise<void> {
     return this.writes;

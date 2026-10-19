@@ -267,3 +267,20 @@ test("portable Markdown preserves unknown frontmatter, prose and full source rol
     /Unclosed/,
   );
 });
+
+test("SQLite keeps the real disk-full error and leaves no transaction open", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "moolai-disk-full-"));
+  const brain = new SQLiteBrain(directory);
+  try {
+    await brain.createRecord({ id: "full", kind: "note", createdAt });
+    const db = (brain as unknown as { db: import("node:sqlite").DatabaseSync }).db;
+    const pages = (db.prepare("PRAGMA page_count").get() as { page_count: number }).page_count;
+    db.exec(`PRAGMA max_page_count = ${pages + 1}`);
+    await assert.rejects(brain.setState("large", "x".repeat(400_000)), (error: Error & { errcode?: number }) =>
+      /full/i.test(error.message) || error.errcode === 13);
+    assert.equal(db.isTransaction, false);
+    db.exec(`PRAGMA max_page_count = 1073741823`);
+    await brain.setState("after", 1);
+    assert.equal(await brain.getState("after"), 1, "The Brain still works after the fault");
+  } finally { await brain.close(); await rm(directory, { recursive: true, force: true }); }
+});

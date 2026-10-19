@@ -64,7 +64,8 @@ for (const adapter of ['memory','sqlite']) {
    f.brain.setState=async(key,value)=>{if(key.startsWith('rejected-answer:'))rejectedKey=key;await save(key,value);};
    f.hooks.generation.respond=async()=>({text,toolCalls:[]});
    await f.agent.submitText('Moo, explain this.');await f.agent.drain();
-   assert.equal(f.observed.speech.length,1);assert.match(f.observed.speech[0]!,/listening/);
+   assert.equal(f.observed.speech.length,2);assert.match(f.observed.speech[0]!,/listening/);
+   assert.equal(f.observed.speech[1],"I couldn't finish that answer. Your request is saved; ask again when you're ready.",'Only the failure line plays, never the rejected draft');
    assert.match(f.agent.getState().lastError!,/incomplete answer \(protocol_only\)/);
    assert.ok(rejectedKey);assert.equal((await f.brain.getState<any>(rejectedKey))!.reply.text,text);
    assert.ok(!(await f.brain.getRecord(f.agent.getState().conversationId!))!.segments.some(s=>s.speaker==='assistant'&&s.text===text));

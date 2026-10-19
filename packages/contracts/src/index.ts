@@ -136,6 +136,13 @@ export interface PendingOperation {
   attempts: number;
   error?: string;
 }
+/** Write-failure contract.
+ * Adapters: a call is all-or-nothing. A rejected write is not applied, now or later; once a change is durable the
+ * adapter reports success and repairs its own bookkeeping. Reject with the original error.
+ * Callers: retry only the identical call (createRecord, upsertSegment, setState and putOperation are idempotent;
+ * updateRecord stays compare-and-set). Write the source or intent before any done or handled marker. Traces,
+ * acceptance, narration and previews are best-effort. A stored "running" marker with nothing in flight means
+ * interrupted: never start paid work from it. Error handlers and timers never throw. */
 export interface BrainPort {
   createRecord(input: {
     id: string;

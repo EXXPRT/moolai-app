@@ -82,7 +82,8 @@ export class SQLiteBrain implements BrainPort {
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      // SQLite may already have rolled back (for example on a full disk); keep the original error.
+      if (this.db.isTransaction !== false) { try { this.db.exec("ROLLBACK"); } catch {} }
       throw error;
     }
   }

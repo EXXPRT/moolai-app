@@ -93,7 +93,8 @@ for (const adapter of ["memory", "sqlite"] as const) {
       return { text: "The old measurement is 40 cm.", toolCalls: [] };
     };
     await f.agent.initialize(); await f.agent.submitText("Explain the garden."); await f.agent.drain();
-    assert.equal(f.spoken.length, 0);
+    // Only the spoken failure line plays; no stale or unfinished answer is spoken (MOO-060).
+    assert.deepEqual(f.spoken, ["I couldn't finish that answer. Your request is saved; ask again when you're ready."]);
     assert.match(f.agent.getState().lastError!, /changed/);
     const next = fixture(brain); await next.agent.initialize();
     await next.agent.submitText("Use only my notes; explain the corrected garden."); await next.agent.drain();
@@ -107,7 +108,8 @@ for (const adapter of ["memory", "sqlite"] as const) {
     f.hooks.respond = async () => { throw new Error("Provider unavailable"); };
     await f.agent.initialize(); await f.agent.submitText("Keep this thought through failure."); await f.agent.drain();
     assert.equal(f.calls.length, 1);
-    assert.equal(f.spoken.length, 0);
+    // Only the spoken failure line plays; no stale or unfinished answer is spoken (MOO-060).
+    assert.deepEqual(f.spoken, ["I couldn't finish that answer. Your request is saved; ask again when you're ready."]);
     assert.ok((await brain.getRecord("session"))!.segments.some(s => s.text === "Keep this thought through failure."));
     const record = (await brain.getRecord("n1"))!;
     await brain.updateRecord("n1", record.revision, { summary: "My manual summary", manualFields: ["summary"] });
@@ -214,7 +216,8 @@ for (const adapter of ["memory", "sqlite"] as const) {
     await f.agent.initialize(); await f.agent.submitText("Explain the garden."); await f.agent.drain();
     assert.equal(f.previews.length, 5);
     assert.match(f.agent.getState().lastError!, /answer-only/);
-    assert.equal(f.spoken.length, 0);
+    // Only the spoken failure line plays; no stale or unfinished answer is spoken (MOO-060).
+    assert.deepEqual(f.spoken, ["I couldn't finish that answer. Your request is saved; ask again when you're ready."]);
   });
 }
 

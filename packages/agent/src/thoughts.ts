@@ -167,6 +167,8 @@ export class ThoughtConsolidator {
     /** Request turns whose answer is still running; their tool outcomes may still change the context. */
     answering?: () => Set<string>;
   }) {}
+  /** Whether an organizer pass is in flight now; a stored 'running' without one was interrupted. */
+  get organizing() { return !!this.active; }
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const next = this.lock.then(fn); this.lock = next.catch(() => {}); return next;
   }

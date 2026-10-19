@@ -11,6 +11,7 @@ export function processingMessage(available: boolean, savedSubmission: boolean):
 }
 export function actionMessage(error: unknown, action: string): string {
   const detail = String(error);
+  if (action === "/api/input" && /(?:^|: )Saved;/.test(detail)) return "Your message is saved, but Moo couldn't act on it. Send it again to retry.";
   if (/changed|revision|conflict/i.test(detail)) return "This note changed. Reopen it before saving your edit.";
   if (action === "/api/input") return "Your message could not be confirmed as saved. It is still in the input box.";
   if (action === "/api/voice" && /confirm all voice output and capture stopped|Voice shutdown is unconfirmed/i.test(detail))

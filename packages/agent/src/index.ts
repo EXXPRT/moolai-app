@@ -30,6 +30,7 @@ import type {
   PendingOperation,
   RecordPatch,
   RouteDecision,
+  RouteInput,
   SearchProvider,
   Segment,
   SpeechPort,
@@ -128,13 +129,18 @@ export class Agent {
   private attention?: { done: Promise<void>; release: () => void; timer: ReturnType<typeof setTimeout>; previous?: AgentState['activity'] };
   private activeRequest?: UserTurnSnapshot;
   private thoughtsHeld = false;
+  /** The response epoch whose answer reached the conversation. */
+  private publishedEpoch = -1;
   private heldHelp?: { conversationId: string; sourceId: string; request: UserTurnSnapshot; signal: AbortSignal; captured: boolean; mode: "ocr" | "visual" };
   private get timeZone() { return this.p.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone; }
+  /** Traces are best-effort: a failed trace write never drops the turn it describes. */
   private async trace(action: string, detail: Record<string,unknown> = {}) {
-    await this.serial(async()=> {
-      const entries=await this.p.brain.getState<unknown[]>("interaction-trace") ?? [];
-      await this.p.brain.setState("interaction-trace",[...entries.slice(-79),{at:this.p.now(),action,requestTurnId:this.activeRequest?.turnId,...detail}]);
-    });
+    try {
+      await this.serial(async()=> {
+        const entries=await this.p.brain.getState<unknown[]>("interaction-trace") ?? [];
+        await this.p.brain.setState("interaction-trace",[...entries.slice(-79),{at:this.p.now(),action,requestTurnId:this.activeRequest?.turnId,...detail}]);
+      });
+    } catch (error) { console.warn(`Interaction trace not saved: ${errorText(error)}`); }
   }
   /** Playback stops now; response work waits for the meaning of the incoming utterance. */
   async speechStarted() {
@@ -235,11 +241,8 @@ export class Agent {
       await this.thoughts?.recover(id);
       this.track(this.closeOutSession(id));
     }
+    await this.repairInterruptedEnrichment();
     const operations = await this.p.brain.listOperations();
-    for (const op of operations.filter(o => o.kind === "enrich" && o.status === "running")) {
-      await this.p.brain.putOperation({...op, status: "failed", error: "Interrupted provider work requires explicit retry."});
-      await this.patch(op.recordId, {quality: "pending", error: "Interrupted consolidation requires explicit retry."});
-    }
     for (const op of operations.filter(o => o.kind === "enrich" && o.status === "pending" && o.attempts === 0)) this.track(this.enrich(op));
     if (stored?.conversationId && !operations.some(o => o.recordId === stored.conversationId && o.kind === "enrich" && o.status !== "done"))
       await this.checkpointConversation(stored.busy ? "interrupted; requested work may be unresolved" : (await this.p.brain.getState<string>(`checkpoint:${stored.conversationId}`)) ?? "recovered open conversation");
@@ -307,8 +310,16 @@ export class Agent {
     await this.controls;
     while (this.jobs.size) await Promise.allSettled([...this.jobs]);
   }
+  /** A stored 'running' summary with nothing in flight was interrupted: show it failed, with Retry, never re-send it. */
+  private async repairInterruptedEnrichment() {
+    for (const op of (await this.p.brain.listOperations()).filter(o => o.kind === "enrich" && o.status === "running" && !this.enriching.has(o.recordId))) {
+      await this.p.brain.putOperation({...op, status: "failed", error: "Interrupted provider work requires explicit retry."});
+      await this.patch(op.recordId, {quality: "pending", error: "Interrupted summary requires explicit retry."});
+    }
+  }
   async consolidateThoughts(finalize = false, retry = false) {
     await this.writes;
+    if (!finalize && !retry) await this.repairInterruptedEnrichment().catch(error => this.notice(errorText(error)));
     // A background pass waits while Moo answers, so an answer that read a growing note is not
     // discarded when that note changes underneath it (ACA-06). It runs once the answer ends.
     if(this.state.busy && !finalize && !retry) { this.thoughtsHeld = true; return; }
@@ -465,7 +476,8 @@ export class Agent {
       final: true,
       createdAt: this.p.now(),
     });
-    await this.settleTurn(turnId);
+    try { await this.settleTurn(turnId); }
+    catch (error) { throw new Error(`Saved; Moo couldn't act on it: ${errorText(error)}`); }
   }
   async settleTurn(turnId: string, sourceSessionId = this.state.sessionId) {
     await this.scheduleTurn(turnId, sourceSessionId);
@@ -481,13 +493,18 @@ export class Agent {
       const onset=routing.speech;
       try { await this.handleTurn(turnId, sourceSessionId, routing); }
       catch(error) { if(onset===this.speechEpoch && this.attention && this.state.busy) await this.interrupt(); throw error; }
-      finally { if(onset===this.speechEpoch)this.releaseAttention(); await this.persist(); }
+      finally { if(onset===this.speechEpoch)this.releaseAttention(); await this.persistOrShow(); }
     });
+    // A failed error-path write must not leave the queue rejected and skip the next turn.
     this.controls = next.catch(async (e) => {
       this.state.lastError = errorText(e);
-      await this.persist();
+      await this.persistOrShow();
     });
     await next;
+  }
+  private async persistOrShow() {
+    try { await this.persist(); }
+    catch (error) { console.warn(`Agent state not saved: ${errorText(error)}`); this.emit({type:"state", state:this.getState()}); }
   }
   private routingContext(): RoutingContext {
     return {
@@ -682,7 +699,7 @@ export class Agent {
     let decision: RouteDecision;
     const speechEpoch = routing.speech;
     try {
-      decision = await this.p.decisions.route({
+      decision = await this.p.decisions.route(boundedRouteInput({
         text,
         recentContext: (this.state.busy && this.activeRequest ? `Current work (background): ${this.activeRequest.text}\nStatus: ${this.attention?.previous ?? this.state.activity ?? "preparing"}\n` : "") + (linkedRequest ? `Original linked request:\n${transcriptText(linkedRequest)}\nRecent conversation:\n` : "") + session.segments
           .slice(-20)
@@ -690,7 +707,7 @@ export class Agent {
           .join("\n"),
         activeConversation: !!this.state.conversationId,
         pendingOffer: pending,
-      });
+      }));
     } catch (error) {
       await this.p.brain.putOperation({
         ...operation,
@@ -1207,9 +1224,17 @@ export class Agent {
         })
         .catch(async (e) => {
           if (controller.signal.aborted) return;
+          if (this.publishedEpoch === epoch) {
+            // The answer is in the conversation; a later bookkeeping or playback failure is only a notice.
+            await this.trace("after_publication_failed", {error: errorText(e)});
+            this.notice("Moo's answer is saved, but a step after it could not finish.");
+            return;
+          }
           this.state.lastError = errorText(e);
           await this.p.brain.setState(`work-status:${conversationId}`, `Unresolved: ${errorText(e)}`);
           await this.persist();
+          // Voice users hear that the answer did not finish (MOO-060); speech never starts over the user.
+          if (!this.attention) await this.speak(ANSWER_FAILED).catch(() => {});
         })
         .finally(async () => {
           if (epoch !== this.taskEpoch) return;
@@ -1385,6 +1410,7 @@ export class Agent {
               break;
             } catch(error) {if(error!==responseHeld)throw error;}
           }
+          this.publishedEpoch = epoch;
           await rememberAnswerNarration(this.p.brain,id,sourceResponse,rendered);
           this.state.narration=undefined;
           if(rendered.narrationError && !rendered.spokenText?.trim()) this.notice("The answer is on screen, but its spoken summary is unavailable.");
@@ -1733,18 +1759,18 @@ export class Agent {
     if ((await this.p.brain.listOperations()).some(op => op.id === id)) return;
     const session = (await this.p.brain.getRecord(snapshot.sessionId))!;
     const operation: PendingOperation = { id, kind: "route", recordId: session.id, turnId: snapshot.turnId, sourceRevision: session.sourceRevision, status: "running", attempts: 1 };
-    await this.p.brain.putOperation(operation);
-    await this.p.brain.setState(`closure-proposal:${id}`, { reason, snapshot });
     try {
+      await this.p.brain.putOperation(operation);
+      await this.p.brain.setState(`closure-proposal:${id}`, { reason, snapshot });
       // Deliberately exclude the assistant's proposal from J1's evidence.
-      const decision = await this.p.decisions.route({ text: snapshot.text,
-        recentContext: session.segments.filter(s => s.speaker === "user").slice(-20).map(s => `user: ${s.text}`).join("\n"), activeConversation: true }, signal);
+      const decision = await this.p.decisions.route(boundedRouteInput({ text: snapshot.text,
+        recentContext: session.segments.filter(s => s.speaker === "user").slice(-20).map(s => `user: ${s.text}`).join("\n"), activeConversation: true }), signal);
       const current = !signal.aborted && epoch === this.speechEpoch && !this.attention && await this.isLatestUserTurn(snapshot) && !this.state.pendingOffer;
       await this.p.brain.setState(`closure-decision:${id}`, { decision, current });
       await this.p.brain.putOperation({ ...operation, status: "done", error: current ? undefined : "Superseded user turn or conversation" });
       if (current && decision.route === "end_agent" && decision.confidence >= this.threshold) return {snapshot, epoch};
     } catch (error) {
-      await this.p.brain.putOperation({ ...operation, status: "failed", error: errorText(error) });
+      await this.p.brain.putOperation({ ...operation, status: "failed", error: errorText(error) }).catch(() => {});
       this.notice("Closing verification failed. Your conversation remains open.");
     }
     return undefined;
@@ -2342,7 +2368,12 @@ export class Agent {
       for(const source of record.sources ?? []) {
         const pending=await this.p.brain.getState<{status?:string;finalize?:boolean;draftId?:string;activeId?:string;spans?:unknown[]}>(`thought-buffer:${source.recordId}`);
         if(pending?.draftId!==record.id && pending?.activeId!==record.id)continue;
-        if(pending.status==="running")throw new Error("This note is already being organized");
+        // A stored 'running' with no pass in flight was interrupted; Retry sends it once.
+        if(pending.status==="running" && this.thoughts.organizing)throw new Error("This note is already being organized");
+        if(pending.status==="running") {
+          this.track(this.thoughts.process(source.recordId,pending.finalize===true || source.recordId!==this.state.sessionId || !this.state.listening,true));
+          return;
+        }
         if(pending.status!=="failed") {
           if(pending.status==="pending" || pending.spans?.length)throw new Error("This note is waiting for background organization");
           // A retained continuation candidate can have a separate enrichment failure.
@@ -2357,13 +2388,13 @@ export class Agent {
     );
     if (record.kind === "session" && this.thoughts) {
       const pending = await this.p.brain.getState<{status?: string; finalize?: boolean}>(`thought-buffer:${recordId}`);
-      if (!pending || pending.status !== "failed") throw new Error("No failed thought summary to retry");
+      if (!pending || !(pending.status === "failed" || (pending.status === "running" && !this.thoughts.organizing))) throw new Error("No failed thought summary to retry");
       const finalize = pending.finalize === true || recordId !== this.state.sessionId || !this.state.listening;
       this.track(this.thoughts.process(recordId, finalize, true));
       return;
     }
-    if (this.enriching.has(recordId) || operations.some(op => op.kind === "enrich" && op.status === "running"))
-      throw new Error("This summary is already processing");
+    await this.repairInterruptedEnrichment();
+    if (this.enriching.has(recordId)) throw new Error("This summary is already processing");
     const candidates = operations.filter(op => op.kind === "enrich");
     const latest = candidates.at(-1);
     if (!latest && !record.error) throw new Error("No failed summary to retry");
@@ -2531,6 +2562,25 @@ export class Agent {
     }
     throw new Error("Concurrent record update; retry needed");
   }
+}
+const ANSWER_FAILED = "I couldn't finish that answer. Your request is saved; ask again when you're ready.";
+/** The backend rejects a J1 state whose JSON is over 180,000 characters (providers.py bounded_state). An oversized
+ * context keeps its head (current work, linked request) and its latest lines, and the middle is replaced by an
+ * explicit marker, measured the way the backend measures it. A context under the limit is unchanged. */
+const ROUTE_STATE_LIMIT = 180_000 - 2_000;
+function boundedRouteInput(input: RouteInput): RouteInput {
+  const size = (recentContext: string) => JSON.stringify({activeConversation: input.activeConversation, pendingOffer: input.pendingOffer,
+    recentContext, latestUserUtterance: input.text}).length;
+  const context = input.recentContext;
+  if (size(context) <= ROUTE_STATE_LIMIT) return input;
+  const head = context.slice(0, safeEnd(context, Math.min(2_000, Math.floor(context.length / 4))));
+  const join = (tail: number) => {
+    const start = safeStart(context, context.length - tail);
+    return `${head}\n[… ${start - head.length} characters of earlier context omitted]\n${context.slice(start)}`;
+  };
+  let low = 0, high = context.length - head.length;
+  while (low < high) { const mid = Math.ceil((low + high) / 2); if (size(join(mid)) <= ROUTE_STATE_LIMIT) low = mid; else high = mid - 1; }
+  return {...input, recentContext: join(low)};
 }
 const SAVED_DOUBT_OFFER = "I saved your thought. Would you like me to look at your screen to help with it?";
 /** A head and a tail with an omission marker, cut on whole characters. */
