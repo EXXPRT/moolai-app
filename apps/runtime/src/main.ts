@@ -37,11 +37,12 @@ const providers =
       );
 const ownership = acquireRuntimeOwnership(dir);
 const brain = new SQLiteBrain(dir);
-// Folder grants belong to this host, not to portable Brain records.
-const localFiles = new LocalFiles(
+// Folder grants belong to this host, not to portable Brain records. Local-folder search is off in the
+// submitted build; MOOLAI_LOCAL_FOLDERS=on enables it for development.
+const localFiles = process.env.MOOLAI_LOCAL_FOLDERS === "on" ? new LocalFiles(
   path.join(dir, "local-folders.json"),
   process.env.MOOLAI_RG_PATH,
-);
+) : undefined;
 let emit = (event: AgentEvent) => {};
 const host = await createAgentHost({
   brain,

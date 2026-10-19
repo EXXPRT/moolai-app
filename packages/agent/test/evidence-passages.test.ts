@@ -58,7 +58,7 @@ for (const adapter of ['memory', 'sqlite']) {
     } finally {await t.close();}
   });
 
-  test(`${adapter}: explicit continuation passages survive alongside preceding evidence within five retained references`, async () => {
+  test(`${adapter}: explicit continuation passages survive alongside preceding evidence within eight retained references`, async () => {
     const t = await setup();
     try {
       const source = (await t.brain.getRecord('journal'))!;
@@ -71,7 +71,8 @@ for (const adapter of ['memory', 'sqlite']) {
       assert.deepEqual(result.notes.map(item => item.offset), [100, 400]);
       for (let i = 0; i < 6; i++) await rememberEvidence(t.brain, 'conversation', {call: {id: `read-more-${i}`, name: 'read_note', arguments: {id: source.id, offset: 600 + 200 * i, length: 200}},
         status: 'success', result: noteEvidence(source, 600 + 200 * i, 200)});
-      assert.equal((await loadEvidence(t.brain, 'conversation')).notes.length, 5);
+      // The last five distinct notes are kept, at most eight references in all (ATR-02).
+      assert.equal((await loadEvidence(t.brain, 'conversation')).notes.length, 8);
     } finally {await t.close();}
   });
 

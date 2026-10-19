@@ -3,18 +3,42 @@ import type {ExperimentToolEvent} from './reliability.js';
 import {typedExperimentResult} from './reliability.js';
 import {readPassage, selectPassages} from './note-passages.js';
 import {independentNote} from './evidence-eligibility.js';
+import {safeEnd} from '../../contracts/src/records.js';
 export interface EvidenceRef { id: string; offset: number; length: number; query?: string; selection?: 'query' | 'window' }
 export interface EvidenceIndex { refs: EvidenceRef[]; outcomes: unknown[]; files?: {rootId:string;path:string;startLine:number;lineCount?:number}[] }
+const cut = (value: unknown, max: number) => typeof value === 'string' ? value.slice(0, safeEnd(value, max)) : undefined;
 /** History excerpts are revision-checked in their active run and retained in the
- * raw tool ledger. They must not become stale, duplicated evidence on later turns. */
-function retainedOutcome(outcome: unknown): unknown {
-  if (!outcome || typeof outcome !== 'object' || !('tool' in outcome) || outcome.tool !== 'conversation_history') return outcome;
+ * raw tool ledger. They must not become stale, duplicated evidence on later turns.
+ * Web pages and screen readings reach the model once, in the request that fetched them; later
+ * requests see short receipts, so a few web questions can no longer lock a conversation (blocker 7).
+ * A rebuilt request keeps its own screen reading, because it cannot capture twice. */
+function retainedOutcome(outcome: unknown, requestTurnIds: readonly string[] = []): unknown {
+  if (!outcome || typeof outcome !== 'object' || !('tool' in outcome)) return outcome;
   const value = outcome as Record<string, unknown>;
-  const result = value.result as Record<string, unknown> | undefined;
-  return {...value, result: {
+  const result = value.result as any;
+  if (value.tool === 'conversation_history') return {...value, result: {
     requestedInterval: result?.requestedInterval,
     source: 'Historical retrieval receipt only. Use the current tool response for checked excerpts; retrieve again for a new request. Full original output remains in the local tool ledger.',
   }};
+  if ((value.tool === 'search_web' || value.tool === 'extract_web') && Array.isArray(result)) return {...value, result: {
+    pages: result.filter(page => typeof page?.url === 'string').slice(0, 10).map(page => ({url: page.url, title: cut(page.title, 120),
+      ...(value.tool === 'extract_web' && typeof page.content === 'string' ? {characters: page.content.length} : {})})),
+    source: "Receipt of an earlier request's call; its text was not kept. Retrieve again only if this request needs it.",
+  }};
+  if (value.tool === 'capture_screen' && result && typeof result === 'object' && !result.source &&
+      !(typeof value.requestTurnId === 'string' && requestTurnIds.includes(value.requestTurnId))) return {...value, result: {
+    attachmentId: result.attachmentId, capturedAt: value.at, validated: result.validated,
+    observationCount: Array.isArray(result.observations) ? result.observations.length : undefined,
+    source: 'Receipt of an earlier screen reading; its values were not kept and do not describe the screen now. A new screen capture needs a new user request.',
+  }};
+  return outcome;
+}
+/** Pages an earlier web search in this conversation returned may be opened by a follow-up (ATR-11). */
+export async function earlierSearchUrls(brain: BrainPort, id: string) {
+  const index = await brain.getState<EvidenceIndex>(`evidence-index:${id}`) ?? {refs: [], outcomes: []};
+  return index.outcomes.flatMap((outcome: any) => outcome?.tool === 'search_web' && outcome.status === 'success'
+    ? (Array.isArray(outcome.result) ? outcome.result : outcome.result?.pages ?? []).map((page: any) => page?.url) : [])
+    .filter((url): url is string => typeof url === 'string' && /^https?:\/\//.test(url));
 }
 export function noteEvidence(record: BrainRecord, offset = 0, length = 2400, query = '') {
   const selecting = !!query.trim() && offset === 0;
@@ -28,7 +52,7 @@ export function noteEvidence(record: BrainRecord, offset = 0, length = 2400, que
     evidenceNotice: 'Offsets are UTF-16 source positions. Omitted text is not evidence. Written section dates describe document sections, not proof of completed work; record creation/import/update timestamps are not event dates.'};
 }
 export async function loadEvidence(brain: BrainPort, id: string, local?: LocalFilesPort, webAllowed = true,
-  requestTurnIds: readonly string[] = []) {
+  requestTurnIds: readonly string[] = [], runCallIds: ReadonlySet<string> = new Set()) {
   const index = await brain.getState<EvidenceIndex>(`evidence-index:${id}`) ?? {refs: [], outcomes: []};
   const notes = [];
   for (const ref of index.refs) {
@@ -42,12 +66,15 @@ export async function loadEvidence(brain: BrainPort, id: string, local?: LocalFi
     try { if (!local) throw new Error("Local file access unavailable"); files.push(await local.read({...ref, lineCount: ref.lineCount ?? 80})); }
     catch { unavailableFiles.push(`${ref.rootId}/${ref.path}: unavailable; do not reuse an earlier excerpt.`); }
   }
+  // An outcome whose tool message is already in this request is not repeated in the index.
   const recentOutcomes = (webAllowed ? index.outcomes : index.outcomes.filter(outcome =>
     !outcome || typeof outcome !== 'object' || !('tool' in outcome) || !['search_web','extract_web'].includes(String(outcome.tool)))
-  ).map(retainedOutcome);
+  ).filter((outcome: any) => !(typeof outcome?.callId === 'string' && runCallIds.has(outcome.callId)))
+    .map(outcome => retainedOutcome(outcome, requestTurnIds));
   return {notes, files, unavailableFiles, recentOutcomes};
 }
-export async function rememberEvidence(brain: BrainPort, id: string, event: ExperimentToolEvent) {
+export async function rememberEvidence(brain: BrainPort, id: string, event: ExperimentToolEvent,
+  scope: {requestTurnId?: string; at?: string} = {}) {
   const index = await brain.getState<EvidenceIndex>(`evidence-index:${id}`) ?? {refs: [], outcomes: []};
   if (event.status === 'success' && ['read_note','search_notes','related_notes'].includes(event.call.name)) {
     const output = Array.isArray(event.result) ? event.result : [event.result];
@@ -65,7 +92,10 @@ export async function rememberEvidence(brain: BrainPort, id: string, event: Expe
         (selection === 'query' ? ref.query !== query : ref.offset !== offset || ref.length !== length));
       index.refs.push({id: item.id, offset, length, query, selection});
     }
-    index.refs = index.refs.slice(-5);
+    // The last five distinct notes, at most eight references: one read never evicts the search hit it continues (ATR-02).
+    const kept = new Set<string>();
+    for (const ref of [...index.refs].reverse()) if (kept.size < 5) kept.add(ref.id);
+    index.refs = index.refs.filter(ref => kept.has(ref.id)).slice(-8);
   }
   if (event.status === 'success' && ['search_local_files','read_local_file'].includes(event.call.name)) {
     const result = event.result as any;
@@ -78,7 +108,11 @@ export async function rememberEvidence(brain: BrainPort, id: string, event: Expe
     }
   }
   const outcome = typedExperimentResult(event);
-  index.outcomes = [...index.outcomes, {...outcome, result: ['read_note','search_notes','related_notes','search_local_files','read_local_file'].includes(event.call.name) ? undefined : outcome.result}].slice(-5).map(retainedOutcome);
+  const requestTurnIds = scope.requestTurnId ? [scope.requestTurnId] : [];
+  index.outcomes = [...index.outcomes, {...outcome, callId: event.call.id, ...(scope.requestTurnId ? {requestTurnId: scope.requestTurnId} : {}),
+    ...(scope.at ? {at: scope.at} : {}),
+    result: ['read_note','search_notes','related_notes','search_local_files','read_local_file'].includes(event.call.name) ? undefined : outcome.result}]
+    .slice(-5).map(outcome => retainedOutcome(outcome, requestTurnIds));
   await brain.setState(`evidence-index:${id}`, index);
 }
 export async function evidenceCurrent(brain: BrainPort, snapshot: Awaited<ReturnType<typeof loadEvidence>>, local?: LocalFilesPort) {

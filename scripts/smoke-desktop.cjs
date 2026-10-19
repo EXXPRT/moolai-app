@@ -396,8 +396,10 @@ await delay(100);
     assert.ok(await run(`document.querySelector('.brain-document').getBoundingClientRect().width>280`));
     assert.ok(await run(`document.querySelector('.transcript').getBoundingClientRect().height>100`));
     const chatHeight=await run(`document.querySelector('.transcript').clientHeight`);
-    await run(`document.querySelector('.study-settings').open=true;document.querySelector('.folder-access').open=true`);
-    assert.equal(await run(`document.querySelector('.transcript').clientHeight`),chatHeight,'Expanded settings and folder access cannot collapse chat');
+    // Local-folder search is off in the submitted build, so its panel is not shown.
+    assert.equal(await run(`!!document.querySelector('.folder-access')`),false,'The local folder panel is hidden');
+    await run(`document.querySelector('.study-settings').open=true`);
+    assert.equal(await run(`document.querySelector('.transcript').clientHeight`),chatHeight,'Expanded settings cannot collapse chat');
     assert.ok(await run(`document.querySelector('.study-settings-panel').scrollHeight>document.querySelector('.study-settings-panel').clientHeight`),'Long settings scroll in their own panel');
     await run(`document.querySelector('.study-settings').open=false`);
     await verifyChatInput();

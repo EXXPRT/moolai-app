@@ -62,7 +62,9 @@ for(const kind of ['memory','sqlite']) {
    assert.equal(signal?.aborted,true);assert.equal(f.agent.getState().webAllowed,false);
    assert.match(newFrame,/find the testing count/);assert.match(newFrame,/Use only my notes/);assert.match(newFrame,/two sentences/);assert.match(newFrame,/web access is disabled/);assert.doesNotMatch(newFrame,/WEB_ONLY_COUNT_17/);
    assert.ok(!f.spoken.includes('The web count is 17.'));assert.ok(f.spoken.includes('I need supporting notes to establish that count.'));
-   const retained=await t.brain.getState<any>(`evidence-index:${f.agent.getState().conversationId}`);assert.match(JSON.stringify(retained),/WEB_ONLY_COUNT_17/,'Historical raw evidence is retained locally');
+   // The full page stays in the local tool ledger; the evidence index keeps only a receipt (blocker 7).
+   const ledger=await t.brain.getState<any>(`tool-ledger:${f.agent.getState().conversationId}`);assert.match(JSON.stringify(ledger),/WEB_ONLY_COUNT_17/,'Historical raw evidence is retained locally');
+   const index=await t.brain.getState<any>(`evidence-index:${f.agent.getState().conversationId}`);assert.doesNotMatch(JSON.stringify(index),/WEB_ONLY_COUNT_17/,'The evidence index keeps a receipt only');
   }finally{pending.resolve({text:'',toolCalls:[]});await f.agent.interrupt();await f.agent.drain();await t.close();}
  });
  test(`${kind}: requested file ranges survive refresh and separate passages stay available`,async()=>{

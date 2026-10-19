@@ -10,6 +10,8 @@ export type Snapshot = {
   thoughtProcessing?: {status:string;error?:string;pending:boolean;continuationRequired?:boolean;recordId?:string};
   liveThought?: LiveThoughtPreview;
   localFolders: LocalFolder[];
+  /** False when the runtime runs without local-folder search (the submitted build). */
+  localFoldersAvailable?: boolean;
 };
 export type SnapshotEvent = AgentEvent & {sequence?:number};
 export function applySnapshotEvent(current: Snapshot, event: SnapshotEvent): Snapshot {

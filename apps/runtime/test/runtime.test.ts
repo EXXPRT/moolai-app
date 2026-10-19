@@ -181,6 +181,18 @@ test("stopping speech and cancelling a response are separate routes", async () =
   } finally { await host.close(); }
 });
 
+test("without local-folder search (the submitted build) the state says so and grants are refused", async () => {
+  const host = await runtime();
+  try {
+    const snapshot = await fetch(host.base + "/api/state", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()) as {localFoldersAvailable: boolean; localFolders: unknown[]};
+    assert.equal(snapshot.localFoldersAvailable, false);
+    assert.deepEqual(snapshot.localFolders, []);
+    const granted = await host.post("/api/local-folders/grant", { path: "/selected/notes" });
+    assert.notEqual(granted.status, 200);
+    assert.match(await granted.text(), /Local files are unavailable/);
+  } finally { await host.close(); }
+});
+
 test("folder access has no defaults, validates requests and reflects revocation", async () => {
   const folders: { id: string; name: string; path: string }[] = [];
   const files = {

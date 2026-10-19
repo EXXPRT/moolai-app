@@ -78,6 +78,7 @@ export function createRuntimeServer(options: {
             status: options.mode === "fixture" ? "available" : "checking",
           },
           localFolders: (await options.localFiles?.roots()) ?? [],
+          localFoldersAvailable: !!options.localFiles,
           native,
         });
         return;

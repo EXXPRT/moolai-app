@@ -249,7 +249,7 @@ function App() {
               <small>Focus: {state.currentSubject}</small>
             )}
           </form>
-          <details className="folder-access">
+          {snapshot?.localFoldersAvailable && <details className="folder-access">
             <summary>Local folder access · {snapshot?.localFolders?.length ?? 0} selected</summary>
             <p className="hint">
               Moo can read and search selected folders. Retrieved excerpts may
@@ -274,7 +274,7 @@ function App() {
             <button disabled={!snapshot || working} onClick={() => void chooseFolder()}>
               Choose folder
             </button>
-          </details>
+          </details>}
           </div>
           </details>
           <div className="chat-follow-controls">
