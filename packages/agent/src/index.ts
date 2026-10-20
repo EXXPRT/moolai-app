@@ -2223,12 +2223,12 @@ export class Agent {
       const qualityReasons: string[] = [];
       if (
         !Number.isFinite(decision.faithful) ||
-        decision.faithful < this.threshold
+        decision.faithful < FIDELITY_REVIEW_BELOW
       )
         qualityReasons.push("source fidelity");
       if (
         !Number.isFinite(decision.understandable) ||
-        decision.understandable < this.threshold
+        decision.understandable < CONTEXT_REVIEW_BELOW
       )
         qualityReasons.push("missing context");
       const patch: RecordPatch = {
@@ -2576,6 +2576,11 @@ export class Agent {
     throw new Error("Concurrent record update; retry needed");
   }
 }
+/** J7's review flags, calibrated on 21 Oct (44 calls). Faithful summaries scored 0.57–0.86 for fidelity and planted
+ * errors 0.02–0.17, so the shared 0.8 threshold flagged every note on 20 Oct; context fragments ("User acknowledgment")
+ * scored 0.43–0.50 for understandability against 0.69–0.94 for complete notes. */
+const FIDELITY_REVIEW_BELOW = 0.4;
+const CONTEXT_REVIEW_BELOW = 0.6;
 const ANSWER_FAILED = "I couldn't finish that answer. Your request is saved; ask again when you're ready.";
 /** The backend rejects a J1 state whose JSON is over 180,000 characters (providers.py bounded_state). An oversized
  * context keeps its head (current work, linked request) and its latest lines, and the middle is replaced by an
