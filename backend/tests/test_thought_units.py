@@ -36,7 +36,7 @@ async def test_default_organization_preserves_unit_addressing_and_bounded_genera
     assert result.remainder==[] and len(captured)==1
     body = captured[0]
     assert body['model'] == 'nvidia/Nemotron-3_5-Lightning'
-    assert body['max_completion_tokens'] == 8192 and body['temperature'] == 0.2
+    assert body['max_completion_tokens'] == 16384 and body['temperature'] == 0.2
     assert body['store'] is False and body['stream'] is False
     assert 'chat_template_kwargs' not in body
     state = json.loads(body['messages'][1]['content'])
@@ -97,7 +97,7 @@ async def test_semantic_units_partition_source_with_utf16_and_never_use_pause_bo
             assert result.groups[0].spans[1].start==14
             assert result.groups[0].spans[1].end==20
     assert len(captures)==1
-    assert captures[0]['max_completion_tokens']==8192
+    assert captures[0]['max_completion_tokens']==16384
     assert 'chat_template_kwargs' not in captures[0]  # Preserve grouping's evaluated reasoning profile.
 
 @pytest.mark.parametrize('bad', ['none', 'wrong_continuation', 'ongoing_at_close', 'oversized'])

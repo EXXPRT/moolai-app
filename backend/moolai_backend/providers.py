@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+from contextvars import ContextVar
 from typing import Annotated, Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -23,6 +24,9 @@ logger = logging.getLogger(__name__)
 # One constant drives the units organizer's schema, prompt and validator. The opt-in compact format and the
 # planner stay at 1,000 characters (14 Oct scope). Re-adopting 4,000 is gated (decision 9).
 GROUP_SUMMARY_CHARS = 1000
+# A 16,384-token organizer generation took about 80 s (20 Oct check); other provider calls keep 90 s.
+ORGANIZATION_TIMEOUT_SECONDS = 150.0
+_request_timeout: ContextVar[float] = ContextVar('provider_request_timeout', default=90.0)
 
 
 class _DeliveredSpokenPoint(SpokenPoint):
@@ -368,7 +372,7 @@ class Gateway:
             # No automatic retries: a timed-out generation may already be billable.
             response = await self.client.request(
                 method, url, headers={'Authorization': f'Bearer {key}'}, json=payload,
-                timeout=httpx.Timeout(90, connect=10), follow_redirects=False,
+                timeout=httpx.Timeout(_request_timeout.get(), connect=10), follow_redirects=False,
             )
         except httpx.TimeoutException as error:
             raise ServiceError(f'{provider} timed out; no automatic retry', 504) from error
@@ -717,7 +721,7 @@ class NebiusProvider:
         return self.inventory
 
     async def completion(self, model: str, messages: list[dict], max_completion_tokens: int,
-                         *, max_request_bytes: int | None = None, **parameters) -> dict:
+                         *, max_request_bytes: int | None = None, timeout: float | None = None, **parameters) -> dict:
         payload = {
             # Use the bound explicitly documented to include hidden reasoning.
             # Never expand it or retry a truncated response automatically.
@@ -735,7 +739,12 @@ class NebiusProvider:
         if model not in await self.models():
             raise ServiceError(f'Configured Nebius model is unavailable: {model}', 503)
         settings = self.gateway.settings
-        data = await self.gateway.request('Nebius', settings.nebius_base_url + '/chat/completions', settings.nebius_api_key, payload)
+        reset = _request_timeout.set(timeout) if timeout else None
+        try:
+            data = await self.gateway.request('Nebius', settings.nebius_base_url + '/chat/completions', settings.nebius_api_key, payload)
+        finally:
+            if reset is not None:
+                _request_timeout.reset(reset)
         if data.get('model') != model:
             raise ServiceError('Nebius served a different or unidentified model')
         try:
@@ -986,7 +995,7 @@ class NebiusProvider:
         message = await self.completion(self.gateway.settings.summary_model,
             [{'role':'system','content':prompt},{'role':'user','content':state}],
             self.gateway.settings.organization_max_completion_tokens,
-            max_request_bytes=32000,
+            max_request_bytes=32000, timeout=ORGANIZATION_TIMEOUT_SECONDS,
             response_format={'type':'json_schema','json_schema':{'name':'thoughts','schema':schema,'strict':True}})
         try:
             result = wire_model.model_validate_json(message['content'])
@@ -1058,7 +1067,7 @@ class NebiusProvider:
         message = await self.completion(self.gateway.settings.summary_model,
             [{'role':'system','content':prompt},{'role':'user','content':state}],
             self.gateway.settings.organization_max_completion_tokens,
-            max_request_bytes=32000,
+            max_request_bytes=32000, timeout=ORGANIZATION_TIMEOUT_SECONDS,
             response_format={'type':'json_schema','json_schema':{'name':'thoughts','schema':schema,'strict':True}})
         try:
             result = ThoughtWireResult.model_validate_json(message['content'])

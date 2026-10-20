@@ -21,6 +21,8 @@ export interface ProcessingAvailability {
 }
 
 /** Transport only: the Agent owns routing policy, tool execution and retries. */
+/** A 16,384-token organizer generation takes about 80 s; the backend allows 150 s. */
+export const ORGANIZATION_TIMEOUT_MS = 160_000;
 export class BackendProviders
   implements
     DecisionProvider,
@@ -75,6 +77,7 @@ export class BackendProviders
     path: string,
     body: unknown,
     signal?: AbortSignal,
+    timeoutMs = 90000,
   ): Promise<T> {
     if (!this.token)
       throw new Error(
@@ -89,7 +92,7 @@ export class BackendProviders
         Authorization: `Bearer ${this.token}`,
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.any([this.shutdown.signal, AbortSignal.timeout(90000), ...(signal ? [signal] : [])]),
+      signal: AbortSignal.any([this.shutdown.signal, AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]),
     });
     if (!response.ok) {
       const data = (await response
@@ -136,7 +139,8 @@ export class BackendProviders
     return this.post<import("../../contracts/src/index.js").ThoughtPlan>("/v1/plan-thoughts",input,signal);
   }
   consolidate(input: import("../../contracts/src/index.js").ThoughtInput, signal?: AbortSignal) {
-    return this.post<import("../../contracts/src/index.js").ThoughtResult>("/v1/consolidate",input,signal);
+    // Outlasts the backend's 150 s organizer timeout, so a long generation reports its own readable error.
+    return this.post<import("../../contracts/src/index.js").ThoughtResult>("/v1/consolidate",input,signal,ORGANIZATION_TIMEOUT_MS);
   }
   respond(
     messages: ChatMessage[],

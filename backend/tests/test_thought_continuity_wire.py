@@ -75,7 +75,7 @@ async def test_state_specific_schema_and_reconciled_summary_context(wire_format,
         'speaker attribution', 'uncertainty', 'NEW episode, not a merge',
     ]:
         assert behavior in instructions
-    assert captures[0]['max_completion_tokens'] == 8192
+    assert captures[0]['max_completion_tokens'] == 16384
     assert 'chat_template_kwargs' not in captures[0]
 
 

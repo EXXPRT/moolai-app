@@ -947,7 +947,7 @@ async def test_standalone_answer_mode_does_not_leak_to_organization_or_agent(rec
             assert body['chat_template_kwargs'] == {'enable_thinking':False}
             answer = json.dumps({'title':'Plan','summary':'The user is planning a change.','topicSuggestions':[],'topicSuggestion':None})
         elif name == 'thoughts':
-            assert body['max_completion_tokens'] == 8192
+            assert body['max_completion_tokens'] == 16384
             assert 'chat_template_kwargs' not in body
             state = json.loads(body['messages'][1]['content'])
             answer = json.dumps({'groups':[{'title':'Plan','summary':'The user is planning a change.',

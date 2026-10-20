@@ -31,7 +31,7 @@ async def test_semantic_units_partition_source_with_utf16_and_never_use_pause_bo
             assert result.groups[0].spans[1].start==14
             assert result.groups[0].spans[1].end==20
     assert len(captures)==1
-    assert captures[0]['max_completion_tokens']==8192
+    assert captures[0]['max_completion_tokens']==16384
     assert captures[0]['temperature']==0.2
     assert 'chat_template_kwargs' not in captures[0]  # Preserve grouping's evaluated reasoning profile.
     assert 'max_request_bytes' not in captures[0]

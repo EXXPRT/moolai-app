@@ -12,10 +12,10 @@ from moolai_backend.settings import Settings
 def test_organization_environment_is_independent(monkeypatch):
     monkeypatch.delenv('NEBIUS_ORGANIZATION_MAX_TOKENS', raising=False)
     default = Settings.from_env()
-    assert default.organization_max_completion_tokens == 8192
-    monkeypatch.setenv('NEBIUS_ORGANIZATION_MAX_TOKENS', '16384')
+    assert default.organization_max_completion_tokens == 16384
+    monkeypatch.setenv('NEBIUS_ORGANIZATION_MAX_TOKENS', '8192')
     configured = Settings.from_env()
-    assert configured.organization_max_completion_tokens == 16384
+    assert configured.organization_max_completion_tokens == 8192
     assert configured.summary_max_completion_tokens == default.summary_max_completion_tokens
     assert configured.agent_max_tokens == default.agent_max_tokens
     assert configured.thought_organization_format == default.thought_organization_format
@@ -122,3 +122,36 @@ async def test_organization_limit_failure_keeps_source_and_does_not_retry():
         with pytest.raises(ServiceError, match='8,192-token output limit'):
             await NebiusProvider(Gateway(settings, client)).consolidate(source)
     assert len(calls) == 1 and source.model_dump() == original
+
+
+async def test_only_organization_gets_the_longer_provider_timeout(record):
+    # A 16,384-token organizer generation takes about 80 s; every other call keeps its 90 s bound.
+    settings = Settings(nebius_api_key='fixture')
+    timeouts = {}
+
+    def upstream(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json={'data': [{'id': model} for model in (settings.summary_model, settings.agent_model)]})
+        body = json.loads(request.content)
+        name = body.get('response_format', {}).get('json_schema', {}).get('name') or body['model']
+        timeouts[name] = request.extensions['timeout']['read']
+        if name == 'thoughts':
+            answer = {'groups': [{'title': 'Garden', 'summary': 'Shade remains uncertain.', 'topicSuggestions': [],
+                                  'unitIds': ['u0'], 'continuesActive': False, 'ongoing': False}], 'remainder': []}
+        elif name == 'summary':
+            answer = {'title': 'Garden', 'summary': 'Shade remains uncertain.', 'topicSuggestions': []}
+        else:
+            answer = None
+        return httpx.Response(200, json={'model': body['model'], 'choices': [{
+            'finish_reason': 'stop', 'message': {'content': json.dumps(answer) if answer else 'The proposal is unconfirmed.'}}]})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        provider = NebiusProvider(Gateway(settings, client))
+        try:
+            await provider.consolidate(thought())
+        except ServiceError:
+            pass  # The organizer's reply shape is not under test; its request timeout is.
+        await provider.summarize(record)
+        await provider.respond(RespondInput(messages=[{'role': 'user', 'content': 'What is known?'}], tools=[]))
+    assert timeouts['thoughts'] == 150
+    assert timeouts['summary'] == 90 and timeouts[settings.agent_model] == 90

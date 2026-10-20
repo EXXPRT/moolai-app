@@ -26,7 +26,8 @@ class Settings:
     summary_max_completion_tokens: int = 1200
     # Organization includes reasoning and the final structured topic summaries.
     # Keep this independent from standalone summaries and the optional planner.
-    organization_max_completion_tokens: int = 8192
+    # Reasoning plus the structured result; at 8,192, 6 of 13 finalizing passes ran out (19 Oct gate).
+    organization_max_completion_tokens: int = 16384
     # Keep the library default stable for frozen experiments. Deployments may
     # explicitly allow more room for Ultra's reasoning and final presentation.
     agent_max_tokens: int = 2400

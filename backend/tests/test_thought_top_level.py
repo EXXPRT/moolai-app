@@ -88,7 +88,7 @@ async def test_schema_constrains_state_and_server_assigns_only_first_and_last_fl
     assert schema['properties']['groups']['maxItems'] == 6
     assert properties['summary']['maxLength'] == 1000
     assert payload['model'] == 'nvidia/Nemotron-3_5-Lightning'
-    assert payload['max_completion_tokens'] == 8192 and payload['temperature'] == 0.2
+    assert payload['max_completion_tokens'] == 16384 and payload['temperature'] == 0.2
     assert 'chat_template_kwargs' not in payload
     assert 'FIRST group and lastOngoing only to the LAST group' in payload['messages'][0]['content']
     state = json.loads(payload['messages'][1]['content'])
@@ -165,7 +165,7 @@ async def test_provider_failure_or_exhausted_output_does_not_retry(failure):
     result, _ = await execute(thought(), output(), status=503 if failure == 'provider' else 200,
                               finish='length' if failure == 'output-limit' else 'stop')
     assert isinstance(result, ServiceError)
-    if failure == 'output-limit': assert '8,192-token output limit' in str(result)
+    if failure == 'output-limit': assert '16,384-token output limit' in str(result)
 
 
 async def test_complete_request_bound_is_unchanged_and_checked_before_dispatch():
