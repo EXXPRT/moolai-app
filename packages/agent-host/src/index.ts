@@ -26,7 +26,7 @@ export async function createAgentHost(options: {
   nativePath: string;
   speechRoot?: string;
   onEvent: (event: AgentEvent) => void;
-  speech?: {speak(text:string):Promise<void>;stop():Promise<void>;warm():Promise<void>;close():void};
+  speech?: {speak(text:string):Promise<void>;stop():Promise<void>;warm():Promise<void>;close():void;resume?():Promise<void>};
   waitForAsr?: (signal: AbortSignal) => Promise<void>;
   fixtureCapture?: () => Promise<{ mimeType: string; bytes: Uint8Array }>;
   /** Apps the companion leaves out of screen captures, such as the host's own window, and how to name them. */
@@ -88,7 +88,7 @@ export async function createAgentHost(options: {
     if (event.event === "error")
       emit({ type: "notice", message: String(event.message ?? event.error) });
     if (event.event === "speech_started")
-      void agent.speechStarted().catch(e => emit({type: "notice", message: String(e)}));
+      void agent.speechStarted({paused: event.paused === true}).catch(e => emit({type: "notice", message: String(e)}));
     if (event.event === "status") {
       status = { ...status, ...event };
       if (event.listening === true) captureMayBeOn = true;
@@ -129,6 +129,10 @@ export async function createAgentHost(options: {
       },
       async stop() {
         if (voiceEnabled && !closed) await speech.stop();
+      },
+      async resume() {
+        if (!speech.resume) throw Error("This speech output cannot resume");
+        if (voiceEnabled && !closed) await speech.resume();
       },
     },
     acceptance: providers instanceof BackendProviders ? providers : undefined,

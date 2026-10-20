@@ -336,6 +336,8 @@ export interface CapturePort {
 export interface SpeechPort {
   speak(text: string): Promise<void>;
   stop(): Promise<void>;
+  /** Continues playback a sound paused; hosts without it stop instead. */
+  resume?(): Promise<void>;
 }
 export interface AcceptancePort {
   accept(

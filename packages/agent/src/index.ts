@@ -129,6 +129,8 @@ export class Agent {
   private attention?: { done: Promise<void>; release: () => void; timer: ReturnType<typeof setTimeout>; previous?: AgentState['activity'] };
   private activeRequest?: UserTurnSnapshot;
   private thoughtsHeld = false;
+  /** Set while a sound has paused Moo's speech and its meaning is not yet known. */
+  private pausedPlayback?: ReturnType<typeof setTimeout>;
   /** The response epoch whose answer reached the conversation. */
   private publishedEpoch = -1;
   private heldHelp?: { conversationId: string; sourceId: string; request: UserTurnSnapshot; signal: AbortSignal; captured: boolean; mode: "ocr" | "visual" };
@@ -142,9 +144,11 @@ export class Agent {
       });
     } catch (error) { console.warn(`Interaction trace not saved: ${errorText(error)}`); }
   }
-  /** Playback stops now; response work waits for the meaning of the incoming utterance. */
-  async speechStarted() {
-    this.playbackEpoch++;
+  /** Response work waits for the meaning of the incoming utterance. Playback the companion paused waits too: it resumes
+   * if the sound holds no words or only a filler, and stops for real speech. Otherwise playback stops now. */
+  async speechStarted(options: {paused?: boolean} = {}) {
+    const pause = options.paused === true && !!this.p.speech.resume;
+    if (!pause) this.playbackEpoch++;
     this.speechEpoch++;
     if (!this.attention) {
       let release!:()=>void;
@@ -157,14 +161,38 @@ export class Agent {
       this.attention={done,release,timer,previous:this.state.activity};
     }
     this.state.activity='listening';
-    await this.p.speech.stop();
-    await this.trace('speech_onset');
+    if (pause) this.holdPlayback();
+    else { await this.stopPausedPlayback(); await this.p.speech.stop(); }
+    await this.trace('speech_onset', pause ? {paused: true} : {});
     await this.persist();
   }
   async recognitionRejected() {
     await this.trace('recognition_rejected');
+    await this.resumePausedPlayback();
     this.releaseAttention();
     await this.persist();
+  }
+  private holdPlayback() {
+    if (this.pausedPlayback) return;
+    // Speech still unresolved after this long is real speech; the reading stops.
+    const timer = setTimeout(() => void this.stopPausedPlayback().catch(e => this.notice(errorText(e))), PAUSED_PLAYBACK_MS);
+    timer.unref?.();
+    this.pausedPlayback = timer;
+  }
+  private async stopPausedPlayback() {
+    const timer = this.pausedPlayback;
+    if (!timer) return;
+    clearTimeout(timer); this.pausedPlayback = undefined;
+    this.playbackEpoch++;
+    await this.p.speech.stop();
+  }
+  private async resumePausedPlayback() {
+    const timer = this.pausedPlayback;
+    if (!timer) return;
+    clearTimeout(timer); this.pausedPlayback = undefined;
+    await this.trace('playback_resumed');
+    try { await this.p.speech.resume!(); }
+    catch { this.playbackEpoch++; await this.p.speech.stop(); }
   }
   private releaseAttention() {
     const held=this.attention;
@@ -401,11 +429,13 @@ export class Agent {
   }
   /** Stop speech ends playback only; response work, the conversation and walkthrough offers stay. interrupt() is the explicit cancel. */
   async stopSpeech() {
+    if (this.pausedPlayback) { clearTimeout(this.pausedPlayback); this.pausedPlayback = undefined; }
     this.playbackEpoch++;
     await this.p.speech.stop();
   }
   /** Explicit Stop cancels response work, never the conversation or retained source. */
   async interrupt() {
+    if (this.pausedPlayback) { clearTimeout(this.pausedPlayback); this.pausedPlayback = undefined; }
     this.playbackEpoch++;
     this.speechEpoch++;
     this.stopEpoch++;
@@ -551,6 +581,16 @@ export class Agent {
       .join(" ")
       .trim();
     if (!text) return;
+    // A lone filler while Moo speaks or works (often a click or breath the recognizer heard as "Moo") is not an
+    // interruption: the reading resumes, nothing is routed or cancelled, and the words stay in the transcript.
+    if ((this.pausedPlayback || this.state.busy) && fillerOnly(text)) {
+      await this.p.brain.setState(`handled:${turnId}`, revisionKey);
+      await this.trace("filler_ignored", {turnId, text: text.slice(0, 40)});
+      await this.resumePausedPlayback();
+      return;
+    }
+    // Real words stop a paused reading, as an interruption always did.
+    await this.stopPausedPlayback();
     this.track(this.queueAcceptance(session));
     const turnOwner=await this.p.brain.getState<string>(`turn-record:${turnId}`);
     const currentPlaybackTurn=sourceSessionId===this.state.sessionId && (!turnOwner || turnOwner===this.state.conversationId);
@@ -2581,6 +2621,11 @@ export class Agent {
  * scored 0.43–0.50 for understandability against 0.69–0.94 for complete notes. */
 const FIDELITY_REVIEW_BELOW = 0.4;
 const CONTEXT_REVIEW_BELOW = 0.6;
+const PAUSED_PLAYBACK_MS = 8000;
+/** "Moo", "mm", "uh" and the like, alone: what clicks, breaths and echo turn into while Moo is speaking. */
+function fillerOnly(text: string) {
+  return /^(?:(?:hey\s+)?moo+|m+|mm+-?hm+|mhm+|hmm+|uh+|um+|ah+|oh+|er+|erm+|huh|uh-?huh|eh)(?:[\s.,!?…]+(?:moo+|m+|mm+|uh+|um+|hmm+))*[\s.,!?…]*$/i.test(text.trim());
+}
 const ANSWER_FAILED = "I couldn't finish that answer. Your request is saved; ask again when you're ready.";
 /** The backend rejects a J1 state whose JSON is over 180,000 characters (providers.py bounded_state). An oversized
  * context keeps its head (current work, linked request) and its latest lines, and the middle is replaced by an

@@ -88,6 +88,10 @@ export class LocalSpeech {
       child.stdin.write(JSON.stringify({id,text})+"\n");
     });
   }
+  /** Continues a reading the companion paused when a sound started. */
+  async resume() {
+    await this.native.request("resumeSpeaking");
+  }
   async stop() {
     this.epoch++;
     if(this.active){const pending=this.active;this.active=undefined;pending.reject(Error("Speech interrupted"));}

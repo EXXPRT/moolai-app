@@ -352,3 +352,30 @@ createInterface({input:process.stdin}).on('line',line=>{
     assert.ok(session.segments.some(s=>s.text==='Glycolysis makes two ATP.'),'The words are saved');
   }finally{await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
 });
+
+// Ian, 20 Oct: a sound pauses Moo's reading; when it holds no words, the host asks the companion to resume.
+test('a sound that paused the reading and held no words resumes playback in the companion',async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'moolai-resume-'));
+  const nativePath=join(directory,'companion.mjs');
+  await writeFile(nativePath,`#!${process.execPath}
+import {createInterface} from 'node:readline';
+const methods=[];const emit=x=>console.log(JSON.stringify(x));
+createInterface({input:process.stdin}).on('line',line=>{
+ const r=JSON.parse(line);methods.push(r.method);
+ if(r.method==='startListening'){
+  emit({event:'status',requestedOn:true,listening:true,speaking:false,phase:'listening'});
+  setTimeout(()=>{emit({event:'speech_started',interruptedPlayback:true,paused:true});setTimeout(()=>emit({event:'recognition_rejected'}),20);},20);
+ }
+ if(r.method==='stopListening')emit({event:'status',requestedOn:false,listening:false,speaking:false,phase:'off'});
+ emit({id:r.id,result:r.method==='health'?{methods}:{}});
+});`,{mode:0o700});
+  const brain=new MemoryBrain();
+  const host=await createAgentHost({waitForAsr:async()=>{},brain,providers:new FixtureProviders(),nativePath,onEvent:()=>{}});
+  try {
+    await host.voice('start');
+    let methods:string[]=[];
+    for(let i=0;i<200&&!methods.includes('resumeSpeaking');i++){await new Promise(r=>setTimeout(r,5));methods=((await host.nativeHealth()) as {methods:string[]}).methods;}
+    assert.ok(methods.includes('resumeSpeaking'),'The companion is asked to resume');
+    assert.ok(!methods.includes('stopSpeaking'),'The reading is not stopped');
+  }finally{await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
+});

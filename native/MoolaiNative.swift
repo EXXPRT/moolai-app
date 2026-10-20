@@ -58,6 +58,8 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
     private var playbackFrames: AVAudioFrameCount = 0
     private var playbackEnded = false
     private var speaking = false
+    /// A sound paused playback; the host resumes it if the sound was not speech, or stops it.
+    private var playbackPaused = false
     private var activity = VoiceActivity()
     private var diagnostics: [[String: Any]] = []
     private var recognitionContext = ""
@@ -145,7 +147,7 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
                         self.playbackBuffers -= 1; self.playbackFrames -= count; self.finishPlaybackIfReady()
                     }
                 }
-                if !target.isPlaying { target.play() }
+                if !target.isPlaying && !playbackPaused { target.play() }
                 result = ["queued": true]
             case "endSpeechAudio":
                 guard params["utteranceId"] as? String == pcmUtterance, pcmUtterance != nil else { throw NativeFailure(message: "Discarded stale speech completion") }
@@ -156,6 +158,8 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
             case "stopSpeaking":
                 stopPlayback()
                 result = ["stopped": true]
+            case "resumeSpeaking":
+                result = ["resumed": resumePlayback()]
             case "recognitionContext":
                 recognitionContext = String((params["text"] as? String ?? "").prefix(400))
                 if socket != nil && configured { try await sendJSON(["type": "session.context", "context": recognitionContext]) }
@@ -270,10 +274,11 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
                     guard let self else { return }
                     self.drainCapture()
                     if self.listening && self.activity.observe(rms: rms, seconds: seconds) {
+                        // Pause, not stop: a click, cough or echo resumes the sentence once it turns out to hold no words.
                         let wasSpeaking = self.speaking
-                        self.stopPlayback()
+                        if wasSpeaking { self.pausePlayback() }
                         self.diagnostic("speech_onset", ["interruptedPlayback": wasSpeaking])
-                        self.emit(["event": "speech_started", "interruptedPlayback": wasSpeaking])
+                        self.emit(["event": "speech_started", "interruptedPlayback": wasSpeaking, "paused": wasSpeaking])
                     }
                 }
             }
@@ -425,7 +430,27 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
         } catch { fail("Audio device changed; final transcription or reconnection failed: \(error.localizedDescription). Use Talk to retry.") }
         reconnecting = false; publishStatus()
     }
+    private func pausePlayback() {
+        guard speaking, !playbackPaused else { return }
+        playbackPaused = true
+        player.pause(); outputPlayer.pause()
+        if speech.isSpeaking { speech.pauseSpeaking(at: .immediate) }
+        publishStatus()
+    }
+    private func resumePlayback() -> Bool {
+        guard playbackPaused else { return false }
+        playbackPaused = false
+        // Playing a node whose engine has stopped (mic turned off meanwhile) raises; that reading is over.
+        if pcmUtterance != nil {
+            if pcmOutputOnly ? outputEngine.isRunning : audio.isRunning { (pcmOutputOnly ? outputPlayer : player).play() }
+            else { stopPlayback(); return false }
+        }
+        if speech.isPaused { speech.continueSpeaking() }
+        publishStatus()
+        return true
+    }
     private func stopPlayback() {
+        playbackPaused = false
         speechCancellation += 1
         player.stop(); outputPlayer.stop(); outputEngine.stop(); pcmUtterance = nil
         speech.stopSpeaking(at: .immediate)
