@@ -5,8 +5,9 @@ import type { BrainRecord } from "../../../packages/contracts/src/index.js";
 import { noteTitle, relatedRecords } from "../../../packages/contracts/src/records.js";
 import type { SessionHub } from "./session-hubs.js";
 
-export default function BrainGraph({ record, records, onSelect, overview = false, sessions = [] }: {
+export default function BrainGraph({ record, records, onSelect, overview = false, sessions = [], status }: {
   record?: BrainRecord; records: BrainRecord[]; onSelect: (id: string) => void; overview?: boolean; sessions?: SessionHub[];
+  status?: { label: string; tone: "busy" | "done" | "attention" };
 }) {
   const container = useRef<HTMLDivElement>(null);
   const graph = useRef<cytoscape.Core | null>(null);
@@ -173,6 +174,7 @@ export default function BrainGraph({ record, records, onSelect, overview = false
     }} />
     {!visible.length ? <div className="graph-empty"><span aria-hidden="true">✧</span><p>A little space for your next idea.</p><small>Your thoughts and their connections will grow here.</small></div> : null}
     <div className="graph-toolbar">
+      {status ? <span className={`graph-organizing ${status.tone}`} role="status" aria-live="polite">{status.label}</span> : null}
       <span className="graph-scope">{visible.length} of {available.length} notes{hubs.length ? ` · ${hubs.length} session${hubs.length === 1 ? "" : "s"}` : ""}{overview ? " · recent + connected" : " · neighbourhood"}</span>
       <div className="graph-controls" aria-label="Graph controls"><button className="icon-button" aria-label="Zoom out" title="Zoom out" onClick={() => zoom(.8)}>−</button><button className="icon-button" aria-label="Zoom in" title="Zoom in" onClick={() => zoom(1.25)}>+</button><button className="text-button" onClick={() => { const cy = graph.current; if (cy?.nodes().length) animateViewport({ fit: { eles: cy.elements(), padding: 60 } }); }}>Fit</button></div>
     </div>
