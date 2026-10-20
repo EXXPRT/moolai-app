@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { AgentReply, BrainPort, RouteDecision, RouteInput, ThoughtInput, ThoughtResult } from "../../contracts/src/index.js";
+import type { AgentReply, BrainPort, ChatMessage, RouteDecision, RouteInput, ThoughtInput, ThoughtResult, ToolDefinition } from "../../contracts/src/index.js";
 import { transcriptText } from "../../contracts/src/index.js";
 import { MemoryBrain, SQLiteBrain } from "../../brain/src/index.js";
 import { FixtureProviders } from "../../agent-host/src/providers.js";
@@ -21,7 +21,7 @@ for (const kind of ["memory", "sqlite"] as const) {
     let brain: BrainPort = kind === "memory" ? new MemoryBrain() : new SQLiteBrain(dir);
     const p = new FixtureProviders(); let n = 0;
     const calls = { organized: [] as ThoughtInput[], routes: [] as RouteInput[], spoken: [] as string[], captures: 0,
-      vision: [] as { question: string; mode?: string }[], tags: 0 };
+      vision: [] as { question: string; mode?: string }[], tags: 0, tools: [] as string[][] };
     const hooks = {
       /** J1's doubt answer for idle turns; the route itself comes from the fixture router. */
       doubt: (_input: RouteInput): number | undefined => undefined,
@@ -30,6 +30,7 @@ for (const kind of ["memory", "sqlite"] as const) {
       organizerFails: false,
       answerHold: undefined as Promise<void> | undefined,
       captureHold: undefined as Promise<void> | undefined,
+      captureFails: false,
     };
     const consolidate = p.consolidate.bind(p);
     p.consolidate = async (input): Promise<ThoughtResult> => {
@@ -48,10 +49,12 @@ for (const kind of ["memory", "sqlite"] as const) {
     const tag = p.tag.bind(p);
     p.tag = async input => { calls.tags++; const decision = await tag(input); return { ...decision, doubt: hooks.tagDoubt }; };
     const respond = p.respond.bind(p);
-    p.respond = async (messages): Promise<AgentReply> => { if (hooks.answerHold) await hooks.answerHold; return respond(messages); };
+    p.respond = (async (messages: ChatMessage[], tools?: ToolDefinition[]): Promise<AgentReply> => {
+      calls.tools.push((tools ?? []).map(t => t.name)); if (hooks.answerHold) await hooks.answerHold; return respond(messages);
+    }) as typeof p.respond;
     const make = () => new Agent({ brain, decisions: p, generation: p, search: p, id: () => `${kind}-${++n}`, now,
       vision: { interpret: async (_image, question, _signal, options) => { calls.vision.push({ question, mode: options?.mode }); return "Sample A minimum 12 kPa."; } },
-      capture: { async capture() { calls.captures++; if (hooks.captureHold) await hooks.captureHold; return { mimeType: "image/png", bytes: new Uint8Array([1, 2, 3]) }; } },
+      capture: { async capture() { calls.captures++; if (hooks.captureHold) await hooks.captureHold; if (hooks.captureFails) throw Error("Screen Recording permission is required"); return { mimeType: "image/png", bytes: new Uint8Array([1, 2, 3]) }; } },
       speech: { async speak(text) { calls.spoken.push(text); }, async stop() {} } });
     let agent = make(); await agent.initialize(); await agent.startSession();
     const offers = () => calls.spoken.filter(text => text === OFFER).length;
@@ -186,6 +189,38 @@ for (const kind of ["memory", "sqlite"] as const) {
     await t.agent.submitText("Yes"); await t.agent.drain();
     assert.equal(t.calls.captures, 1);
     assert.equal(t.calls.vision[0]!.mode, "ocr");
+  });
+
+  run("J1 sees the utterance once, not again at the end of its recent context (20 Oct part 4)", async t => {
+    await t.agent.submitText("Glaciers move because ice deforms under its own weight."); await t.agent.drain();
+    await t.agent.submitText("I'm not sure why sample A's minimum pressure is lower than sample B's."); await t.agent.drain();
+    const last = t.calls.routes.at(-1)!;
+    assert.equal(last.text, "I'm not sure why sample A's minimum pressure is lower than sample B's.");
+    assert.doesNotMatch(last.recentContext, /not sure why sample A/, "The current utterance is not repeated");
+    assert.match(last.recentContext, /Glaciers move/, "Earlier speech stays in the context");
+  });
+
+  run("an explicit screenshot request in a conversation is captured before Moo answers", async t => {
+    await t.agent.submitText("Moo, help me with the pressure table."); await t.agent.drain();
+    assert.ok(t.agent.getState().conversationId);
+    await t.agent.submitText("Can you take a screenshot of my screen and tell me why this happens?"); await t.agent.drain();
+    assert.equal(t.calls.captures, 1, "Moo captures once, without waiting for the model to call the tool");
+    assert.equal(t.calls.vision[0]!.mode, "ocr");
+    assert.match(t.calls.vision[0]!.question, /tell me why this happens/);
+    assert.ok(!t.calls.tools.at(-1)!.includes("capture_screen"), "The answer is not offered a second capture");
+    assert.equal(await t.answers(), 2);
+    const trace = await t.brain.getState<{action: string}[]>("interaction-trace");
+    assert.ok(trace!.some(e => e.action === "screen_capture_requested"), "Moo made the capture the model skipped");
+  });
+
+  run("a failed requested capture still gets an answer that knows the screen was not seen", async t => {
+    t.hooks.captureFails = true;
+    await t.agent.submitText("Moo, take a screenshot and read the table."); await t.agent.drain();
+    assert.equal(t.calls.captures, 1);
+    assert.equal(await t.answers(), 1, "The request is still answered");
+    assert.equal(t.agent.getState().lastError, undefined);
+    const ledger = JSON.stringify(await t.brain.getState(`tool-ledger:${t.agent.getState().conversationId}`));
+    assert.match(ledger, /Screen Recording permission is required/, "The model is told the capture failed");
   });
 
   run("no doubt offer while a conversation is open or another offer is pending", async t => {

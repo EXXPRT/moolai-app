@@ -701,7 +701,10 @@ export class Agent {
     try {
       decision = await this.p.decisions.route(boundedRouteInput({
         text,
+        // The utterance is latestUserUtterance; repeating it here made J1's doubt question read it as already
+        // mentioned (0.95 without the copy, 0.68-0.79 with it; 20 Oct check).
         recentContext: (this.state.busy && this.activeRequest ? `Current work (background): ${this.activeRequest.text}\nStatus: ${this.attention?.previous ?? this.state.activity ?? "preparing"}\n` : "") + (linkedRequest ? `Original linked request:\n${transcriptText(linkedRequest)}\nRecent conversation:\n` : "") + session.segments
+          .filter((s) => s.turnId !== turnId)
           .slice(-20)
           .map((s) => `${s.speaker}: ${s.text}`)
           .join("\n"),
@@ -1380,6 +1383,16 @@ export class Agent {
         assertPolicy();
       };
       await ensureFresh();
+      // The user explicitly asked Moo to look at the screen and the model answered without looking (in the 20 Oct
+      // run Ultra said it cannot take screenshots): make the offered capture call for it, then let it answer from
+      // the evidence. A model that calls the tool itself keeps its own question and mode.
+      if (production && !finalMode && !reply.toolCalls.length && sourceTurn && !screenAttempted &&
+          tools.some(t => t.name === "capture_screen") && !messages.some(m => m.toolCalls?.some(c => c.name === "capture_screen")) && (record ? allowsScreenCapture(record.segments.filter(s => s.turnId === sourceTurn.turnId)) : false)) {
+        await this.trace("screen_capture_requested", {reason: "model_answered_without_capture"});
+        reply.text = "";
+        reply.toolCalls = [{ id: `screen-requested:${sourceTurn.turnId}`, name: "capture_screen",
+          arguments: { question: boundedText(sourceTurn.text, 1000), mode: visualRequest(sourceTurn.text) ? "visual" : "ocr" } }];
+      }
       if (finalMode && reply.toolCalls.length) throw new Error("Final answer requested; further tool work remains unresolved.");
       if (workflow && ((sourceTurn && !(await this.isLatestUserTurn(sourceTurn))) || (evidence && !(await responseEvidenceIsCurrent(this.p.brain, evidence))))) {
         await this.p.brain.setState(`response-experiment:stale:${id}:${epoch}`, { reply, sourceTurn, evidence });
@@ -2598,6 +2611,10 @@ function screenCaptureRevoked(text: string): boolean {
   return /\b(?:don't|don’t|do not|never|stop|avoid|without|no)\b[^.!?]*\b(?:screenshots?|screen shots?|screen|captur(?:e|ing))\b/i.test(text);
 }
 /** Only explicit, unquoted user requests authorize screen access within this exchange. */
+/** Identification questions need the visual model; everything else is read as text. */
+function visualRequest(text: string) {
+  return /\b(?:what (?:is|are) (?:this|these|that|those)|identify|what kind|which (?:bird|animal|plant|insect|object|species)|breed|species)\b/i.test(text);
+}
 function allowsScreenCapture(segments: Segment[]): boolean {
   const turns = new Map<string, string[]>();
   for (const segment of segments) {
