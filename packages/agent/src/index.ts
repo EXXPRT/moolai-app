@@ -140,7 +140,8 @@ export class Agent {
     try {
       await this.serial(async()=> {
         const entries=await this.p.brain.getState<unknown[]>("interaction-trace") ?? [];
-        await this.p.brain.setState("interaction-trace",[...entries.slice(-79),{at:this.p.now(),action,requestTurnId:this.activeRequest?.turnId,...detail}]);
+        // About one test session's worth: 80 entries lost the first half of Ian's 20 Oct run.
+        await this.p.brain.setState("interaction-trace",[...entries.slice(-(TRACE_ENTRIES-1)),{at:this.p.now(),action,requestTurnId:this.activeRequest?.turnId,...detail}]);
       });
     } catch (error) { console.warn(`Interaction trace not saved: ${errorText(error)}`); }
   }
@@ -2622,6 +2623,7 @@ export class Agent {
 const FIDELITY_REVIEW_BELOW = 0.4;
 const CONTEXT_REVIEW_BELOW = 0.6;
 const PAUSED_PLAYBACK_MS = 8000;
+const TRACE_ENTRIES = 400;
 /** "Moo", "mm", "uh" and the like, alone: what clicks, breaths and echo turn into while Moo is speaking. */
 function fillerOnly(text: string) {
   return /^(?:(?:hey\s+)?moo+|m+|mm+-?hm+|mhm+|hmm+|uh+|um+|ah+|oh+|er+|erm+|huh|uh-?huh|eh)(?:[\s.,!?…]+(?:moo+|m+|mm+|uh+|um+|hmm+))*[\s.,!?…]*$/i.test(text.trim());
