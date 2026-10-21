@@ -19,20 +19,34 @@ for(const kind of ['memory','sqlite']) {
     const dir=await mkdtemp(join(tmpdir(),'moolai-accidental-'));
     const brain:BrainPort=kind==='memory'?new MemoryBrain():new SQLiteBrain(dir);
     const p=new FixtureProviders();let n=0;
-    const speech={spoken:[] as string[],stops:0,resumes:0};
+    const speech={spoken:[] as string[],stops:0,resumes:0,playing:false};
     const routes:RouteInput[]=[],overrides:Record<string,RouteDecision|Error>={};
     const route=p.route.bind(p);p.route=async input=>{routes.push(input);const o=overrides[input.text];if(o instanceof Error)throw o;return o ?? route(input);};
     let release:(()=>void)|undefined;
     let answer:Promise<void>|undefined;
+    // A held speak stays pending until the test releases it, as a reading of minutes does; stop() alone does not settle it.
+    let hold=false,finish:(()=>void)|undefined;
     p.respond=async():Promise<AgentReply>=>{if(answer)await answer;return {text:'Osmosis moves water across a membrane.',toolCalls:[]};};
-    const port={async speak(text:string){speech.spoken.push(text);},async stop(){speech.stops++;},
-      ...(options.resume===false?{}:{async resume(){speech.resumes++;}})};
+    const port={async speak(text:string){speech.spoken.push(text);if(!hold)return;hold=false;speech.playing=true;await new Promise<void>(r=>finish=r);speech.playing=false;},
+      async stop(){speech.stops++;},...(options.resume===false?{}:{async resume(){speech.resumes++;}})};
     const agent=new Agent({brain,decisions:p,generation:p,search:p,vision:p,capture:{async capture(){throw Error('unused')}},speech:port,id:()=>`id-${++n}`,now:()=>at});
     await agent.initialize();await agent.startSession();
     return {brain,agent,speech,routes,overrides,
       holdAnswer(){answer=new Promise<void>(r=>release=r);return ()=>{answer=undefined;release?.();};},
+      holdSpeech(){hold=true;return ()=>finish?.();},
       async turn(id:string,text:string){await agent.ingest(seg(id,text));await agent.settleTurn(id);},
-      async close(){await agent.drain();await brain.close();await rm(dir,{recursive:true,force:true});}};
+      async close(){finish?.();await agent.drain();await brain.close();await rm(dir,{recursive:true,force:true});}};
+  }
+  /** Whether the work finishes within a second, while a held reading still plays; a reading awaited on the turn queue holds it up. */
+  const soon=(work:Promise<unknown>)=>Promise.race([work.then(()=>true),new Promise<boolean>(res=>setTimeout(res,1000,false).unref())]);
+  /** Moo answers, then reads the answer in full until the test releases it. */
+  async function reading(r:Awaited<ReturnType<typeof rig>>) {
+    await r.turn('ask','Moo, explain osmosis.');await r.agent.drain();
+    const end=r.holdSpeech();void r.turn('read','Moo. Read it in full.');
+    for(let i=0;i<500&&!r.speech.playing;i++)await new Promise(res=>setTimeout(res,2));
+    assert.equal(r.speech.playing,true,'The reading has started');
+    assert.equal(r.speech.spoken.at(-1),'Osmosis moves water across a membrane.');
+    return {routed:r.routes.length,stops:r.speech.stops,end};
   }
 
   test(`${kind}: a sound with no words pauses Moo's reading and it resumes`,async()=>{
@@ -219,5 +233,54 @@ for(const kind of ['memory','sqlite']) {
       await r.agent.recognitionRejected();
       assert.equal(r.speech.resumes,0,'A reading already stopped is not resumed');
     }finally{t.mock.timers.reset();await r.close();}
+  });
+
+  // Ian, 21 Oct test A: Moo could not read a whole answer without stopping. The reading held the turn queue, so the
+  // sound that paused it was heard only after the eight-second stop, and real words waited as long.
+  test(`${kind}: "Mm." during a held reading resumes it once, without stopping or routing it`,async()=>{
+    const r=await rig();try{
+      const {routed,stops}=await reading(r);
+      await r.agent.speechStarted({paused:true});await soon(r.turn('noise','Mm.'));
+      assert.equal(r.speech.resumes,1,'The filler resumes the reading at once');
+      assert.equal(r.speech.stops,stops,'It does not stop it');
+      assert.equal(r.routes.length,routed,'J1 is never asked about the filler');
+      assert.equal(r.speech.playing,true);
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: "Mm-hm." during a reading is not routed, and the reading resumes`,async()=>{
+    const r=await rig();try{
+      const {routed,stops,end}=await reading(r);
+      await r.agent.speechStarted({paused:true});await soon(r.turn('agree','Mm-hm.'));
+      assert.equal(r.speech.resumes,1,'The reading resumes at once');
+      // A sound too short to pause Moo can still reach the recognizer; with Moo idle, J1 would hear this "mm-hm".
+      await soon(r.turn('again','Mm-hm.'));
+      assert.equal(r.routes.length,routed,'J1 is never asked about either filler');
+      assert.equal(r.speech.stops,stops,'Neither filler stops the reading');
+      assert.equal(r.speech.playing,true);
+      end();await r.agent.drain();
+      await r.turn('idle','Mm-hm.');await r.agent.drain();
+      assert.equal(r.routes.at(-1)!.text,'Mm-hm.','Once the reading has ended, J1 hears an "mm-hm" again');
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: real words during a reading stop it at once and are routed`,async()=>{
+    const r=await rig();try{
+      const {routed,stops}=await reading(r);
+      await r.agent.speechStarted({paused:true});await soon(r.turn('real','Wait, what about osmosis in plant roots?'));
+      assert.equal(r.speech.stops,stops+1,'The reading is stopped at once');
+      assert.equal(r.speech.playing,true,'The stop does not wait for the reading to end');
+      assert.deepEqual(r.routes.slice(routed).map(x=>x.text),['Wait, what about osmosis in plant roots?']);
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: a later turn is handled while the reading is still being spoken`,async()=>{
+    const r=await rig();try{
+      const {routed}=await reading(r);
+      assert.equal(await soon(r.turn('later','And how does it differ from diffusion?')),true,'The turn queue is free');
+      assert.equal(await r.brain.getState('handled:later'),'later:1');
+      assert.deepEqual(r.routes.slice(routed).map(x=>x.text),['And how does it differ from diffusion?']);
+      assert.equal(r.speech.playing,true,'The reading is still being spoken');
+    }finally{await r.close();}
   });
 }

@@ -131,6 +131,8 @@ export class Agent {
   private thoughtsHeld = false;
   /** Set while a sound has paused Moo's speech and its meaning is not yet known. */
   private pausedPlayback?: ReturnType<typeof setTimeout>;
+  /** Readings of a saved answer still playing; meanwhile a lone filler, even "mm-hm", is noise, as while Moo works. */
+  private replaying = 0;
   /** The response epoch whose answer reached the conversation. */
   private publishedEpoch = -1;
   private heldHelp?: { conversationId: string; sourceId: string; request: UserTurnSnapshot; signal: AbortSignal; captured: boolean; mode: "ocr" | "visual" };
@@ -586,7 +588,7 @@ export class Agent {
     // conversation with nothing asked, is not an interruption or a reply: the reading resumes, nothing is routed or
     // cancelled, and the words stay in the transcript. An idle "mm-hm" may answer something, so J1 still hears it.
     const affirmative = /\b(?:mm+[-\s]?hm+|mhm+|uh-?huh)\b/i.test(text);
-    if ((this.pausedPlayback || this.state.busy || (this.state.conversationId && !this.state.pendingOffer && !affirmative)) && fillerOnly(text)) {
+    if ((this.pausedPlayback || this.state.busy || this.replaying || (this.state.conversationId && !this.state.pendingOffer && !affirmative)) && fillerOnly(text)) {
       await this.p.brain.setState(`handled:${turnId}`, revisionKey);
       await this.trace("filler_ignored", {turnId, text: text.slice(0, 40)});
       await this.resumePausedPlayback();
@@ -2117,7 +2119,7 @@ export class Agent {
           await check();onStart?.();this.notice(text);playback=this.speak(text);
           if(onStart)await this.persist();
         });
-        if(reading)this.track(playback);else await playback;
+        if(reading){this.replaying++;this.track(playback.finally(()=>this.replaying--));}else await playback;
       } else {this.notice(text);await this.speak(text);}
     } catch (e) {
       if(e===stalePlaybackControl)return false;
