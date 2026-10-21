@@ -160,40 +160,63 @@ def _complete_prose_narration(text: str) -> str | None:
     return text.strip()
 
 
-_NUMBER_TOKEN = re.compile(r'\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|[^\W\d_]+')
-_SCRIPT_DIGITS = re.compile('[²³¹⁰⁴-⁹₀-₉]+')
-_SCALES = {'hundred': 100, 'thousand': 1000, 'million': 10 ** 6, 'billion': 10 ** 9}
+_NUMBER_TOKEN = re.compile(r'(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|(?<![\d.])\.\d+)((?:k|mn|m|bn)(?![^\W\d_]))?|[^\W\d_]+')
+# Superscript and subscript runs stay apart, so 'SO₄²⁻' holds 4 and 2, not 42.
+_SCRIPT_DIGITS = re.compile('[²³¹⁰⁴-⁹]+|[₀-₉]+')
+_SCALE_WORDS = {'hundred': 100, 'thousand': 1000, 'million': 10 ** 6, 'billion': 10 ** 9}
+_SCALE_LETTERS = {'k': 1000, 'm': 10 ** 6, 'mn': 10 ** 6, 'bn': 10 ** 9}  # only right after digits: '$1.5M', '5k'
+_TENS = {'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50, 'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90}
+_UNIT_WORDS = {word: value % 9 + 1 for value, word in enumerate(
+    'one two three four five six seven eight nine first second third fourth fifth sixth seventh eighth ninth'.split())}
 _NUMBER_WORDS = {word: value for value, word in enumerate(
     'zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen '
-    'eighteen nineteen twenty'.split())} | {word: value for value, word in enumerate(
-    'first second third fourth fifth sixth seventh eighth ninth tenth'.split(), 1)} | {
-    'thirty': 30, 'forty': 40, 'fifty': 50, 'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90} | _SCALES
+    'eighteen nineteen'.split())} | {word: value for value, word in enumerate(
+    'first second third fourth fifth sixth seventh eighth ninth tenth'.split(), 1)} | _TENS | _SCALE_WORDS
 
 
-def _numbers(text: str) -> list[tuple[set[Decimal], bool]]:
-    """Each number in text with the values it can mean, and whether it is written in digits.
+def _numbers(text: str) -> list[list]:
+    """Each number in text as [the values it can mean, the scale after it, whether it is written in digits].
 
-    '1.3 million' means 1.3 or 1,300,000, '1,000' and '1000' are equal, and spelled numbers count too.
-    Sub- and superscript digits stand apart, so 'H₂O₂' holds 2 and '10²³' holds 10 and 23.
+    '1,000' and '1000' are equal, '.05' is 0.05, 'twenty-five' is 20 or 25, and '1.3 million' is 1.3 at a scale of a
+    million. Sub- and superscript digits stand apart, so 'H₂O₂' holds 2 and '10²³' holds 10 and 23.
     """
-    numbers, last = [], None
-    text = unicodedata.normalize('NFKC', _SCRIPT_DIGITS.sub(lambda match: ' ' + match.group(), text))
-    for token in _NUMBER_TOKEN.findall(text.lower()):
-        if token in _SCALES and last is not None:
-            last[0].add(min(last[0]) * _SCALES[token])
-            last = None
-            continue
-        value = Decimal(token.replace(',', '')) if token[0].isdigit() else _NUMBER_WORDS.get(token)
-        last = None if value is None else ({Decimal(value)}, token[0].isdigit())
-        if last is not None:
+    numbers, last, tens = [], None, None
+    text = unicodedata.normalize('NFKC', _SCRIPT_DIGITS.sub(lambda match: f' {match.group()} ', text)).lower()
+    for match in _NUMBER_TOKEN.finditer(text):
+        digits, letter, word = match.group(1), match.group(2), match.group()
+        if digits:
+            # A leading dot may also be a sentence's full stop, as in 'end.5 people'.
+            last = [{Decimal(digits.replace(',', ''))} | ({Decimal(digits[1:])} if digits[0] == '.' else set()),
+                    _SCALE_LETTERS.get(letter), True]
             numbers.append(last)
+        elif last is not None and last[1] is None and word in _SCALE_WORDS:
+            last[1] = _SCALE_WORDS[word]
+        elif tens is not None and word in _UNIT_WORDS:
+            last[0].add(Decimal(tens + _UNIT_WORDS[word]))
+        elif word in _NUMBER_WORDS:
+            last = [{Decimal(_NUMBER_WORDS[word])}, None, False]
+            numbers.append(last)
+        else:
+            last = None
+        tens = _TENS.get(word)
     return numbers
 
 
 def _grounded_numbers(summary: str, text: str) -> bool:
-    """Every number a generated summary states in digits must be one the written answer states."""
-    known = set().union(*(values for values, _ in _numbers(text)))
-    return all(values & known for values, digits in _numbers(summary) if digits)
+    """Every number a generated summary states in digits must be one the written answer states, at the same scale.
+
+    '1.3 million' is grounded by '1,300,000' or by 'between 1.3 and 2 million', but '2.5 billion' never by '2.5 million'.
+    """
+    answer = _numbers(text)
+    known = {value * (scale or 1) for values, scale, _ in answer for value in values}
+    known |= {value for values, _, _ in answer for value in values}
+    scales = {scale for _, scale, _ in answer if scale}
+
+    def grounded(values, scale):
+        if scale is None:
+            return bool(values & known)
+        return any(value * scale in known or value in known and scale in scales for value in values)
+    return all(grounded(values, scale) for values, scale, digits in _numbers(summary) if digits)
 
 
 def _answer_text(content: str) -> str:
@@ -253,6 +276,10 @@ class CompletionLimitError(ServiceError):
 
 class UngroundedNumberError(ValueError):
     """A generated spoken summary stated a number its written answer does not contain."""
+
+
+class UnfinishedSummaryError(ValueError):
+    """A generated spoken summary stopped mid-sentence, as when its length limit cut it."""
 
 
 def source(record: BrainRecord) -> dict:
@@ -1160,7 +1187,7 @@ class NebiusProvider:
             # One deadline for the whole step: completion() may first refresh a stale model list, and httpx times each phase apart.
             async with asyncio.timeout(timeout):
                 message = await self.completion(settings.summary_model, [
-                    {'role': 'system', 'content': instruction('spoken-summary-v2')},
+                    {'role': 'system', 'content': instruction('spoken-summary-v3')},
                     {'role': 'user', 'content': json.dumps({'writtenAnswer': text}, ensure_ascii=False)},
                 ], settings.summary_max_completion_tokens, **self.summary_parameters(), max_request_bytes=48_000, timeout=timeout,
                     response_format={'type': 'json_schema', 'json_schema': {'name': 'spoken_summary', 'strict': True, 'schema': {
@@ -1173,6 +1200,9 @@ class NebiusProvider:
             if (not isinstance(summary, str) or not summary.strip() or len(summary) > 1200
                     or not any(char.isalpha() for char in summary) or re.search(r'https?://|\bwww\.', summary, re.I)):
                 raise ValueError('unspeakable spoken summary')
+            if not re.search(r'[.!?…]["\'”’)\]]*$', summary.strip()):
+                # 22 Oct check: summaries that copied their answers were cut mid-word at 1,200 characters.
+                raise UnfinishedSummaryError('spoken summary does not end on a full sentence')
             if not _grounded_numbers(summary, text):
                 # 22 Oct check: given an answer that only asked what two samples were, Lightning invented them and their pressures.
                 raise UngroundedNumberError('spoken summary states a number the written answer does not')
