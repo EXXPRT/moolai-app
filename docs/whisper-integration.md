@@ -82,7 +82,7 @@ Separately test the selected microphone, ordinary pauses, complete final words o
 
 ## Context and decoder comparison
 
-The host supplies up to 400 characters of the current subject, relevant note titles and explicitly corrected terminology. The bridge snapshots hints when an utterance begins; later updates cannot alter a queued decode. Source transcripts are never rewritten through word replacements. The base `initialPrompt` remains limited to 200 characters.
+The host supplies up to 400 characters of the current subject, relevant note titles and explicitly corrected terminology. The bridge snapshots hints when an utterance begins; later updates cannot alter a queued decode. Source transcripts are never rewritten through word replacements. The base `initialPrompt` remains limited to 200 characters. A transcript holding only the wake word and these hints, as Qwen prints for a cough or click, is never shown or routed: a final is decoded once more without hints and rejected (`hint_echo`) unless that decode hears words.
 
 Optional `beamSize` accepts integers 1–5; omitted means the current greedy setting (1). `node scripts/compare-whisper-decoder.mjs` compares 1 with 3 using identical temporary synthetic speech, alternating order and recording strict WER, latency and audio fingerprints under ignored `.data/validation/`. It refuses an active microphone capture, removes generated audio and makes no cloud calls or production changes. Synthetic accuracy does not measure an individual speaker’s ASR performance.
 

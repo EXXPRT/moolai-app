@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import WebSocket from 'ws';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { createWhisperBridge, decodeWhisper, pcmWav, repetitiveOutput, resamplePcm, whisperRequestPath } from './whisper-bridge.mjs';
+import { createWhisperBridge, decodeWhisper, hintEcho, pcmWav, repetitiveOutput, resamplePcm, whisperRequestPath } from './whisper-bridge.mjs';
 import { whisperServerArgs } from './start-asr.mjs';
 
 const config = { model: 'large-v3-turbo', language: 'en', initialPrompt: 'Moo.', port: 0, inferencePort: 8177,
@@ -42,6 +42,11 @@ async function harness(t, overrides = {}, deps = {}) {
 const completed = 'conversation.item.input_audio_transcription.completed';
 const commit = 'input_audio_buffer.committed';
 const partial = 'conversation.item.input_audio_transcription.partial';
+const rejection = 'conversation.item.input_audio_transcription.rejected';
+// Ian, 21 Oct: a cough came back as "Moo. " plus one of these recognition contexts; a 4 Oct echo began with a spoken correction.
+const titles = 'Osmosis: definition, mechanism, and applications. Common exam question about minimum and maximum. Brain Replacement Contract. Pressure difference between Sample A and Sample B and exploratory discussion. Module Boundaries';
+const topics = 'Osmosis: definition, mechanism, and applications. Okay, can you tell me how this whole other cleaning process leads to. A web search brought back to me by Moo. I think the interesting thing. Wind-driven ocean currents, Coriolis effect, and gyres. Osmosis definition and water filtration use';
+const correction = 'rag, r a g, databases. Retrieval-augmented generation pipeline';
 
 test('48 kHz is passed accurately to memory-only resampling; decode receives configured prompt and preserves newlines', async t => {
   const calls = [];
@@ -246,6 +251,87 @@ test('empty recognition explicitly releases attention without routing a fake tra
   client.socket.send(pcm(100));client.send({type:'input_audio_buffer.commit'});
   await client.wait('conversation.item.input_audio_transcription.rejected');await client.wait(commit);
   assert.equal(client.events.filter(e=>e.type===completed).length,0);
+});
+
+test('a hint echo holds only the wake word and context phrases; any other word is speech', () => {
+  assert.equal(hintEcho(`Moo. ${topics}`, 'Moo.', topics), true);
+  assert.equal(hintEcho(`Moo. ${titles}.`, 'Moo.', titles), true);
+  assert.equal(hintEcho('Moo.', 'Moo.', ''), true);
+  assert.equal(hintEcho(`Moo. ${correction}.`, 'Moo.', correction), true);
+  assert.equal(hintEcho('Module Boundaries. Moo. Brain Replacement Contract. Module Boundaries.', 'Moo.', titles), true);
+  assert.equal(hintEcho(`Moo. ${titles}. Please.`, 'Moo.', titles), false);
+  for (const context of ['', `Conveyor belt mechanics. Enzyme catalase. ${titles}`])
+    for (const speech of ['Moo. Tell me more about the conveyor belt.', 'Moo, continue explaining the conveyor belt.', 'They spin the conveyor belt.',
+      'Moo, search the web for how the enzyme catalase works.', 'What does the second source say about the temperature?', 'Um.', 'Yes.', ''])
+      assert.equal(hintEcho(speech, 'Moo.', context), false, speech);
+});
+
+test('a final that only repeats the hint is decoded again without it and rejected as an echo', async t => {
+  const hints = [];
+  // Like Qwen on a cough: print the hint it was given, and nothing without one.
+  const { connect } = await harness(t, {}, { decode: async (_, { initialPrompt }) => { hints.push(initialPrompt); return initialPrompt; } });
+  const c = await connect(); await c.configure();
+  c.send({ type: 'session.context', context: titles }); await c.wait('session.context.updated');
+  c.socket.send(pcm(100)); c.send({ type: 'input_audio_buffer.commit' }); await c.wait(commit);
+  assert.equal(c.events.some(e => e.type === completed), false);
+  assert.deepEqual(c.events.filter(e => e.type === rejection).map(e => [e.reason, e.transcript]), [['hint_echo', '']]);
+  assert.deepEqual(hints, [`Moo. ${titles}`, '']);
+});
+
+test('hint-free words replace an echoed title list, while real speech naming a title is decoded once', async t => {
+  const hints = [], replies = [`Moo. ${titles}.`, 'Can you explain module boundaries?', 'Moo, open Module Boundaries.'];
+  const { connect } = await harness(t, {}, { decode: async (_, { initialPrompt }) => { hints.push(initialPrompt); return replies.shift(); } });
+  const c = await connect(); await c.configure();
+  c.send({ type: 'session.context', context: titles }); await c.wait('session.context.updated');
+  c.socket.send(pcm(100)); c.socket.send(pcm(100, 16000, 0)); await c.wait(completed);
+  c.socket.send(pcm(100)); c.send({ type: 'input_audio_buffer.commit' }); await c.wait(commit);
+  assert.deepEqual(c.events.filter(e => e.type === completed).map(e => e.transcript), ['Can you explain module boundaries?', 'Moo, open Module Boundaries.']);
+  assert.deepEqual(hints, [`Moo. ${titles}`, '', `Moo. ${titles}`]);
+});
+
+test('a bare wake word stays when the hint-free decode hears a word, and is rejected when it hears none', async t => {
+  const hints = [], replies = ['Moo.', 'Mu.', 'Moo.', ''];
+  const { connect } = await harness(t, {}, { decode: async (_, { initialPrompt }) => { hints.push(initialPrompt); return replies.shift(); } });
+  const c = await connect(); await c.configure();
+  c.socket.send(pcm(100)); c.socket.send(pcm(100, 16000, 0)); await c.wait(completed);
+  c.socket.send(pcm(100)); c.send({ type: 'input_audio_buffer.commit' }); await c.wait(commit);
+  assert.deepEqual(c.events.filter(e => e.type === completed).map(e => e.transcript), ['Moo.']);
+  assert.deepEqual(c.events.filter(e => e.type === rejection).map(e => e.reason), ['hint_echo']);
+  assert.deepEqual(hints, ['Moo.', '', 'Moo.', '']);
+});
+
+test('an unusable hint-free decode still rejects the echo, and the capture keeps listening', async t => {
+  for (const mode of ['repetitive', 'error']) await t.test(mode, async t => {
+    let calls = 0;
+    const { connect } = await harness(t, {}, { decode: async (_, { initialPrompt }) => {
+      if (++calls === 1) return initialPrompt;
+      if (calls === 3) return 'Moo, a complete thought.';
+      if (mode === 'error') throw new Error('Temporary decode failure');
+      return 'noise '.repeat(30);
+    } });
+    const c = await connect(); await c.configure();
+    c.send({ type: 'session.context', context: correction }); await c.wait('session.context.updated');
+    c.socket.send(pcm(100)); c.socket.send(pcm(100, 16000, 0));
+    await until(() => c.events.some(e => e.type === completed || e.type === rejection));
+    assert.deepEqual(c.events.filter(e => e.type === rejection).map(e => e.reason), ['hint_echo']);
+    c.socket.send(pcm(100)); c.send({ type: 'input_audio_buffer.commit' }); await c.wait(commit);
+    assert.deepEqual(c.events.filter(e => e.type === completed).map(e => e.transcript), ['Moo, a complete thought.']);
+    assert.equal(c.events.some(e => e.type === 'error'), false); assert.equal(calls, 3);
+  });
+});
+
+test('a live preview never shows a hint echo, and its final is rejected', async t => {
+  const hints = [];
+  const { connect } = await harness(t, { model: 'qwen3-asr-1.7b', livePreview: true, previewIntervalMs: 1000 }, {
+    decode: async (_, { initialPrompt }) => { hints.push(initialPrompt); return initialPrompt; },
+  });
+  const c = await connect(); await c.configure();
+  c.send({ type: 'session.context', context: topics }); await c.wait('session.context.updated');
+  c.socket.send(pcm(1000)); await until(() => hints.length === 1); await delay(10);
+  c.send({ type: 'input_audio_buffer.commit' }); await c.wait(commit);
+  assert.equal(c.events.some(e => e.type === partial || e.type === completed), false);
+  assert.deepEqual(c.events.filter(e => e.type === rejection).map(e => e.reason), ['hint_echo']);
+  assert.deepEqual(hints, [`Moo. ${topics}`, `Moo. ${topics}`, '']);
 });
 
 test('live previews are cumulative replaceable revisions; only the final preserves the completed utterance', async t => {

@@ -88,6 +88,20 @@ export function repetitiveOutput(text) {
   return false;
 }
 
+// On a cough or click Qwen can print its own hint: the wake word and context phrases, in any
+// order or repeated. Any other word means real speech.
+export function hintEcho(text, initialPrompt = '', context = '') {
+  const wordsOf = value => value.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  const heard = wordsOf(text);
+  const phrases = [initialPrompt, ...context.split(/(?<=[.!?…])\s+/u)].map(wordsOf).filter(phrase => phrase.length).sort((a, b) => b.length - a.length);
+  if (!heard.length || !phrases.length) return false;
+  for (let i = 0, phrase; i < heard.length; i += phrase.length) {
+    phrase = phrases.find(words => words.every((word, j) => heard[i + j] === word));
+    if (!phrase) return false;
+  }
+  return true;
+}
+
 export function createWhisperBridge(config, dependencies = {}) {
   const decode = dependencies.decode ?? decodeWhisper;
   const resample = dependencies.resample ?? resamplePcm;
@@ -180,7 +194,7 @@ export function createWhisperBridge(config, dependencies = {}) {
           currentItem = item; controller = new AbortController();
           const jobController = controller;
           const isPreview = item.trigger === 'preview';
-          let timeout, abortListener, cancelTimer;
+          let timeout, abortListener, cancelTimer, emptyReason = 'empty';
           try {
             const timedOut = new Promise((_, reject) => {
               timeout = setTimeout(() => { const error = new Error('Local ASR decode timed out; the utterance was not committed'); jobController.abort(error); reject(error); }, decodeTimeoutMs);
@@ -197,7 +211,17 @@ export function createWhisperBridge(config, dependencies = {}) {
             const work = async () => {
               const pcm = await resample(item.pcm, sampleRate, { signal: jobController.signal });
               jobController.signal.throwIfAborted();
-              return decode(pcm, {...config, initialPrompt: [config.initialPrompt, item.context].filter(Boolean).join(' ')}, { signal: jobController.signal });
+              const heard = await decode(pcm, {...config, initialPrompt: [config.initialPrompt, item.context].filter(Boolean).join(' ')}, { signal: jobController.signal });
+              if (typeof heard !== 'string' || !hintEcho(heard, config.initialPrompt, item.context)) return heard;
+              // Never show or route an echo. A final gets one hint-free decode; anything unusable there is rejected, never failed.
+              emptyReason = 'hint_echo';
+              if (isPreview) return '';
+              let plain;
+              try { plain = await decode(pcm, {...config, initialPrompt: ''}, { signal: jobController.signal }); }
+              catch (error) { if (jobController.signal.aborted) throw error; return ''; }
+              if (typeof plain !== 'string' || !/[\p{L}\p{N}]/u.test(plain) || repetitiveOutput(plain)) return '';
+              // The hinted decode heard only the wake word; keep its spelling ("Moo.", not "Mu.").
+              return hintEcho(heard, config.initialPrompt) ? heard : plain;
             };
             const task = work();
             // For previews the timeout requests cancellation; wait for the decoder's actual
@@ -219,7 +243,7 @@ export function createWhisperBridge(config, dependencies = {}) {
             if (isPreview) {
               if (transcript.trim()) send({ type: 'conversation.item.input_audio_transcription.partial', transcript, ...identity });
             } else if (transcript.trim()) send({ type: 'conversation.item.input_audio_transcription.completed', transcript, ...identity });
-            else send({ type: 'conversation.item.input_audio_transcription.rejected', reason: 'empty', transcript: '', ...identity });
+            else send({ type: 'conversation.item.input_audio_transcription.rejected', reason: emptyReason, transcript: '', ...identity });
           } catch (error) {
             if (!isPreview || error.message.includes('cancellation bound')) throw error;
             // Preview failure never rejects the retained utterance or silently submits it.
