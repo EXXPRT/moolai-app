@@ -1651,14 +1651,25 @@ export class Agent {
         await execution?.persistTimings(this.p.brain, id);
         if (signal.aborted && await this.p.brain.getState(`checkpoint:${id}`)) await this.queueEnrichment(id);
         this.assertCurrent(signal, epoch);
-        // In Ian's 21 Oct test B, asked again without its screen tool, Ultra said Moo cannot take screenshots. A refused
-        // permission now ends the request with its fix, outside the notes and answer replays, and no further model call.
+        // In Ian's 21 Oct test B, asked again without its screen tool, Ultra said Moo cannot take screenshots. When a reply
+        // asks only for the screen, a refused permission now ends the request with its fix, outside the notes, and no further
+        // model call; a reply that also asks for other tools still runs them all and is answered as before.
         const outcome = output as ExperimentToolOutcome;
-        const refused = production && call.name === "capture_screen" && outcome.status === "failed" ? screenshotRefused(outcome.error ?? "") : undefined;
+        const refused = production && call.name === "capture_screen" && outcome.status === "failed" &&
+          reply.toolCalls.every(c => c.name === "capture_screen") ? screenshotRefused(outcome.error ?? "") : undefined;
         if (refused) {
-          await this.appendAssistant(refused, id, undefined, false, async () => assertPolicy());
+          const segment = await this.appendAssistant(refused, id, undefined, false, async () => assertPolicy());
           this.publishedEpoch = epoch;
-          if (!this.attention) await this.speak(refused);
+          // "Say that again" repeats the refusal, not the answer before it.
+          await rememberAnswerNarration(this.p.brain, id, segment, {text: refused, spokenText: refused, toolCalls: []});
+          // As for an answer: never over the user or a pending finish question, and a failed voice is only a notice.
+          if (!this.attention && !this.endAfterWork && this.state.pendingOffer?.kind !== "end_work") {
+            try { await this.speak(refused); }
+            catch (error) {
+              await this.trace("narration_unavailable", {reason: "playback_failed", error: errorText(error)});
+              this.notice("Moo’s voice is unavailable. The full response is on screen.");
+            }
+          }
           return;
         }
       }

@@ -26,7 +26,7 @@ for (const kind of ["memory", "sqlite"] as const) {
     let brain: BrainPort = kind === "memory" ? new MemoryBrain() : new SQLiteBrain(dir);
     const p = new FixtureProviders(); let n = 0;
     const calls = { organized: [] as ThoughtInput[], routes: [] as RouteInput[], spoken: [] as string[], captures: 0,
-      vision: [] as { question: string; mode?: string }[], tags: 0, tools: [] as string[][] };
+      vision: [] as { question: string; mode?: string }[], tags: 0, tools: [] as string[][], notices: [] as string[] };
     const hooks = {
       /** J1's doubt answer for idle turns; the route itself comes from the fixture router. */
       doubt: (_input: RouteInput): number | undefined => undefined,
@@ -38,6 +38,8 @@ for (const kind of ["memory", "sqlite"] as const) {
       captureError: undefined as string | undefined,
       /** A reply in place of the fixture's, given the tools offered. */
       reply: undefined as undefined | ((tools: string[]) => AgentReply | undefined),
+      /** Speech that the voice fails to play. */
+      speakFails: undefined as RegExp | undefined,
     };
     const consolidate = p.consolidate.bind(p);
     p.consolidate = async (input): Promise<ThoughtResult> => {
@@ -61,9 +63,10 @@ for (const kind of ["memory", "sqlite"] as const) {
       calls.tools.push(names); if (hooks.answerHold) await hooks.answerHold; return hooks.reply?.(names) ?? respond(messages);
     }) as typeof p.respond;
     const make = () => new Agent({ brain, decisions: p, generation: p, search: p, id: () => `${kind}-${++n}`, now,
+      onEvent: e => { if (e.type === "notice" && e.message) calls.notices.push(e.message); },
       vision: { interpret: async (_image, question, _signal, options) => { calls.vision.push({ question, mode: options?.mode }); return "Sample A minimum 12 kPa."; } },
       capture: { async capture() { calls.captures++; if (hooks.captureHold) await hooks.captureHold; if (hooks.captureError) throw Error(hooks.captureError); return { mimeType: "image/png", bytes: new Uint8Array([1, 2, 3]) }; } },
-      speech: { async speak(text) { calls.spoken.push(text); }, async stop() {} } });
+      speech: { async speak(text) { calls.spoken.push(text); if (hooks.speakFails?.test(text)) throw Error("Local speech worker closed; full text remains on screen."); }, async stop() {} } });
     let agent = make(); await agent.initialize(); await agent.startSession();
     const offers = () => calls.spoken.filter(text => text === OFFER).length;
     const answers = async () => (await brain.listRecords()).filter(r => r.kind === "conversation")
@@ -305,7 +308,6 @@ for (const kind of ["memory", "sqlite"] as const) {
     assert.equal(t.agent.getState().lastError, undefined);
     const refusal = assistant.find(s => s.text.startsWith("I couldn't take the screenshot."))!;
     assert.notEqual(await t.brain.getState(`thought-eligible:${refusal.id}`), true, "The refusal is not note content");
-    assert.equal(await t.brain.getState(`answer-narration:latest:${id}`) ?? undefined, undefined, "Nor an answer to read again");
     assert.match(JSON.stringify(await t.brain.getState(`tool-ledger:${id}`)), /Screen Recording permission is required/, "The refused capture stays on record");
   });
 
@@ -318,6 +320,52 @@ for (const kind of ["memory", "sqlite"] as const) {
     assert.ok(t.calls.spoken.some(text => text.startsWith("I couldn't take the screenshot. Screen Recording permission")), t.calls.spoken.join("\n"));
     assert.ok(!t.calls.spoken.some(text => text.startsWith(ANSWER_FAILED)));
     assert.match(t.agent.getState().lastError ?? "", /Screen help failed.*Screen Recording permission/, "The failure stays on screen");
+  });
+
+  run("\"say that again\" after a refused screenshot repeats the refusal, not the answer before it", async t => {
+    await t.agent.submitText("Moo, what is osmosis?"); await t.agent.drain();
+    t.hooks.captureError = DENIED;
+    await t.agent.submitText("Take a screenshot and read the table."); await t.agent.drain();
+    assert.equal(t.calls.spoken.at(-1), `I couldn't take the screenshot. ${DENIED}`);
+    const before = t.calls.spoken.length;
+    await t.agent.submitText("Say that again."); await t.agent.drain();
+    assert.deepEqual(t.calls.spoken.slice(before), [`I couldn't take the screenshot. ${DENIED}`]);
+  });
+
+  // A reply that asks for the screen and another tool runs both, and the model says what came of each.
+  const screenCall = { id: "c1", name: "capture_screen", arguments: { question: "Read the table", mode: "ocr" } };
+  const noteCall = { id: "c2", name: "create_note", arguments: { title: "Shopping", text: "Buy milk" } };
+  for (const toolCalls of [[screenCall, noteCall], [noteCall, screenCall]])
+    run(`a refused capture beside another tool call still runs it and is answered: ${toolCalls.map(c => c.name).join(", ")}`, async t => {
+      t.hooks.captureError = DENIED;
+      let step = 0;
+      t.hooks.reply = () => step++ ? { text: "Saved the Shopping note. The screenshot was refused.", toolCalls: [] } : { text: "", toolCalls: structuredClone(toolCalls) };
+      await t.agent.submitText("Moo, take a screenshot and read the table, and save a note called Shopping that says buy milk."); await t.agent.drain();
+      assert.equal(t.calls.captures, 1);
+      assert.equal((await t.brain.listRecords()).filter(r => r.title === "Shopping").length, 1, "The note is saved");
+      assert.equal(t.calls.tools.length, 2, "The model is asked again with both outcomes");
+      assert.equal(t.calls.spoken.at(-1), "Saved the Shopping note. The screenshot was refused.");
+    });
+
+  run("a refusal is not said over the finish question asked during the capture", async t => {
+    t.hooks.captureError = DENIED;
+    const capture = deferred(); t.hooks.captureHold = capture.promise;
+    const asking = t.agent.submitText("Moo, take a screenshot and read the table.");
+    for (let i = 0; i < 200 && t.calls.captures === 0; i++) await new Promise(r => setTimeout(r, 2));
+    await t.agent.submitText("Moo, finish conversation.");
+    assert.equal(t.agent.getState().pendingOffer?.kind, "end_work");
+    t.hooks.captureHold = undefined; capture.release(); await asking; await t.agent.drain();
+    assert.ok(!t.calls.spoken.some(text => text.startsWith("I couldn't take the screenshot.")), t.calls.spoken.join("\n"));
+    assert.equal(t.calls.spoken.at(-1), "The work ended. The conversation is still open.");
+    assert.ok((await t.brain.getRecord(t.agent.getState().conversationId!))!.segments.some(s => s.text.startsWith("I couldn't take the screenshot.")), "It is on screen");
+  });
+
+  run("a refusal the voice cannot play gives the voice notice, not an unfinished step", async t => {
+    t.hooks.captureError = DENIED; t.hooks.speakFails = /^I couldn't take the screenshot/;
+    await t.agent.submitText("Moo, take a screenshot and read the table."); await t.agent.drain();
+    assert.ok(t.calls.notices.includes("Moo’s voice is unavailable. The full response is on screen."), t.calls.notices.join("\n"));
+    assert.ok(!t.calls.notices.some(text => /could not finish/.test(text)));
+    assert.equal(t.agent.getState().lastError, undefined);
   });
 
   run("no doubt offer while a conversation is open or another offer is pending", async t => {
