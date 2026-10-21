@@ -49,7 +49,7 @@ Moo keeps the complete current request and a bounded recent dialogue window (six
 
 A corrected request can show a separate **Moo understood** line generated with the answer; original captions remain unchanged. It disappears on a new response or corrected source. Speech renders unambiguous dates, process arrows and unit rates naturally while preserving the written answer. Ambiguous symbols rely on the generated spoken explanation.
 
-Provider calls use bounded context/output and no automatic paid retries. This build is not an account-wide spending limiter. After local saving succeeds, provider failure leaves the original text available. Backend connectivity is shown separately from a note’s processing state; reconnecting does not replay failed work. An affected note offers **Retry summary**, which retries only its processing and does not replay earlier agent requests or tools. Technical diagnostics stay outside the note reader.
+Provider calls use bounded context/output. The only automatic paid retry is one retry of an Agent answer that exhausts its output allowance. This build is not an account-wide spending limiter. After local saving succeeds, provider failure leaves the original text available. Backend connectivity is shown separately from a note’s processing state; reconnecting does not replay failed work. An affected note offers **Retry summary**, which retries only its processing and does not replay earlier agent requests or tools. Technical diagnostics stay outside the note reader.
 
 ## Everyday startup after setup
 

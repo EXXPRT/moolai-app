@@ -29,10 +29,10 @@ for (const kind of ['memory', 'sqlite'] as const) {
     const brain: BrainPort = kind === 'memory' ? new MemoryBrain() : new SQLiteBrain(dir);
     const p = new FixtureProviders(); let n = 0;
     const script: Step[] = [];
-    const calls: {system: string; tools: string[]; settings?: Parameters<GenerationProvider['respond']>[3]; signal?: AbortSignal}[] = [];
+    const calls: {system: string; rest: Parameters<GenerationProvider['respond']>[0]; tools: string[]; settings?: Parameters<GenerationProvider['respond']>[3]; signal?: AbortSignal}[] = [];
     const spoken: string[] = [];
     const respond: GenerationProvider['respond'] = async (messages, tools, signal, settings) => {
-      calls.push({system: messages[0]!.content, tools: tools.map(tool => tool.name), settings, signal});
+      calls.push({system: messages[0]!.content, rest: structuredClone(messages.slice(1)), tools: tools.map(tool => tool.name), settings, signal});
       const step = script[calls.length - 1] ?? answer;
       if (step instanceof Error) throw step;
       return typeof step === 'function' ? step() : structuredClone(step);
@@ -66,6 +66,7 @@ for (const kind of ['memory', 'sqlite'] as const) {
     assert.deepEqual((await t.retries()).map(entry => entry.step), [0]);
     assert.ok(!t.calls[0]!.system.includes(BRIEF), 'The first call is unchanged');
     assert.ok(t.calls[1]!.system.endsWith(STEP_LINE), 'The retry asks for a short step, after the other per-step lines');
+    assert.deepEqual(t.calls[1]!.rest, t.calls[0]!.rest, 'The retry sends the same messages');
   });
 
   run('a second output-limit failure is not retried and fails once', async t => {
