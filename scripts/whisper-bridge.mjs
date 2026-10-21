@@ -220,8 +220,8 @@ export function createWhisperBridge(config, dependencies = {}) {
               try { plain = await decode(pcm, {...config, initialPrompt: ''}, { signal: jobController.signal }); }
               catch (error) { if (jobController.signal.aborted) throw error; return ''; }
               if (typeof plain !== 'string' || !/[\p{L}\p{N}]/u.test(plain) || repetitiveOutput(plain)) return '';
-              // The hinted decode heard only the wake word; keep its spelling ("Moo.", not "Mu.").
-              return hintEcho(heard, config.initialPrompt) ? heard : plain;
+              // The hinted decode heard only the wake word; keep its spelling ("Moo.", not "Mu."), unless it looped, which would fail the capture.
+              return hintEcho(heard, config.initialPrompt) && !repetitiveOutput(heard) ? heard : plain;
             };
             const task = work();
             // For previews the timeout requests cancellation; wait for the decoder's actual

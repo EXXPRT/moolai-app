@@ -259,6 +259,9 @@ test('a hint echo holds only the wake word and context phrases; any other word i
   assert.equal(hintEcho('Moo.', 'Moo.', ''), true);
   assert.equal(hintEcho(`Moo. ${correction}.`, 'Moo.', correction), true);
   assert.equal(hintEcho('Module Boundaries. Moo. Brain Replacement Contract. Module Boundaries.', 'Moo.', titles), true);
+  assert.equal(hintEcho('Moo. module boundaries.', 'Moo.', titles), true);
+  // Longest phrase first: a title can begin with another one.
+  assert.equal(hintEcho('Moo. Osmosis definition and water filtration use. Osmosis.', 'Moo.', 'Osmosis. Osmosis definition and water filtration use'), true);
   assert.equal(hintEcho(`Moo. ${titles}. Please.`, 'Moo.', titles), false);
   for (const context of ['', `Conveyor belt mechanics. Enzyme catalase. ${titles}`])
     for (const speech of ['Moo. Tell me more about the conveyor belt.', 'Moo, continue explaining the conveyor belt.', 'They spin the conveyor belt.',
@@ -290,14 +293,25 @@ test('hint-free words replace an echoed title list, while real speech naming a t
 });
 
 test('a bare wake word stays when the hint-free decode hears a word, and is rejected when it hears none', async t => {
-  const hints = [], replies = ['Moo.', 'Mu.', 'Moo.', ''];
+  const hints = [], replies = ['Moo.', 'Mu.', 'Moo.', '', ''];
   const { connect } = await harness(t, {}, { decode: async (_, { initialPrompt }) => { hints.push(initialPrompt); return replies.shift(); } });
   const c = await connect(); await c.configure();
   c.socket.send(pcm(100)); c.socket.send(pcm(100, 16000, 0)); await c.wait(completed);
+  c.socket.send(pcm(100)); c.socket.send(pcm(100, 16000, 0));
   c.socket.send(pcm(100)); c.send({ type: 'input_audio_buffer.commit' }); await c.wait(commit);
   assert.deepEqual(c.events.filter(e => e.type === completed).map(e => e.transcript), ['Moo.']);
-  assert.deepEqual(c.events.filter(e => e.type === rejection).map(e => e.reason), ['hint_echo']);
-  assert.deepEqual(hints, ['Moo.', '', 'Moo.', '']);
+  // An ordinary empty final after the echo keeps its own reason.
+  assert.deepEqual(c.events.filter(e => e.type === rejection).map(e => e.reason), ['hint_echo', 'empty']);
+  assert.deepEqual(hints, ['Moo.', '', 'Moo.', '', 'Moo.']);
+});
+
+test('a wake word echo that loops takes the hint-free words instead of failing the capture', async t => {
+  const replies = ['Moo. '.repeat(13).trim(), 'Hmm.'];
+  const { connect } = await harness(t, {}, { decode: async () => replies.shift() });
+  const c = await connect(); await c.configure(); c.socket.send(pcm(100)); c.send({ type: 'input_audio_buffer.commit' });
+  await until(() => c.events.some(e => e.type === commit || e.type === 'error'));
+  assert.equal(c.events.some(e => e.type === 'error'), false);
+  assert.deepEqual(c.events.filter(e => e.type === completed).map(e => e.transcript), ['Hmm.']);
 });
 
 test('an unusable hint-free decode still rejects the echo, and the capture keeps listening', async t => {
@@ -318,6 +332,15 @@ test('an unusable hint-free decode still rejects the echo, and the capture keeps
     assert.deepEqual(c.events.filter(e => e.type === completed).map(e => e.transcript), ['Moo, a complete thought.']);
     assert.equal(c.events.some(e => e.type === 'error'), false); assert.equal(calls, 3);
   });
+});
+
+test('a disconnect also cancels the hint-free decode', async t => {
+  // Qwen holds one utterance in flight, so a second decode left running would block the next capture.
+  const signals = [];
+  const { connect } = await harness(t, {}, { decode: async (_, { initialPrompt }, { signal }) => { signals.push(signal); return signals.length === 1 ? initialPrompt : new Promise(() => {}); } });
+  const c = await connect(); await c.configure(); c.socket.send(pcm(100)); c.send({ type: 'input_audio_buffer.commit' });
+  await until(() => signals.length === 2); const close = once(c.socket, 'close'); c.socket.close(); await close;
+  await until(() => signals[1]?.aborted);
 });
 
 test('a live preview never shows a hint echo, and its final is rejected', async t => {
