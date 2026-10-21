@@ -700,8 +700,8 @@ class NebiusProvider:
     def summary_parameters(self) -> dict:
         # Standalone summaries use a small JSON-answer budget. Both supported
         # Nemotron summarizers otherwise consume that budget on reasoning.
-        # Keep this policy scoped to summarize(); organization and the main
-        # agent retain their own profiles, as do untested configured models.
+        # Keep this policy scoped to summarize() and spoken_summary(); organization
+        # and the main agent retain their own profiles, as do untested configured models.
         if self.gateway.settings.summary_model.casefold() in {
             'nvidia/nvidia-nemotron-3-nano-30b-a3b', 'nvidia/nemotron-3_5-lightning',
         }:
@@ -1106,7 +1106,37 @@ class NebiusProvider:
     def answer_only_reply(self, content: str) -> AgentReply:
         return _delivered_reply(_unambiguous_json(content))
 
+    async def spoken_summary(self, text: str, timeout: float) -> str | None:
+        """Lightning writes the paragraph for a plain answer Ultra left unspoken (21 Oct decision).
+
+        Any failure returns None, so the written answer keeps its narrationError.
+        Cancellation is a BaseException and still propagates.
+        """
+        settings = self.gateway.settings
+        try:
+            message = await self.completion(settings.summary_model, [
+                {'role': 'system', 'content': instruction('spoken-summary-v1')},
+                {'role': 'user', 'content': json.dumps({'writtenAnswer': text}, ensure_ascii=False)},
+            ], settings.summary_max_completion_tokens, **self.summary_parameters(), max_request_bytes=48_000, timeout=timeout,
+                response_format={'type': 'json_schema', 'json_schema': {'name': 'spoken_summary', 'strict': True, 'schema': {
+                    'type': 'object', 'properties': {'spokenText': {'type': 'string', 'minLength': 1, 'maxLength': 1200}},
+                    'required': ['spokenText'], 'additionalProperties': False}}})
+            value = _unambiguous_json(message['content'])
+            if not isinstance(value, dict) or set(value) != {'spokenText'}:
+                raise ValueError('unexpected spoken summary fields')
+            summary = value['spokenText']
+            if (not isinstance(summary, str) or not summary.strip() or len(summary) > 1200
+                    or not any(char.isalpha() for char in summary) or re.search(r'https?://|\bwww\.', summary, re.I)):
+                raise ValueError('unspeakable spoken summary')
+        except Exception as error:
+            # A status code or class name only, never answer text, summary text or credentials.
+            logger.warning('Agent narration: status=lightning_summary_failed reason=%s',
+                           error.status if isinstance(error, ServiceError) else type(error).__name__)
+            return None
+        return summary.strip()
+
     async def respond(self, item: RespondInput) -> AgentReply:
+        started = time.monotonic()
         # Reject excessive context instead of truncating instructions or user turns.
         self.gateway.bounded_state(item.model_dump(exclude_none=True, exclude={'responseMode'}))
         names = {tool.name for tool in item.tools}
@@ -1266,17 +1296,26 @@ class NebiusProvider:
                 _answer_text(content)
             reply = AgentReply(text=content, spokenText=spoken, spokenOutline=outline, references=references,
                                understoodRequest=understood_request, toolCalls=calls, controlProposal=control)
-            if reply.text.strip() and not calls and control is None and reply.spokenText is None:
-                # Keep older responses usable while making absent narration visible
-                # without logging source text, model output or credentials.
-                reply.spokenText = _complete_prose_narration(reply.text)
-                if reply.spokenText is None:
-                    logger.warning('Agent narration: status=legacy_missing_summary mode=%s', item.responseMode)
-                    reply.narrationError = 'A spoken summary was not available. The written answer is saved.'
-            return reply
         except (KeyError, TypeError, ValueError, ValidationError) as error:
             logger.warning('Agent narration: status=invalid_response_envelope mode=%s', item.responseMode)
             raise ServiceError('Nebius returned invalid text or tool calls') from error
+        if reply.text.strip() and not calls and control is None and reply.spokenText is None:
+            # Keep older responses usable while making absent narration visible
+            # without logging source text, model output or credentials.
+            reply.spokenText = _complete_prose_narration(reply.text)
+            if reply.spokenText is None:
+                # Too long or structured to speak whole: Lightning writes it, ending inside the host's 90 s request timeout.
+                budget = min(20.0, 80.0 - (time.monotonic() - started))
+                if budget < 5:
+                    logger.warning('Agent narration: status=lightning_summary_skipped mode=%s', item.responseMode)
+                else:
+                    reply.spokenText = await self.spoken_summary(reply.text, budget)
+                if reply.spokenText is not None:
+                    logger.info('Agent narration: status=lightning_summary mode=%s', item.responseMode)
+                else:
+                    logger.warning('Agent narration: status=legacy_missing_summary mode=%s', item.responseMode)
+                    reply.narrationError = 'A spoken summary was not available. The written answer is saved.'
+        return reply
 
     async def vision(self, item: VisionInput) -> VisionEvidence:
         if item.mode == 'ocr':

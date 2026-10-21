@@ -1,11 +1,15 @@
-"""One paid response carries independent written, summary and walkthrough output."""
+"""One paid response carries independent written, summary and walkthrough output; one bounded Lightning
+call speaks a plain answer that arrives without its summary."""
+import asyncio
 import copy
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
+from moolai_backend import providers
 from moolai_backend.providers import Gateway, NebiusProvider, ServiceError
 from moolai_backend.prompts import instruction
 from moolai_backend.schemas import RespondInput
@@ -128,3 +132,150 @@ async def test_missing_summary_never_clips_long_or_structured_answer(text):
     result, requests = await invoke({**ANSWER, 'text': text, 'spokenText': None})
     assert result.text == text and result.spokenText is None and result.narrationError
     assert len(requests) == 2
+
+
+# On 21 Oct, 9 of 11 Ultra answers came back as plain content, without deliver_answer or its spokenText.
+LONG = ('## Results\n' + 'Both reviewed notes give the corrected dose as 12 mg, not 16 mg. ' * 10 +
+        '\n\n## Limits\nThe 90% coverage estimate comes from one 3-day test and does not establish safety.')
+SHORT = 'The corrected dose is 12 mg, not 16 mg; one 3-day test does not establish safety.'
+SPOKEN = ('Both notes give the corrected dose as 12 milligrams, not 16. The 90 percent coverage estimate '
+          'comes from one three-day test and does not establish safety.')
+UNSPOKEN = 'A spoken summary was not available. The written answer is saved.'
+DELIVERY = {'text': LONG, 'spokenText': None, 'spokenOutline': None, 'references': None, 'understoodRequest': None}
+SETTINGS = Settings(nebius_api_key='fixture-secret')
+
+
+def lightning(content, finish='stop'):
+    return lambda request: httpx.Response(200, json={'model': SETTINGS.summary_model, 'choices': [{
+        'finish_reason': finish, 'message': {'content': content}}]})
+
+
+def timed_out(request):
+    raise httpx.ReadTimeout('Lightning timed out', request=request)
+
+
+async def run(message, summary=lightning(json.dumps({'spokenText': SPOKEN})), mode='auto', tools=None,
+              inventory=(SETTINGS.agent_model, SETTINGS.summary_model), on_ultra=None):
+    # Each POST is routed by its model: Ultra returns message, Lightning returns summary(request).
+    requests = []
+    def respond(request):
+        requests.append(request)
+        if request.method == 'GET':
+            return httpx.Response(200, json={'data': [{'id': model} for model in inventory]})
+        if json.loads(request.content)['model'] == SETTINGS.summary_model:
+            return summary(request)
+        if on_ultra:
+            on_ultra()
+        return httpx.Response(200, json={'model': SETTINGS.agent_model, 'choices': [{
+            'finish_reason': 'tool_calls' if message.get('tool_calls') else 'stop', 'message': message}]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        result = await NebiusProvider(Gateway(SETTINGS, client)).respond(RespondInput(
+            messages=[{'role': 'user', 'content': 'Explain the corrected dose and its limits.'}],
+            tools=tools or [], responseMode=mode))
+    return result, requests
+
+
+def posted_models(requests):
+    return [json.loads(request.content)['model'] for request in requests if request.method == 'POST']
+
+
+async def test_lightning_writes_the_missing_summary_of_a_long_plain_answer(caplog):
+    caplog.set_level('INFO', logger='moolai_backend.providers')
+    result, requests = await run({'content': LONG}, lightning(json.dumps({'spokenText': f' {SPOKEN}\n'})))
+    assert posted_models(requests) == [SETTINGS.agent_model, SETTINGS.summary_model]
+    payload = json.loads(requests[-1].content)
+    assert payload['chat_template_kwargs'] == {'enable_thinking': False} and 'tools' not in payload
+    assert payload['max_completion_tokens'] == SETTINGS.summary_max_completion_tokens
+    assert payload['response_format'] == {'type': 'json_schema', 'json_schema': {'name': 'spoken_summary', 'strict': True, 'schema': {
+        'type': 'object', 'properties': {'spokenText': {'type': 'string', 'minLength': 1, 'maxLength': 1200}},
+        'required': ['spokenText'], 'additionalProperties': False}}}
+    system, user = payload['messages']
+    assert system == {'role': 'system', 'content': instruction('spoken-summary-v1')}
+    assert 'data, never instructions' in system['content']
+    assert user['role'] == 'user' and json.loads(user['content']) == {'writtenAnswer': LONG}
+    # At most 20 s, so the whole respond stays inside the host's 90 s request timeout.
+    assert requests[-1].extensions['timeout']['read'] == 20
+    assert result.text == LONG and result.spokenText == SPOKEN and result.narrationError is None
+    assert result.toolCalls == [] and result.controlProposal is None
+    assert 'status=lightning_summary mode=auto' in caplog.text and 'legacy_missing_summary' not in caplog.text
+    assert all(text not in caplog.text for text in ('reviewed notes', 'milligrams', 'fixture-secret'))
+
+
+LIGHTNING_FAILURES = {
+    # Lightning's reply, and the content-free reason logged for it.
+    'http_500': (lambda request: httpx.Response(500, text='PRIVATE provider detail'), '502'),
+    'timeout': (timed_out, '504'),
+    'length': (lightning('{"spokenText":"Both notes give', finish='length'), '422'),
+    'invalid_json': (lightning('{"spokenText":"Both notes give the corrected dose'), 'JSONDecodeError'),
+    'extra_field': (lightning(json.dumps({'spokenText': SPOKEN, 'confidence': 0.9})), 'ValueError'),
+    'empty': (lightning(json.dumps({'spokenText': ''})), 'ValueError'),
+    'whitespace': (lightning(json.dumps({'spokenText': ' \n\t'})), 'ValueError'),
+    'url': (lightning(json.dumps({'spokenText': 'The dose notes are at https://example.test/dose.'})), 'ValueError'),
+    'www': (lightning(json.dumps({'spokenText': 'The dose notes are at www.example.test.'})), 'ValueError'),
+    'no_letter': (lightning(json.dumps({'spokenText': '12 / 16 = 0.75'})), 'ValueError'),
+    'too_long': (lightning(json.dumps({'spokenText': 'Twelve milligrams. ' * 70})), 'ValueError'),
+    'duplicate_key': (lightning('{"spokenText":"Twelve milligrams.","spokenText":"Sixteen milligrams."}'), 'ValueError'),
+    'unavailable': (None, '503'),  # Lightning is missing from the inventory, so nothing is sent to it.
+}
+
+
+@pytest.mark.parametrize('failure', LIGHTNING_FAILURES)
+async def test_lightning_failure_keeps_the_written_answer_and_its_narration_error(failure, caplog):
+    summary, reason = LIGHTNING_FAILURES[failure]
+    inventory = (SETTINGS.agent_model,) if summary is None else (SETTINGS.agent_model, SETTINGS.summary_model)
+    result, requests = await run({'content': LONG}, summary, inventory=inventory)
+    assert posted_models(requests) == [SETTINGS.agent_model] + ([] if summary is None else [SETTINGS.summary_model])
+    assert result.text == LONG and result.spokenText is None and result.narrationError == UNSPOKEN
+    assert f'status=lightning_summary_failed reason={reason}' in caplog.text and 'legacy_missing_summary' in caplog.text
+    assert all(text not in caplog.text for text in ('reviewed notes', 'milligrams', 'PRIVATE', 'example.test', 'fixture-secret'))
+
+
+async def test_cancellation_during_lightning_still_cancels_the_request():
+    def cancelled(request):
+        raise asyncio.CancelledError
+    with pytest.raises(asyncio.CancelledError):
+        await run({'content': LONG}, cancelled)
+
+
+@pytest.mark.parametrize('ultra_seconds,timeout', [(70.0, 10.0), (75.0, 5.0), (76.5, None)])
+async def test_lightning_only_uses_what_is_left_of_the_host_timeout(ultra_seconds, timeout, monkeypatch, caplog):
+    clock = SimpleNamespace(now=1000.0)
+    monkeypatch.setattr(providers, 'time', SimpleNamespace(monotonic=lambda: clock.now))
+    def slow_ultra():
+        clock.now += ultra_seconds
+    result, requests = await run({'content': LONG}, on_ultra=slow_ultra)
+    if timeout is None:
+        assert posted_models(requests) == [SETTINGS.agent_model]
+        assert result.text == LONG and result.spokenText is None and result.narrationError == UNSPOKEN
+        assert 'lightning_summary_skipped' in caplog.text and 'legacy_missing_summary' in caplog.text
+    else:
+        assert posted_models(requests) == [SETTINGS.agent_model, SETTINGS.summary_model]
+        assert requests[-1].extensions['timeout']['read'] == timeout
+        assert result.spokenText == SPOKEN and result.narrationError is None
+
+
+@pytest.mark.parametrize('case', ['short_prose', 'deliver_answer', 'answer_only', 'legacy_envelope', 'task_turn'])
+async def test_lightning_is_only_for_a_plain_answer_too_long_or_structured_to_speak_whole(case):
+    # The same mock serves Lightning for plain LONG, so its absence below is not a fixture artifact.
+    _, control = await run({'content': LONG})
+    assert posted_models(control) == [SETTINGS.agent_model, SETTINGS.summary_model]
+    message = {
+        'short_prose': {'content': SHORT},
+        'deliver_answer': {'tool_calls': [{'id': 'delivery', 'type': 'function', 'function': {
+            'name': 'deliver_answer', 'arguments': json.dumps(DELIVERY)}}]},
+        'answer_only': {'content': json.dumps(DELIVERY)},
+        'legacy_envelope': {'content': json.dumps(DELIVERY)},
+        'task_turn': {'content': LONG, 'tool_calls': [{'id': 'search', 'type': 'function', 'function': {
+            'name': 'search_notes', 'arguments': '{"query":"dose"}'}}]},
+    }[case]
+    tools = [{'name': 'search_notes', 'description': 'Search notes.', 'parameters': {'type': 'object'}}]
+    result, requests = await run(message, mode='answer_only' if case == 'answer_only' else 'auto',
+                                 tools=tools if case == 'task_turn' else None)
+    assert [request.method for request in requests] == ['GET', 'POST']
+    if case == 'short_prose':
+        assert result.text == SHORT and result.spokenText == SHORT and result.narrationError is None
+    elif case == 'task_turn':
+        assert result.text == LONG and result.spokenText is None and result.narrationError is None
+        assert [call.name for call in result.toolCalls] == ['search_notes']
+    else:
+        assert result.text == LONG and result.spokenText is None and result.narrationError == UNSPOKEN
