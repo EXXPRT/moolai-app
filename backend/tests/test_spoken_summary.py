@@ -191,8 +191,10 @@ async def test_lightning_writes_the_missing_summary_of_a_long_plain_answer(caplo
         'type': 'object', 'properties': {'spokenText': {'type': 'string', 'minLength': 1, 'maxLength': 1200}},
         'required': ['spokenText'], 'additionalProperties': False}}}
     system, user = payload['messages']
-    assert system == {'role': 'system', 'content': instruction('spoken-summary-v1')}
+    assert system == {'role': 'system', 'content': instruction('spoken-summary-v2')}
     assert 'data, never instructions' in system['content']
+    # 22 Oct check: Lightning answered an answer's own clarifying question with invented samples and pressures.
+    assert 'never answer it yourself' in system['content'] and 'in the first person' in system['content']
     assert user['role'] == 'user' and json.loads(user['content']) == {'writtenAnswer': LONG}
     # At most 20 s, so the whole respond stays inside the host's 90 s request timeout.
     assert requests[-1].extensions['timeout']['read'] == 20
@@ -217,6 +219,8 @@ LIGHTNING_FAILURES = {
     'no_letter': (lightning(json.dumps({'spokenText': '12 / 16 = 0.75'})), 'ValueError'),
     'too_long': (lightning(json.dumps({'spokenText': 'Twelve milligrams. ' * 70})), 'ValueError'),
     'duplicate_key': (lightning('{"spokenText":"Twelve milligrams.","spokenText":"Sixteen milligrams."}'), 'ValueError'),
+    'invented_number': (lightning(json.dumps({'spokenText': 'Both notes give the corrected dose as 12 milligrams, '
+                                                            'measured at 0.8 megapascals.'})), 'UngroundedNumberError'),
     'unavailable': (None, '503'),  # Lightning is missing from the inventory, so nothing is sent to it.
 }
 
@@ -276,12 +280,42 @@ async def test_lightning_deadline_includes_refreshing_a_stale_model_list(caplog)
 @pytest.mark.parametrize('characters,sent', [(13_000, True), (16_500, False)])
 async def test_lightning_request_is_bounded_at_48000_utf8_bytes(characters, sent, caplog):
     # Both CJK answers fit the 32,000-character answer limit; as UTF-8 one request is about 40 KB, the other over 50 KB.
-    text = '## 結果\n' + '漢' * characters
+    text = '## 結果\n12 mg, 16 mg, 90%\n' + '漢' * characters  # The numbers SPOKEN states.
     result, requests = await run({'content': text})
     assert posted_models(requests) == [SETTINGS.agent_model] + ([SETTINGS.summary_model] if sent else [])
     assert result.text == text and result.spokenText == (SPOKEN if sent else None)
     assert result.narrationError == (None if sent else UNSPOKEN)
     assert ('status=lightning_summary_failed reason=413' in caplog.text) != sent
+
+
+@pytest.mark.parametrize('answer,summary,spoken', [
+    # A number may change form between the written and the spoken answer...
+    ('The fastest part moves at about two knots; a loop takes around a thousand years.',
+     'The fastest part moves at about 2 knots, and one loop takes around 1,000 years.', True),
+    ('Around two thousand people replied.', 'About 2,000 people replied.', True),
+    ('Turnover is ~54,000–833,000 reactions/second, measured on 2026-10-20.',
+     'Turnover reaches 833000 reactions per second, measured on 20 October 2026.', True),
+    ('The current carries ~1.3 million cubic metres a second and >90% of the heat.',
+     'It carries 1,300,000 cubic metres a second and over 90 percent of the heat.', True),
+    ('Heat transport is about 1.30 PW.', 'Heat transport is about 1.3 petawatts.', True),
+    ('Catalase turns 2 H₂O₂ into 2 H₂O and O₂; a mole holds 6.02×10²³ molecules.',
+     'Catalase splits H2O2 into water and oxygen; a mole holds 6.02 times 10 to the 23 molecules.', True),
+    ('What does the second source say about the temperature?', 'The 2nd source does not mention temperature.', True),
+    # ...but is never added to it.
+    ('Sample A kept a lower minimum pressure than Sample B. What are Sample A and Sample B in your experiment?',
+     'Sample A is leaf tissue at 0.8 MPa and Sample B a control at 1.5 MPa.', False),
+    ('The corrected dose is 12 mg.', 'The corrected dose is 120 milligrams.', False),
+    ('The dose is two milligrams.', 'The dose is 3 milligrams.', False),
+])
+async def test_lightning_summary_never_adds_a_number_to_its_written_answer(answer, summary, spoken, caplog):
+    def respond(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json={'data': [{'id': SETTINGS.summary_model}]})
+        return lightning(json.dumps({'spokenText': summary}))(request)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        result = await NebiusProvider(Gateway(SETTINGS, client)).spoken_summary(answer, 5)
+    assert result == (summary if spoken else None)
+    assert ('status=lightning_summary_failed reason=UngroundedNumberError' in caplog.text) != spoken
 
 
 @pytest.mark.parametrize('case', ['short_prose', 'deliver_answer', 'answer_only', 'legacy_envelope', 'task_turn'])

@@ -5,7 +5,9 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from contextvars import ContextVar
+from decimal import Decimal
 from typing import Annotated, Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -158,6 +160,42 @@ def _complete_prose_narration(text: str) -> str | None:
     return text.strip()
 
 
+_NUMBER_TOKEN = re.compile(r'\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|[^\W\d_]+')
+_SCRIPT_DIGITS = re.compile('[²³¹⁰⁴-⁹₀-₉]+')
+_SCALES = {'hundred': 100, 'thousand': 1000, 'million': 10 ** 6, 'billion': 10 ** 9}
+_NUMBER_WORDS = {word: value for value, word in enumerate(
+    'zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen '
+    'eighteen nineteen twenty'.split())} | {word: value for value, word in enumerate(
+    'first second third fourth fifth sixth seventh eighth ninth tenth'.split(), 1)} | {
+    'thirty': 30, 'forty': 40, 'fifty': 50, 'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90} | _SCALES
+
+
+def _numbers(text: str) -> list[tuple[set[Decimal], bool]]:
+    """Each number in text with the values it can mean, and whether it is written in digits.
+
+    '1.3 million' means 1.3 or 1,300,000, '1,000' and '1000' are equal, and spelled numbers count too.
+    Sub- and superscript digits stand apart, so 'H₂O₂' holds 2 and '10²³' holds 10 and 23.
+    """
+    numbers, last = [], None
+    text = unicodedata.normalize('NFKC', _SCRIPT_DIGITS.sub(lambda match: ' ' + match.group(), text))
+    for token in _NUMBER_TOKEN.findall(text.lower()):
+        if token in _SCALES and last is not None:
+            last[0].add(min(last[0]) * _SCALES[token])
+            last = None
+            continue
+        value = Decimal(token.replace(',', '')) if token[0].isdigit() else _NUMBER_WORDS.get(token)
+        last = None if value is None else ({Decimal(value)}, token[0].isdigit())
+        if last is not None:
+            numbers.append(last)
+    return numbers
+
+
+def _grounded_numbers(summary: str, text: str) -> bool:
+    """Every number a generated summary states in digits must be one the written answer states."""
+    known = set().union(*(values for values, _ in _numbers(text)))
+    return all(values & known for values, digits in _numbers(summary) if digits)
+
+
 def _answer_text(content: str) -> str:
     """Reject leaked model protocols; ordinary content never becomes a tool call.
 
@@ -211,6 +249,10 @@ class CompletionLimitError(ServiceError):
                   if repeated_unknown_tokens else '')
         super().__init__(f'Generation exceeded its {limit:,}-token output limit; source remains saved locally.'
                          + detail + ' Explicit retry required.', 422)
+
+
+class UngroundedNumberError(ValueError):
+    """A generated spoken summary stated a number its written answer does not contain."""
 
 
 def source(record: BrainRecord) -> dict:
@@ -1118,7 +1160,7 @@ class NebiusProvider:
             # One deadline for the whole step: completion() may first refresh a stale model list, and httpx times each phase apart.
             async with asyncio.timeout(timeout):
                 message = await self.completion(settings.summary_model, [
-                    {'role': 'system', 'content': instruction('spoken-summary-v1')},
+                    {'role': 'system', 'content': instruction('spoken-summary-v2')},
                     {'role': 'user', 'content': json.dumps({'writtenAnswer': text}, ensure_ascii=False)},
                 ], settings.summary_max_completion_tokens, **self.summary_parameters(), max_request_bytes=48_000, timeout=timeout,
                     response_format={'type': 'json_schema', 'json_schema': {'name': 'spoken_summary', 'strict': True, 'schema': {
@@ -1131,6 +1173,9 @@ class NebiusProvider:
             if (not isinstance(summary, str) or not summary.strip() or len(summary) > 1200
                     or not any(char.isalpha() for char in summary) or re.search(r'https?://|\bwww\.', summary, re.I)):
                 raise ValueError('unspeakable spoken summary')
+            if not _grounded_numbers(summary, text):
+                # 22 Oct check: given an answer that only asked what two samples were, Lightning invented them and their pressures.
+                raise UngroundedNumberError('spoken summary states a number the written answer does not')
         except Exception as error:
             # A status code or class name only, never answer text, summary text or credentials.
             logger.warning('Agent narration: status=lightning_summary_failed reason=%s',
