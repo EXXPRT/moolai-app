@@ -3,6 +3,7 @@ call speaks a plain answer that arrives without its summary."""
 import asyncio
 import copy
 import json
+import time
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -211,6 +212,7 @@ LIGHTNING_FAILURES = {
     'empty': (lightning(json.dumps({'spokenText': ''})), 'ValueError'),
     'whitespace': (lightning(json.dumps({'spokenText': ' \n\t'})), 'ValueError'),
     'url': (lightning(json.dumps({'spokenText': 'The dose notes are at https://example.test/dose.'})), 'ValueError'),
+    'url_upper': (lightning(json.dumps({'spokenText': 'The dose notes are at HTTPS://example.test/dose.'})), 'ValueError'),
     'www': (lightning(json.dumps({'spokenText': 'The dose notes are at www.example.test.'})), 'ValueError'),
     'no_letter': (lightning(json.dumps({'spokenText': '12 / 16 = 0.75'})), 'ValueError'),
     'too_long': (lightning(json.dumps({'spokenText': 'Twelve milligrams. ' * 70})), 'ValueError'),
@@ -252,6 +254,34 @@ async def test_lightning_only_uses_what_is_left_of_the_host_timeout(ultra_second
         assert posted_models(requests) == [SETTINGS.agent_model, SETTINGS.summary_model]
         assert requests[-1].extensions['timeout']['read'] == timeout
         assert result.spokenText == SPOKEN and result.narrationError is None
+
+
+async def test_lightning_deadline_includes_refreshing_a_stale_model_list(caplog):
+    # After a long Ultra call the 60 s model list is stale; a slow refresh must not outlast Lightning's budget.
+    requests = []
+    async def respond(request):
+        requests.append(request)
+        if request.method == 'GET':
+            await asyncio.sleep(1)
+            return httpx.Response(200, json={'data': [{'id': SETTINGS.summary_model}]})
+        return lightning(json.dumps({'spokenText': SPOKEN}))(request)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        provider = NebiusProvider(Gateway(SETTINGS, client))
+        provider.inventory, provider.inventory_time = {SETTINGS.summary_model}, time.monotonic() - 61
+        assert await provider.spoken_summary(LONG, 0.05) is None
+    assert [request.method for request in requests] == ['GET']
+    assert 'status=lightning_summary_failed reason=TimeoutError' in caplog.text
+
+
+@pytest.mark.parametrize('characters,sent', [(13_000, True), (16_500, False)])
+async def test_lightning_request_is_bounded_at_48000_utf8_bytes(characters, sent, caplog):
+    # Both CJK answers fit the 32,000-character answer limit; as UTF-8 one request is about 40 KB, the other over 50 KB.
+    text = '## 結果\n' + '漢' * characters
+    result, requests = await run({'content': text})
+    assert posted_models(requests) == [SETTINGS.agent_model] + ([SETTINGS.summary_model] if sent else [])
+    assert result.text == text and result.spokenText == (SPOKEN if sent else None)
+    assert result.narrationError == (None if sent else UNSPOKEN)
+    assert ('status=lightning_summary_failed reason=413' in caplog.text) != sent
 
 
 @pytest.mark.parametrize('case', ['short_prose', 'deliver_answer', 'answer_only', 'legacy_envelope', 'task_turn'])

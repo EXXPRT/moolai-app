@@ -1,5 +1,6 @@
 from .schemas import ThoughtPlan, TopicPlanWire, ThoughtInput, ThoughtResult, ThoughtWireResult, ThoughtUnitWireResult
 """Small HTTP adapters. Decisions, generation, vision and search stay separate."""
+import asyncio
 import json
 import logging
 import re
@@ -147,7 +148,7 @@ def _complete_prose_narration(text: str) -> str | None:
     """An entire short prose answer is a faithful fallback, never a clipped summary.
 
     Missing narration must not make a simple limitation silent. Structured or
-    long answers still need their generated summary; no extra inference occurs.
+    long answers need a generated summary; respond's legacy path asks Lightning for one.
     """
     if not text.strip() or len(text) > 1200 or len(text.split()) > 120:
         return None
@@ -1114,13 +1115,15 @@ class NebiusProvider:
         """
         settings = self.gateway.settings
         try:
-            message = await self.completion(settings.summary_model, [
-                {'role': 'system', 'content': instruction('spoken-summary-v1')},
-                {'role': 'user', 'content': json.dumps({'writtenAnswer': text}, ensure_ascii=False)},
-            ], settings.summary_max_completion_tokens, **self.summary_parameters(), max_request_bytes=48_000, timeout=timeout,
-                response_format={'type': 'json_schema', 'json_schema': {'name': 'spoken_summary', 'strict': True, 'schema': {
-                    'type': 'object', 'properties': {'spokenText': {'type': 'string', 'minLength': 1, 'maxLength': 1200}},
-                    'required': ['spokenText'], 'additionalProperties': False}}})
+            # One deadline for the whole step: completion() may first refresh a stale model list, and httpx times each phase apart.
+            async with asyncio.timeout(timeout):
+                message = await self.completion(settings.summary_model, [
+                    {'role': 'system', 'content': instruction('spoken-summary-v1')},
+                    {'role': 'user', 'content': json.dumps({'writtenAnswer': text}, ensure_ascii=False)},
+                ], settings.summary_max_completion_tokens, **self.summary_parameters(), max_request_bytes=48_000, timeout=timeout,
+                    response_format={'type': 'json_schema', 'json_schema': {'name': 'spoken_summary', 'strict': True, 'schema': {
+                        'type': 'object', 'properties': {'spokenText': {'type': 'string', 'minLength': 1, 'maxLength': 1200}},
+                        'required': ['spokenText'], 'additionalProperties': False}}})
             value = _unambiguous_json(message['content'])
             if not isinstance(value, dict) or set(value) != {'spokenText'}:
                 raise ValueError('unexpected spoken summary fields')
