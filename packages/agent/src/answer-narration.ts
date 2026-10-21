@@ -80,8 +80,9 @@ export async function resolveAnswerNarration(brain: BrainPort, conversationId: s
     spokenOutline: validOutlineShape(presentation.spokenOutline) ? presentation.spokenOutline : undefined,
     narrationError: typeof presentation.narrationError === 'string' ? presentation.narrationError : undefined};
   if (action === 'full') return {action, anchor, speech: plainSpeech(source.text)};
-  if (action === 'repeat') return {action, anchor, speech: spokenAnswer(reply),
-    ...(narrationDecision(reply).mode === 'fallback' ? {unavailable: 'summary_missing' as const} : {})};
+  // With no valid summary, saying it again reads the answer instead of the unavailable notice once more.
+  if (action === 'repeat') return narrationDecision(reply).mode === 'fallback'
+    ? {action, anchor, speech: plainSpeech(source.text), unavailable: 'summary_missing'} : {action, anchor, speech: spokenAnswer(reply)};
   const outline = speechOutline(reply);
   if (!outline) return {action, anchor, speech: walkthroughUnavailable, unavailable: 'walkthrough_invalid'};
   const more = outline.points.length > 5;

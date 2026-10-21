@@ -1,26 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,relative} from 'node:path';
 import {LocalSpeech} from '../../../packages/agent-host/src/speech.js';
 
 async function fixture(mode='normal') {
- const dir=await mkdtemp(join(tmpdir(),'moolai-tts-test-')),config=join(dir,'config.json'),worker=join(dir,'worker.mjs');
+ const dir=await mkdtemp(join(tmpdir(),'moolai-tts-test-')),config=join(dir,'config.json'),worker=join(dir,'worker.mjs'),requests=join(dir,'requests.jsonl');
  await writeFile(config,JSON.stringify({provider:'kokoro',python:relative(dir,process.execPath)}));
  await writeFile(worker,`import {createInterface} from 'node:readline';
+ import {appendFileSync} from 'node:fs';
  const emit=x=>console.log(JSON.stringify(x));
  setTimeout(()=>emit({event:'ready'}),${mode==='loading'?100:1});
  createInterface({input:process.stdin}).on('line',line=>{
  const x=JSON.parse(line);if(x.method==='cancel')return;
+ appendFileSync(${JSON.stringify(requests)},JSON.stringify(x.text)+'\\n');
  if(${JSON.stringify(mode)}==='failure'){emit({id:x.id,error:'Synthetic synthesis failure'});return;}
  const chunk=()=>{emit({id:x.id,pcm:Buffer.alloc(400).toString('base64')});emit({id:x.id,done:true});};
  if(${JSON.stringify(mode)}==='late')setTimeout(chunk,50);else chunk();
  });`);
  const calls:{method:string;params:any}[]=[];
  const speech=new LocalSpeech({async request<T>(method:string,params?:any){calls.push({method,params});return {} as T;}},()=>{},{config,worker});
- return {speech,calls,async close(){speech.close();await rm(dir,{recursive:true,force:true});}};
+ // The texts the worker was asked to synthesize, in order.
+ const texts=async():Promise<string[]>=>(await readFile(requests,'utf8').catch(()=>'')).split('\n').filter(Boolean).map(line=>JSON.parse(line));
+ return {speech,calls,texts,async close(){speech.close();await rm(dir,{recursive:true,force:true});}};
 }
+/** Whole sentences until the text is at least this long. */
+const reading=(length:number)=>{let text='';for(let i=1;text.length<length;i++)text+=`${text?' ':''}Sentence ${i} explains one more part of the saved answer.`;return text;};
 test('Kokoro stream uses native PCM playback, keeps the model warm, and never requests capture',async()=>{
  const f=await fixture();try{await f.speech.speak('A short answer.');await f.speech.speak('A follow-up.');
  assert.deepEqual(f.calls.map(c=>c.method),['beginSpeechAudio','speechAudio','endSpeechAudio','beginSpeechAudio','speechAudio','endSpeechAudio']);
@@ -67,4 +73,45 @@ test('a newer utterance settles its predecessor and old chunks cannot stop new p
 test('closing while warmup reads config never launches an orphan worker',async()=>{
  const f=await fixture();const warming=f.speech.warm();f.speech.close();
  await assert.rejects(warming,/closed/);assert.equal(f.calls.length,0);await f.close();
+});
+
+// Ian, 21 Oct test A: a long answer read in full stopped partway, past one utterance's 180 s and four-minute bounds.
+test('a long reading plays as parts of at most 1,600 characters, cut at sentence ends and begun, fed and ended in order',async()=>{
+ const f=await fixture();try{const text=reading(4000);await f.speech.speak(text);
+ const begins=f.calls.filter(c=>c.method==='beginSpeechAudio');assert.ok(begins.length>=3,`${begins.length} parts`);
+ assert.deepEqual(f.calls.map(c=>c.method),begins.flatMap(()=>['beginSpeechAudio','speechAudio','endSpeechAudio']));
+ begins.forEach((begin,i)=>assert.deepEqual(f.calls.slice(i*3,i*3+3).map(c=>c.params.utteranceId),Array(3).fill(begin.params.utteranceId)));
+ assert.equal(new Set(begins.map(c=>c.params.utteranceId)).size,begins.length);
+ const parts=await f.texts();assert.equal(parts.length,begins.length);
+ for(const part of parts){assert.ok(part.length<=1600,`${part.length} characters`);assert.match(part,/[.!?…]$/);}
+ assert.equal(parts.join('').replace(/\s+/g,''),text.replace(/\s+/g,''));
+ }finally{await f.close();}
+});
+test('stop() during the first part of a long reading begins no later part',async()=>{
+ const f=await fixture('late');try{const speaking=f.speech.speak(reading(4000));const rejected=assert.rejects(speaking,/interrupted/);
+ while(!f.calls.some(c=>c.method==='beginSpeechAudio'))await new Promise(r=>setTimeout(r,1));
+ await f.speech.stop();await rejected;await new Promise(r=>setTimeout(r,120));
+ assert.equal(f.calls.filter(c=>c.method==='beginSpeechAudio').length,1);
+ const parts=await f.texts();assert.equal(parts.length,1);assert.ok(parts[0]!.length<=1600,'Only the first part reached the worker');
+ }finally{await f.close();}
+});
+test('a sentence longer than one part is cut at its last space before the limit',async()=>{
+ const f=await fixture();try{let text='';for(let i=1;text.length<2000;i++)text+=`${text?' ':''}word${i}`;
+ await f.speech.speak(text);const parts=await f.texts();
+ assert.equal(parts.length,2);assert.ok(parts.every(part=>part.length<=1600));
+ assert.equal(parts.join(' '),text,'The cut falls on a space, so no word is split');
+ }finally{await f.close();}
+});
+test('a hard cut with no space never splits a surrogate pair',async()=>{
+ const f=await fixture();try{const text='a'+'😀'.repeat(1000);await f.speech.speak(text);const parts=await f.texts();
+ assert.equal(parts.length,2);assert.ok(parts.every(part=>part.length<=1600));
+ for(const part of parts)assert.doesNotMatch(part,/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+ assert.equal(parts.join(''),text);
+ }finally{await f.close();}
+});
+test('guard: a reading under 1,600 characters is still one utterance and one worker request',async()=>{
+ const f=await fixture();try{const text=reading(1500);assert.ok(text.length<1600);await f.speech.speak(text);
+ assert.deepEqual(f.calls.map(c=>c.method),['beginSpeechAudio','speechAudio','endSpeechAudio']);
+ assert.deepEqual(await f.texts(),[text]);
+ }finally{await f.close();}
 });

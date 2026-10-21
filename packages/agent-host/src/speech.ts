@@ -2,7 +2,21 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { safeEnd } from "../../contracts/src/records.js";
 import type { NativeBridge } from "./native.js";
+
+/** One utterance has a 180 s timer and a four-minute audio bound, so a long reading is spoken in parts:
+ * whole sentences where they fit, else a cut at the last space, never inside a surrogate pair. */
+function speechParts(text:string,limit=1600):string[] {
+  if(text.length<=limit)return [text];
+  const parts:string[]=[];let rest=text.trim();
+  while(rest.length>limit){
+    const head=rest.slice(0,limit+1),space=head.search(/\s\S*$/);
+    const end=/^[\s\S]*[.!?…](?=\s)/.exec(head)?.[0].length ?? (space>0?space:safeEnd(rest,limit));
+    parts.push(rest.slice(0,end).trimEnd());rest=rest.slice(end).trimStart();
+  }
+  return [...parts,rest];
+}
 
 /** The host owns synthesis. Swift owns playback, echo reference and capture intent. */
 export class LocalSpeech {
@@ -58,7 +72,15 @@ export class LocalSpeech {
     await this.warm();
     if(epoch!==this.epoch)return;
     if(this.config?.provider==="apple"){await this.native.request("speak",{text});return;}
-    const child=this.child!;const id=++this.next;
+    // Each part's endSpeechAudio returns once it has played; a stop or newer speech begins no further part.
+    for(const part of speechParts(text)){
+      if(epoch!==this.epoch)return;
+      await this.speakPart(part,epoch);
+    }
+  }
+  private async speakPart(text:string,epoch:number) {
+    const child=this.child;if(!child)throw Error("Local speech worker closed; full text remains on screen.");
+    const id=++this.next;
     const token=`kokoro-${id}`;
     await this.native.request("beginSpeechAudio",{utteranceId:token});
     if(epoch!==this.epoch)return;
