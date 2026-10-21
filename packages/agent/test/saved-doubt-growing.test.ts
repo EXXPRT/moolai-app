@@ -14,6 +14,9 @@ import { Agent } from "../src/index.js";
 const OFFER = "I saved your thought. Would you like me to look at your screen to help with it?";
 /** Ian's test B doubt, 21 Oct. */
 const TEST_B = "Sample A kept a lower minimum pressure than sample B. I'm not sure why sample A's minimum pressure is lower than sample B.";
+/** The companion's refusal when macOS has not given Screen Recording permission to the app that started Moo. */
+const DENIED = "Screen Recording permission is required for the requested screenshot. macOS checks the app that started Moo (the terminal that ran npm run moo, such as Warp), not Moolai Native. Turn it on for that app in System Settings > Privacy & Security > Screen & System Audio Recording, quit and reopen that app, then start Moo again.";
+const ANSWER_FAILED = "I couldn't finish that answer.";
 const now = () => "2026-10-19T10:00:00Z";
 const deferred = () => { let release!: () => void; const promise = new Promise<void>(r => release = r); return { promise, release }; };
 
@@ -32,7 +35,9 @@ for (const kind of ["memory", "sqlite"] as const) {
       organizerFails: false,
       answerHold: undefined as Promise<void> | undefined,
       captureHold: undefined as Promise<void> | undefined,
-      captureFails: false,
+      captureError: undefined as string | undefined,
+      /** A reply in place of the fixture's, given the tools offered. */
+      reply: undefined as undefined | ((tools: string[]) => AgentReply | undefined),
     };
     const consolidate = p.consolidate.bind(p);
     p.consolidate = async (input): Promise<ThoughtResult> => {
@@ -52,11 +57,12 @@ for (const kind of ["memory", "sqlite"] as const) {
     p.tag = async input => { calls.tags++; const decision = await tag(input); return { ...decision, doubt: hooks.tagDoubt }; };
     const respond = p.respond.bind(p);
     p.respond = (async (messages: ChatMessage[], tools?: ToolDefinition[]): Promise<AgentReply> => {
-      calls.tools.push((tools ?? []).map(t => t.name)); if (hooks.answerHold) await hooks.answerHold; return respond(messages);
+      const names = (tools ?? []).map(t => t.name);
+      calls.tools.push(names); if (hooks.answerHold) await hooks.answerHold; return hooks.reply?.(names) ?? respond(messages);
     }) as typeof p.respond;
     const make = () => new Agent({ brain, decisions: p, generation: p, search: p, id: () => `${kind}-${++n}`, now,
       vision: { interpret: async (_image, question, _signal, options) => { calls.vision.push({ question, mode: options?.mode }); return "Sample A minimum 12 kPa."; } },
-      capture: { async capture() { calls.captures++; if (hooks.captureHold) await hooks.captureHold; if (hooks.captureFails) throw Error("Screen Recording permission is required"); return { mimeType: "image/png", bytes: new Uint8Array([1, 2, 3]) }; } },
+      capture: { async capture() { calls.captures++; if (hooks.captureHold) await hooks.captureHold; if (hooks.captureError) throw Error(hooks.captureError); return { mimeType: "image/png", bytes: new Uint8Array([1, 2, 3]) }; } },
       speech: { async speak(text) { calls.spoken.push(text); }, async stop() {} } });
     let agent = make(); await agent.initialize(); await agent.startSession();
     const offers = () => calls.spoken.filter(text => text === OFFER).length;
@@ -274,14 +280,44 @@ for (const kind of ["memory", "sqlite"] as const) {
     assert.ok(trace!.some(e => e.action === "screen_capture_requested"), "Moo made the capture the model skipped");
   });
 
-  run("a failed requested capture still gets an answer that knows the screen was not seen", async t => {
-    t.hooks.captureFails = true;
+  run("a requested capture that fails for another reason still gets an answer that knows the screen was not seen", async t => {
+    t.hooks.captureError = "Main display is unavailable";
     await t.agent.submitText("Moo, take a screenshot and read the table."); await t.agent.drain();
     assert.equal(t.calls.captures, 1);
     assert.equal(await t.answers(), 1, "The request is still answered");
     assert.equal(t.agent.getState().lastError, undefined);
     const ledger = JSON.stringify(await t.brain.getState(`tool-ledger:${t.agent.getState().conversationId}`));
-    assert.match(ledger, /Screen Recording permission is required/, "The model is told the capture failed");
+    assert.match(ledger, /Main display is unavailable/, "The model is told the capture failed");
+  });
+
+  run("a screenshot macOS refuses is said with its fix, and the model is not asked again without the screen tool (21 Oct test B)", async t => {
+    t.hooks.captureError = DENIED;
+    // What Ultra said on 21 Oct once the refused capture had taken the screen tool away.
+    t.hooks.reply = tools => tools.includes("capture_screen") ? undefined : { text: "I don't have the ability to take screenshots.", toolCalls: [] };
+    await t.agent.submitText("Moo, take a screenshot and read the table."); await t.agent.drain();
+    assert.equal(t.calls.captures, 1, "Moo made the capture the model skipped");
+    assert.equal(t.calls.tools.length, 1, "No model call after the refusal");
+    assert.ok(t.calls.spoken.some(text => text.includes("I couldn't take the screenshot. Screen Recording permission")), t.calls.spoken.join("\n"));
+    const id = t.agent.getState().conversationId!;
+    const assistant = (await t.brain.getRecord(id))!.segments.filter(s => s.speaker === "assistant");
+    assert.ok(![...t.calls.spoken, ...assistant.map(s => s.text)].some(text => /ability to take screenshots/i.test(text)), "Nothing says Moo cannot take screenshots");
+    assert.ok(!t.calls.spoken.some(text => text.startsWith(ANSWER_FAILED)));
+    assert.equal(t.agent.getState().lastError, undefined);
+    const refusal = assistant.find(s => s.text.startsWith("I couldn't take the screenshot."))!;
+    assert.notEqual(await t.brain.getState(`thought-eligible:${refusal.id}`), true, "The refusal is not note content");
+    assert.equal(await t.brain.getState(`answer-narration:latest:${id}`) ?? undefined, undefined, "Nor an answer to read again");
+    assert.match(JSON.stringify(await t.brain.getState(`tool-ledger:${id}`)), /Screen Recording permission is required/, "The refused capture stays on record");
+  });
+
+  run("an accepted offer macOS refuses to capture says why, not that the answer failed (21 Oct test B)", async t => {
+    t.hooks.doubt = doubtful; t.hooks.captureError = DENIED;
+    await t.agent.submitText(TEST_B); await t.agent.drain();
+    assert.equal(t.calls.spoken.at(-1), OFFER);
+    await t.agent.submitText("Yes please"); await t.agent.drain();
+    assert.equal(t.calls.captures, 1);
+    assert.ok(t.calls.spoken.some(text => text.startsWith("I couldn't take the screenshot. Screen Recording permission")), t.calls.spoken.join("\n"));
+    assert.ok(!t.calls.spoken.some(text => text.startsWith(ANSWER_FAILED)));
+    assert.match(t.agent.getState().lastError ?? "", /Screen help failed.*Screen Recording permission/, "The failure stays on screen");
   });
 
   run("no doubt offer while a conversation is open or another offer is pending", async t => {

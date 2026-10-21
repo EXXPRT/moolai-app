@@ -80,8 +80,12 @@ createInterface({input:process.stdin}).on('line',line=>{
           assert.match(retained!.evidence.raw, /PRIVATE_RAW_CONTRADICTION/);
           assert.equal(retained!.evidence.observations[0]!.value, null);
           assert.ok(retained!.evidence.validationErrors.length);
+        } else if (failure === 'permission') {
+          // 21 Oct test B: a refused capture is said as it is; the model is not asked again without its screen tool.
+          assert.equal(frames.length, 1);
+          assert.match(conversation.segments.filter(s => s.speaker === 'assistant').map(s => s.text).join(' '), /I couldn't take the screenshot\. Screen Recording permission denied/);
         } else {
-          assert.match(JSON.stringify(frames[1]), failure === 'permission' ? /permission denied/ : /Vision service unavailable/);
+          assert.match(JSON.stringify(frames[1]), /Vision service unavailable/);
           assert.doesNotMatch(conversation.segments.filter(s => s.speaker === 'assistant').map(s => s.text).join(' '), /82 kg|XQ-41/);
         }
         await host.agent.drain();

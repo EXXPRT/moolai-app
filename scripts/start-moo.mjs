@@ -48,6 +48,28 @@ async function listener(port) {
 async function health(url, headers) {
   try { return (await fetch(url, { headers, signal: AbortSignal.timeout(1500) })).ok; } catch { return false; }
 }
+const terminalApps = new Map([['WarpTerminal', 'Warp'], ['Apple_Terminal', 'Terminal'], ['iTerm.app', 'iTerm'], ['vscode', 'Visual Studio Code'], ['ghostty', 'Ghostty']]);
+/** macOS checks Screen Recording against the app that ran npm run moo, not Moolai Native: the runtime spawns the companion. */
+export function screenPermissionWarning(health, env = process.env) {
+  if (health?.screenPermission !== false) return;
+  const app = terminalApps.get(env.TERM_PROGRAM);
+  return `Screenshots are off: macOS has not given Screen Recording permission to ${app ? `${app}, the app that started Moo` : 'the app that ran npm run moo'}. Turn on ${app ?? 'that app'} in System Settings > Privacy & Security > Screen & System Audio Recording, quit and reopen ${app ?? 'it'}, then run npm run moo again.`;
+}
+/** Best effort, bounded to about `timeout`: a missing, failed or slow answer gives no warning and cannot stop startup. */
+export async function startupScreenWarning(dataDir, env = process.env, timeout = 5000) {
+  const deadline = Date.now() + timeout;
+  try {
+    const { port, token } = JSON.parse(await readFile(path.join(dataDir, 'runtime.json'), 'utf8'));
+    // The first request starts the companion, so its health can take a moment.
+    do {
+      try {
+        const native = await (await fetch(`http://127.0.0.1:${port}/api/native`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) })).json();
+        if (native?.screenPermission !== undefined) return screenPermissionWarning(native, env);
+      } catch {}
+      await sleep(500);
+    } while (Date.now() < deadline);
+  } catch {}
+}
 async function launch(file, args, env, logPath) {
   const log = await open(logPath, 'a', 0o600);
   try {
@@ -140,6 +162,8 @@ export async function startMoo(options = {}) {
     }, { timeout: 45000, label: 'Moo runtime' });
     const desktopPid = await launch(path.join(root, 'node_modules/.bin/electron'), ['apps/desktop/electron.cjs'], env, path.join(dataDir, 'desktop-startup.log'));
     await writeFile(path.join(dataDir, 'startup.json'), JSON.stringify({ startedAt: new Date().toISOString(), runtimePid, asrPid, desktopPid, port, model: config.model, backup }), { mode: 0o600 });
+    const screenWarning = await startupScreenWarning(dataDir, env);
+    if (screenWarning) console.warn(screenWarning);
     console.log('Moo is ready. Turn on the microphone in the app when you want to speak.');
   } finally { await unlink(lockPath).catch(() => {}); }
 }

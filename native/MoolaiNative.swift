@@ -546,7 +546,7 @@ final class NativeCompanion: NSObject, AVSpeechSynthesizerDelegate {
 
     private func capture(excludeBundleIds: [String]) async throws -> [String: Any] {
         guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
-            throw NativeFailure(message: "Screen Recording permission is required for the requested screenshot. Enable Moolai Native in System Settings > Privacy & Security > Screen & System Audio Recording.")
+            throw NativeFailure(message: "Screen Recording permission is required for the requested screenshot. macOS checks the app that started Moo (the terminal that ran npm run moo, such as Warp), not Moolai Native. Turn it on for that app in System Settings > Privacy & Security > Screen & System Audio Recording, quit and reopen that app, then start Moo again.")
         }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) else {

@@ -1231,9 +1231,9 @@ export class Agent {
         status: "failed", completed: false, error: errorText(e),
         limitation: "Screen analysis did not complete. A captured attachment may still be retained; do not claim successful analysis.",
       }, acceptedTurn?.turnId);
-      throw new Error(
+      throw Object.assign(new Error(
         `Your thought is saved. Screen help failed; you can describe it or retry. ${errorText(e)}`,
-      );
+      ), { spoken: screenshotRefused(errorText(e)) });
     }
   }
   private startSavedDoubtHelp(conversationId: string, sourceId: string, request: UserTurnSnapshot, mode: "ocr" | "visual") {
@@ -1285,8 +1285,8 @@ export class Agent {
           this.state.lastError = errorText(e);
           await this.p.brain.setState(`work-status:${conversationId}`, `Unresolved: ${errorText(e)}`);
           await this.persist();
-          // Voice users hear that the answer did not finish (MOO-060); speech never starts over the user.
-          if (!this.attention) await this.speak(ANSWER_FAILED).catch(() => {});
+          // Voice users hear that the answer did not finish (MOO-060), or why a screenshot could not be taken; speech never starts over the user.
+          if (!this.attention) await this.speak((e as {spoken?: string})?.spoken ?? ANSWER_FAILED).catch(() => {});
         })
         .finally(async () => {
           if (epoch !== this.taskEpoch) return;
@@ -1651,6 +1651,16 @@ export class Agent {
         await execution?.persistTimings(this.p.brain, id);
         if (signal.aborted && await this.p.brain.getState(`checkpoint:${id}`)) await this.queueEnrichment(id);
         this.assertCurrent(signal, epoch);
+        // In Ian's 21 Oct test B, asked again without its screen tool, Ultra said Moo cannot take screenshots. A refused
+        // permission now ends the request with its fix, outside the notes and answer replays, and no further model call.
+        const outcome = output as ExperimentToolOutcome;
+        const refused = production && call.name === "capture_screen" && outcome.status === "failed" ? screenshotRefused(outcome.error ?? "") : undefined;
+        if (refused) {
+          await this.appendAssistant(refused, id, undefined, false, async () => assertPolicy());
+          this.publishedEpoch = epoch;
+          if (!this.attention) await this.speak(refused);
+          return;
+        }
       }
     }
     throw new Error(
@@ -2660,6 +2670,10 @@ function requestPhrased(text: string) {
     starts(/[.!…]\s+/).some((part) => /^(?:why|how come|(?:what|how|where|when|who)(?:['’]s|\s+(?:is|are|was|were|do|does|did|can|could|would|will|should))|(?:is|are|was|were|do|does|did|can|could|would|will|should)\s+(?:you|I|we|it|this|that|these|those|there|they|he|she|the|a))\b/i.test(part));
 }
 const ANSWER_FAILED = "I couldn't finish that answer. Your request is saved; ask again when you're ready.";
+/** What Moo says when macOS refuses a screenshot: the companion's message names the app to turn on. */
+function screenshotRefused(error: string) {
+  return /Screen Recording permission/i.test(error) ? `I couldn't take the screenshot. ${error}` : undefined;
+}
 /** The backend rejects a J1 state whose JSON is over 180,000 characters (providers.py bounded_state). An oversized
  * context keeps its head (current work, linked request) and its latest lines, and the middle is replaced by an
  * explicit marker, measured the way the backend measures it. A context under the limit is unchanged. */
