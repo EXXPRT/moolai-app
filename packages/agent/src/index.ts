@@ -582,9 +582,11 @@ export class Agent {
       .join(" ")
       .trim();
     if (!text) return;
-    // A lone filler while Moo speaks or works (often a click or breath the recognizer heard as "Moo") is not an
-    // interruption: the reading resumes, nothing is routed or cancelled, and the words stay in the transcript.
-    if ((this.pausedPlayback || this.state.busy) && fillerOnly(text)) {
+    // A lone filler while Moo speaks or works (often a click or breath the recognizer heard as "Moo"), or in an open
+    // conversation with nothing asked, is not an interruption or a reply: the reading resumes, nothing is routed or
+    // cancelled, and the words stay in the transcript. An idle "mm-hm" may answer something, so J1 still hears it.
+    const affirmative = /\b(?:mm+-?hm+|mhm+|uh-?huh)\b/i.test(text);
+    if ((this.pausedPlayback || this.state.busy || (this.state.conversationId && !this.state.pendingOffer && !affirmative)) && fillerOnly(text)) {
       await this.p.brain.setState(`handled:${turnId}`, revisionKey);
       await this.trace("filler_ignored", {turnId, text: text.slice(0, 40)});
       await this.resumePausedPlayback();
@@ -743,9 +745,10 @@ export class Agent {
       decision = await this.p.decisions.route(boundedRouteInput({
         text,
         // The utterance is latestUserUtterance; repeating it here made J1's doubt question read it as already
-        // mentioned (0.95 without the copy, 0.68-0.79 with it; 20 Oct check).
+        // mentioned (0.95 without the copy, 0.68-0.79 with it; 20 Oct check). A stray "Moo." before a stated doubt
+        // made it a confident start_agent (0.84 with it, 0.52-0.58 without; 21 Oct check).
         recentContext: (this.state.busy && this.activeRequest ? `Current work (background): ${this.activeRequest.text}\nStatus: ${this.attention?.previous ?? this.state.activity ?? "preparing"}\n` : "") + (linkedRequest ? `Original linked request:\n${transcriptText(linkedRequest)}\nRecent conversation:\n` : "") + session.segments
-          .filter((s) => s.turnId !== turnId)
+          .filter((s) => s.turnId !== turnId && !(s.speaker === "user" && fillerOnly(s.text)))
           .slice(-20)
           .map((s) => `${s.speaker}: ${s.text}`)
           .join("\n"),
@@ -763,8 +766,12 @@ export class Agent {
     const newSpeech = () => speechEpoch !== this.speechEpoch;
     const stillCurrent = async () => !newSpeech();
     const offerUnchanged = () => JSON.stringify(this.state.pendingOffer ?? null) === JSON.stringify(pending ?? null);
-    const needsClarification = () => (decision.confidence < this.threshold && !(decision.route === "continue_agent" && this.state.conversationId && (!pending || pending.kind === "close")) && !(decision.route === "dictate" && !this.state.conversationId && !pending)) ||
-      decision.route === "unclear";
+    // A short unsure reply in an open conversation ("I don't.", no_action 0.24 on 21 Oct) is kept without a question.
+    const quietReply = () => decision.route === "no_action" && !!this.state.conversationId && !pending && text.split(/\s+/).filter(Boolean).length < 4;
+    // J1 can route a stated doubt as a confident start_agent (0.84, doubt 0.96; 21 Oct check); it still gets the offer.
+    const idleStatedDoubt = () => decision.route === "start_agent" && !this.state.conversationId && !pending && this.statesDoubt(decision) && !requestPhrased(text) && !fillerOnly(text);
+    const needsClarification = () => (decision.confidence < this.threshold && !(decision.route === "continue_agent" && this.state.conversationId && (!pending || pending.kind === "close")) && !(decision.route === "dictate" && !this.state.conversationId && !pending) && !quietReply()) ||
+      decision.route === "unclear" || idleStatedDoubt();
     // New speech only invalidates a close, a reply to an end/close question, or a result that would ask something new.
     // Dictation and requests the user made are still applied; a response waits on the attention hold.
     const applies = () => routing.stop === this.stopEpoch && ((!newSpeech() && offerUnchanged()) || (
@@ -874,15 +881,14 @@ export class Agent {
       await this.say(this.state.busy ? activity === "searching" ? "I’m still searching for your request." : "I’m preparing the answer to your request." : this.state.lastError ? "I’m here. The last response could not finish; your request is saved." : "I’m here and listening.",stillCurrent);
       return;
     }
+    // An unsure filler is not worth a question, a saved thought or an offer.
+    if (fillerOnly(text) && needsClarification()) return;
     await appendToNotes();
     if (previous?.error && this.state.lastError === previous.error) {
       this.state.lastError = undefined;
       await this.persist();
     }
-    if (
-      (decision.confidence < this.threshold && !(decision.route === "continue_agent" && this.state.conversationId && (!pending || pending.kind === "close")) && !(decision.route === "dictate" && !this.state.conversationId && !pending)) ||
-      decision.route === "unclear"
-    ) {
+    if (needsClarification()) {
       // A clarification replaces the closing question; a later "yes" must not
       // inherit permission from a question that is no longer being asked.
       if (pending?.kind === "close" && offerUnchanged()) {
@@ -2627,6 +2633,11 @@ const TRACE_ENTRIES = 400;
 /** "Moo", "mm", "uh" and the like, alone: what clicks, breaths and echo turn into while Moo is speaking. */
 function fillerOnly(text: string) {
   return /^(?:(?:hey\s+)?moo+|m+|mm+-?hm+|mhm+|hmm+|uh+|um+|ah+|oh+|er+|erm+|huh|uh-?huh|eh)(?:[\s.,!?…]+(?:moo+|m+|mm+|uh+|um+|hmm+))*[\s.,!?…]*$/i.test(text.trim());
+}
+/** A question or a request to Moo, which is answered even when it carries a doubt. */
+function requestPhrased(text: string) {
+  return text.includes("?") || /^(?:(?:can|could|would|will) you|I want you to|I would like you to|I['’]d like you to|please|explain|tell|show|help|find|search|look|summari[sz]e|compare|give|define|describe|list|read|check|take|capture|walk)\b/i
+    .test(text.trim().replace(/^(?:hey\s+)?moo+[,.!?…]*\s*/i, ""));
 }
 const ANSWER_FAILED = "I couldn't finish that answer. Your request is saved; ask again when you're ready.";
 /** The backend rejects a J1 state whose JSON is over 180,000 characters (providers.py bounded_state). An oversized

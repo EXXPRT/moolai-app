@@ -12,6 +12,8 @@ import { Agent } from "../src/index.js";
 // Blocker 5: with growing notes on (production), the saved-doubt offer is decided on the spoken turn by J1,
 // not on organizer output, and a help answer survives organizer passes.
 const OFFER = "I saved your thought. Would you like me to look at your screen to help with it?";
+/** Ian's test B doubt, 21 Oct. */
+const TEST_B = "Sample A kept a lower minimum pressure than sample B. I'm not sure why sample A's minimum pressure is lower than sample B.";
 const now = () => "2026-10-19T10:00:00Z";
 const deferred = () => { let release!: () => void; const promise = new Promise<void>(r => release = r); return { promise, release }; };
 
@@ -198,6 +200,44 @@ for (const kind of ["memory", "sqlite"] as const) {
     assert.equal(last.text, "I'm not sure why sample A's minimum pressure is lower than sample B's.");
     assert.doesNotMatch(last.recentContext, /not sure why sample A/, "The current utterance is not repeated");
     assert.match(last.recentContext, /Glaciers move/, "Earlier speech stays in the context");
+  });
+
+  run("a stray \"Moo.\" stays out of J1's context, so the doubt after it still gets the screen offer (21 Oct)", async t => {
+    // The 21 Oct paid J1 check: test B routed start_agent 0.84 with "user: Moo." in recentContext, 0.52-0.58 without it.
+    t.hooks.route = async input => input.text === "Moo." ? { route: "no_action", confidence: 1 }
+      : { route: "start_agent", confidence: /user: Moo\./.test(input.recentContext) ? 0.84 : 0.55 };
+    t.hooks.doubt = doubtful;
+    await t.agent.submitText("Moo."); await t.agent.drain();
+    await t.agent.submitText(TEST_B); await t.agent.drain();
+    assert.equal(t.calls.spoken.at(-1), OFFER);
+    assert.equal(t.agent.getState().pendingOffer?.kind, "help");
+    assert.doesNotMatch(t.calls.routes.find(r => r.text === TEST_B)!.recentContext, /Moo\./);
+  });
+
+  run("a stated doubt J1 routes as a confident start_agent still gets the screen offer (21 Oct)", async t => {
+    t.hooks.route = async () => ({ route: "start_agent", confidence: 0.84 });
+    t.hooks.doubt = doubtful;
+    await t.agent.submitText(TEST_B); await t.agent.drain();
+    assert.equal(t.calls.routes.at(-1)!.recentContext, "");
+    assert.equal(t.calls.spoken.at(-1), OFFER);
+    assert.equal(t.agent.getState().pendingOffer?.kind, "help");
+    assert.equal(await t.answers(), 0);
+  });
+
+  run("a doubt asked as a request is answered, with no offer", async t => {
+    t.hooks.route = async () => ({ route: "start_agent", confidence: 1 });
+    t.hooks.doubt = () => 0.96;
+    await t.agent.submitText("Moo, can you explain why sample A's minimum is lower?"); await t.agent.drain();
+    assert.equal(t.offers(), 0);
+    assert.equal(await t.answers(), 1);
+  });
+
+  run("a confident start_agent J1 does not hear as a doubt is answered", async t => {
+    t.hooks.route = async () => ({ route: "start_agent", confidence: 0.84 });
+    t.hooks.doubt = () => 0.1;
+    await t.agent.submitText(TEST_B); await t.agent.drain();
+    assert.equal(t.offers(), 0);
+    assert.equal(await t.answers(), 1);
   });
 
   run("an explicit screenshot request in a conversation is captured before Moo answers", async t => {
