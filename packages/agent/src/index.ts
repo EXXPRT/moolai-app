@@ -1387,6 +1387,7 @@ export class Agent {
     const readRevisions = new Map<string, number>();
     const permittedUrls = new Set<string>();
     if (production && this.state.webAllowed) for (const url of await earlierSearchUrls(this.p.brain, id)) permittedUrls.add(url);
+    let retried = false, brief = false;
     for (let step = 0; step < (experimental ? 2 : 6); step++) {
       await this.responsePermit(signal, epoch);
       if (graph && !(await graph.current())) throw Error("Graph source or relationships changed; stale evidence was not sent for generation.");
@@ -1401,6 +1402,8 @@ export class Agent {
       const hasLocalFolders = !!this.p.localFiles && (await this.p.localFiles.roots()).length > 0;
       const screenAttempted = sourceTurn && !!(await this.p.brain.getState(this.captureAttemptKey(id, sourceTurn)));
       if (screenAttempted) prepared.messages[0]!.content += "\nScreen analysis was already attempted for this request. Reuse its validated evidence or explain the precise limitation. The screen tool is unavailable until a new user request; switching analysis modes does not recover rejected OCR values.";
+      // Only the step right after an output-limit failure is asked to be brief; every step rebuilds the prompt from systemPrompt.
+      if (brief) { brief = false; prepared.messages[0]!.content += `\nYour previous attempt ran out of output allowance. ${finalMode ? "Answer" : "Keep this step short: call only the one tool you still need, or answer"} in under 200 words with spokenOutline null; if the request is unclear or looks misheard, ask one short clarifying question.`; }
       const tools = (finalMode ? [] : this.p.responseExperiment ? responseExperimentTools(toolDefinitions) : toolDefinitions).filter(
         (t) =>
           (t.name !== "capture_screen" || !screenAttempted) &&
@@ -1408,8 +1411,18 @@ export class Agent {
           (this.state.webAllowed || !["search_web", "extract_web"].includes(t.name)) && (hasLocalFolders || !["search_local_files", "read_local_file"].includes(t.name)),
       );
       assertPolicy();
-      const reply = await this.p.generation.respond(prepared.messages, tools, signal,
-        finalMode ? {responseMode: "answer_only"} : this.p.closingPolicy === "contextual" ? {closingMode: "contextual"} : undefined);
+      let reply: AgentReply;
+      try {
+        reply = await this.p.generation.respond(prepared.messages, tools, signal,
+          finalMode ? {responseMode: "answer_only"} : this.p.closingPolicy === "contextual" ? {closingMode: "contextual"} : undefined);
+      } catch (error) {
+        // In Ian's 21 Oct test A, Ultra spent all 4,096 output tokens reasoning on a misheard request. An answer that hits
+        // its output limit gets one automatic retry, on the next of the six steps; a second one fails as before.
+        if (!production || finalMode || retried || signal.aborted || (error as {status?: number})?.status !== 422 || !/output limit/i.test(errorText(error))) throw error;
+        retried = brief = true;
+        await this.trace("answer_retry_after_output_limit", {step});
+        continue;
+      }
       await this.responsePermit(signal, epoch);
       const ensureFresh=async()=> {
         assertPolicy();
