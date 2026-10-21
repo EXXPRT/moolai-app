@@ -20,8 +20,8 @@ for(const kind of ['memory','sqlite']) {
     const brain:BrainPort=kind==='memory'?new MemoryBrain():new SQLiteBrain(dir);
     const p=new FixtureProviders();let n=0;
     const speech={spoken:[] as string[],stops:0,resumes:0};
-    const routes:RouteInput[]=[],overrides:Record<string,RouteDecision>={};
-    const route=p.route.bind(p);p.route=async input=>{routes.push(input);return overrides[input.text] ?? route(input);};
+    const routes:RouteInput[]=[],overrides:Record<string,RouteDecision|Error>={};
+    const route=p.route.bind(p);p.route=async input=>{routes.push(input);const o=overrides[input.text];if(o instanceof Error)throw o;return o ?? route(input);};
     let release:(()=>void)|undefined;
     let answer:Promise<void>|undefined;
     p.respond=async():Promise<AgentReply>=>{if(answer)await answer;return {text:'Osmosis moves water across a membrane.',toolCalls:[]};};
@@ -105,10 +105,10 @@ for(const kind of ['memory','sqlite']) {
     const r=await rig();try{
       await r.turn('ask','Moo, explain osmosis.');await r.agent.drain();
       const conversation=r.agent.getState().conversationId;
-      r.overrides["I don't."]={route:'no_action',confidence:.24};
-      await r.turn('reply',"I don't.");await r.agent.drain();
-      assert.equal(r.routes.at(-1)!.text,"I don't.");
-      assert.ok(!r.speech.spoken.some(t=>/clarify/.test(t)),'No clarifying question');
+      r.overrides["I don't."]=r.overrides["No, I don't."]={route:'no_action',confidence:.24};
+      await r.turn('reply',"I don't.");await r.turn('three',"No, I don't.");await r.agent.drain();
+      assert.deepEqual(r.routes.slice(-2).map(x=>x.text),["I don't.","No, I don't."]);
+      assert.ok(!r.speech.spoken.some(t=>/clarify/.test(t)),'No clarifying question, up to three words');
       assert.equal(r.agent.getState().pendingOffer,undefined);
       assert.equal(r.agent.getState().conversationId,conversation,'The conversation stays open');
     }finally{await r.close();}
@@ -117,8 +117,8 @@ for(const kind of ['memory','sqlite']) {
   test(`${kind}: an unsure reply of four or more words still asks to clarify`,async()=>{
     const r=await rig();try{
       await r.turn('ask','Moo, explain osmosis.');await r.agent.drain();
-      r.overrides['I am not so sure.']={route:'no_action',confidence:.4};
-      await r.turn('reply','I am not so sure.');await r.agent.drain();
+      r.overrides['I am not sure.']={route:'no_action',confidence:.4};
+      await r.turn('reply','I am not sure.');await r.agent.drain();
       assert.match(r.speech.spoken.at(-1)!,/Could you clarify/);
     }finally{await r.close();}
   });
@@ -136,6 +136,9 @@ for(const kind of ['memory','sqlite']) {
       assert.equal(r.agent.getState().pendingOffer,undefined);
       await r.turn('again','Mm-hm.');await r.agent.drain();
       assert.equal(asked(),2);
+      assert.equal(r.agent.getState().pendingOffer,undefined);
+      await r.turn('spaced','Mm hmm.');await r.agent.drain();
+      assert.equal(r.routes.at(-1)!.text,'Mm hmm.','Spelled with a space too');
     }finally{await r.close();}
   });
 
@@ -160,6 +163,32 @@ for(const kind of ['memory','sqlite']) {
       assert.ok(!(await r.brain.listRecords()).some(x=>x.kind==='dictation'&&x.segments.some(s=>s.text==='Moo.')),'No saved "Moo." thought');
       assert.equal(await r.brain.getState('handled:call'),'call:1','The turn is handled, not routed again');
       assert.deepEqual((await r.brain.listOperations()).filter(o=>o.turnId==='call').map(o=>o.status),['done']);
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: an unsure "Mm-hm." to a pending offer is asked again`,async()=>{
+    const r=await rig();try{
+      const doubt="Sample A kept a lower minimum. I'm not sure why.";
+      r.overrides[doubt]={route:'dictate',confidence:1,doubt:.95};
+      await r.turn('doubt',doubt);await r.agent.drain();
+      assert.equal(r.agent.getState().pendingOffer?.kind,'help');
+      const said=r.speech.spoken.length;
+      r.overrides['Mm-hm.']={route:'start_agent',confidence:.6,helpAccepted:true};
+      await r.turn('agree','Mm-hm.');await r.agent.drain();
+      assert.deepEqual(r.speech.spoken.slice(said),['Would you like Moo to answer that?']);
+      assert.equal(r.agent.getState().pendingOffer?.kind,'help','The offer stays open');
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: a filler J1 failed on clears that failure once it is routed`,async()=>{
+    const r=await rig();try{
+      r.overrides['Um.']=Error('J1 offline');
+      await assert.rejects(r.turn('um','Um.'),/J1 offline/);await r.agent.drain();
+      assert.equal(r.agent.getState().lastError,'J1 offline');
+      r.overrides['Um.']={route:'unclear',confidence:.3};
+      await r.agent.settleTurn('um');await r.agent.drain();
+      assert.equal(r.agent.getState().lastError,undefined);
+      assert.deepEqual(r.speech.spoken,[],'Still nothing is asked');
     }finally{await r.close();}
   });
 

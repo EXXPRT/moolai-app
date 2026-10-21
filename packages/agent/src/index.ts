@@ -585,7 +585,7 @@ export class Agent {
     // A lone filler while Moo speaks or works (often a click or breath the recognizer heard as "Moo"), or in an open
     // conversation with nothing asked, is not an interruption or a reply: the reading resumes, nothing is routed or
     // cancelled, and the words stay in the transcript. An idle "mm-hm" may answer something, so J1 still hears it.
-    const affirmative = /\b(?:mm+-?hm+|mhm+|uh-?huh)\b/i.test(text);
+    const affirmative = /\b(?:mm+[-\s]?hm+|mhm+|uh-?huh)\b/i.test(text);
     if ((this.pausedPlayback || this.state.busy || (this.state.conversationId && !this.state.pendingOffer && !affirmative)) && fillerOnly(text)) {
       await this.p.brain.setState(`handled:${turnId}`, revisionKey);
       await this.trace("filler_ignored", {turnId, text: text.slice(0, 40)});
@@ -881,13 +881,13 @@ export class Agent {
       await this.say(this.state.busy ? activity === "searching" ? "I’m still searching for your request." : "I’m preparing the answer to your request." : this.state.lastError ? "I’m here. The last response could not finish; your request is saved." : "I’m here and listening.",stillCurrent);
       return;
     }
-    // An unsure filler is not worth a question, a saved thought or an offer.
-    if (fillerOnly(text) && needsClarification()) return;
-    await appendToNotes();
     if (previous?.error && this.state.lastError === previous.error) {
       this.state.lastError = undefined;
       await this.persist();
     }
+    // An unsure filler is not worth a question, a saved thought or an offer; a pending question answered "mm-hm" is asked again.
+    if (fillerOnly(text) && needsClarification() && !(pending && affirmative)) return;
+    await appendToNotes();
     if (needsClarification()) {
       // A clarification replaces the closing question; a later "yes" must not
       // inherit permission from a question that is no longer being asked.
@@ -2634,10 +2634,13 @@ const TRACE_ENTRIES = 400;
 function fillerOnly(text: string) {
   return /^(?:(?:hey\s+)?moo+|m+|mm+-?hm+|mhm+|hmm+|uh+|um+|ah+|oh+|er+|erm+|huh|uh-?huh|eh)(?:[\s.,!?…]+(?:moo+|m+|mm+|uh+|um+|hmm+))*[\s.,!?…]*$/i.test(text.trim());
 }
-/** A question or a request to Moo, which is answered even when it carries a doubt. */
+/** A question or a request to Moo, which is answered even when it carries a doubt. Each sentence is read after any
+ * opener ("Okay, Moo,"); a request can follow the doubt ("..., can you explain it.") and a question can lack its "?". */
 function requestPhrased(text: string) {
-  return text.includes("?") || /^(?:(?:can|could|would|will) you|I want you to|I would like you to|I['’]d like you to|please|explain|tell|show|help|find|search|look|summari[sz]e|compare|give|define|describe|list|read|check|take|capture|walk)\b/i
-    .test(text.trim().replace(/^(?:hey\s+)?moo+[,.!?…]*\s*/i, ""));
+  const starts = (breaks: RegExp) => text.trim().split(breaks).map((part) => part.replace(/^(?:(?:hey|hi|hello|ok(?:ay)?|alright|yo|so|well|oh|now|and|but|also|actually|um+|uh+|hmm+|er+|erm+|ah+|moo+)\b[\s,.!…]*)*/i, ""));
+  return text.includes("?") ||
+    starts(/[.,;!…]\s+/).some((part) => /^(?:(?:can|could|would|will) you|I want you to|I would like you to|I['’]d like you to|please|explain|tell|show|help|find|search|look|summari[sz]e|compare|give|define|describe|list|read|check|take|capture|walk)\b/i.test(part)) ||
+    starts(/[.!…]\s+/).some((part) => /^(?:why|how come|(?:what|how|where|when|who)(?:['’]s|\s+(?:is|are|was|were|do|does|did|can|could|would|will|should))|(?:is|are|was|were|do|does|did|can|could|would|will|should)\s+(?:you|I|we|it|this|that|these|those|there|they|he|she|the|a))\b/i.test(part));
 }
 const ANSWER_FAILED = "I couldn't finish that answer. Your request is saved; ask again when you're ready.";
 /** The backend rejects a J1 state whose JSON is over 180,000 characters (providers.py bounded_state). An oversized

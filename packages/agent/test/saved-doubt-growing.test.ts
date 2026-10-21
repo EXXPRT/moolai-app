@@ -232,6 +232,27 @@ for (const kind of ["memory", "sqlite"] as const) {
     assert.equal(await t.answers(), 1);
   });
 
+  for (const text of ["Hey, Moo, can you explain why sample A's minimum pressure is lower than sample B.", "Okay Moo, explain why the enzyme stops working above forty five degrees.",
+    "So can you tell me why sample A's minimum pressure is lower.", "Moo, why does the enzyme stop working above forty five degrees.",
+    "Moo I'm not sure why sample A's minimum pressure is lower, can you explain it."])
+    run(`a request after an opener, after the doubt or without its "?" is answered, with no offer: ${text}`, async t => {
+      t.hooks.route = async () => ({ route: "start_agent", confidence: 1 });
+      t.hooks.doubt = () => 0.96;
+      await t.agent.submitText(text); await t.agent.drain();
+      assert.equal(t.offers(), 0);
+      assert.equal(await t.answers(), 1);
+    });
+
+  // 21 Oct part 5 routed start_agent 0.77-0.80 with doubt 0.95.
+  for (const text of ["I don't understand why the enzyme stops working above forty five degrees.", "Okay, Moo. I'm not sure why sample A's minimum pressure is lower than sample B."])
+    run(`a stated doubt, with or without an opener, still gets the screen offer: ${text}`, async t => {
+      t.hooks.route = async () => ({ route: "start_agent", confidence: 0.8 });
+      t.hooks.doubt = () => 0.95;
+      await t.agent.submitText(text); await t.agent.drain();
+      assert.equal(t.calls.spoken.at(-1), OFFER);
+      assert.equal(await t.answers(), 0);
+    });
+
   run("a confident start_agent J1 does not hear as a doubt is answered", async t => {
     t.hooks.route = async () => ({ route: "start_agent", confidence: 0.84 });
     t.hooks.doubt = () => 0.1;
