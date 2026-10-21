@@ -254,13 +254,13 @@ for(const kind of ['memory','sqlite']) {
       await r.agent.speechStarted({paused:true});await soon(r.turn('agree','Mm-hm.'));
       assert.equal(r.speech.resumes,1,'The reading resumes at once');
       // A sound too short to pause Moo can still reach the recognizer; with Moo idle, J1 would hear this "mm-hm".
-      await soon(r.turn('again','Mm-hm.'));
+      assert.equal(await soon(r.turn('again','Mm-hm.')),true,'The second filler is handled while the reading plays');
       assert.equal(r.routes.length,routed,'J1 is never asked about either filler');
       assert.equal(r.speech.stops,stops,'Neither filler stops the reading');
       assert.equal(r.speech.playing,true);
       end();await r.agent.drain();
       await r.turn('idle','Mm-hm.');await r.agent.drain();
-      assert.equal(r.routes.at(-1)!.text,'Mm-hm.','Once the reading has ended, J1 hears an "mm-hm" again');
+      assert.deepEqual(r.routes.slice(routed).map(x=>x.text),['Mm-hm.'],'Once the reading has ended, J1 hears an "mm-hm" again');
     }finally{await r.close();}
   });
 
