@@ -626,7 +626,7 @@ export class Agent {
       if(playback.anchor && !await answerNarrationIsCurrent(this.p.brain,playback.anchor)) {
         this.state.narration=undefined;await this.persist();
         if(!await this.say("That answer changed before playback. Please ask for the current answer.",playbackCurrent))await reconsiderPlayback();
-      } else if(!await this.say(playback.speech,async()=>await playbackCurrent() && (!playback.anchor || await answerNarrationIsCurrent(this.p.brain,playback.anchor))))await reconsiderPlayback();
+      } else if(!await this.say(playback.speech,async()=>await playbackCurrent() && (!playback.anchor || await answerNarrationIsCurrent(this.p.brain,playback.anchor)),undefined,true))await reconsiderPlayback();
       return;
     }
     const narration=this.state.narration;
@@ -648,7 +648,7 @@ export class Agent {
           const current=async()=>await playbackCurrent() && !!currentNarration.sourceResponse && await answerNarrationIsCurrent(this.p.brain,
             {conversationId:currentNarration.conversationId,...currentNarration.sourceResponse});
           if(!await this.say(narratePoints(currentNarration.outline,currentNarration.next)+(more?' Shall I continue with the next points?':''),current,
-            ()=>{this.state.narration=more?{...currentNarration,next}:undefined;}))await reconsiderPlayback();
+            ()=>{this.state.narration=more?{...currentNarration,next}:undefined;},true))await reconsiderPlayback();
         } else if(!await this.say("Okay. The full answer is on screen.",playbackCurrent,()=>{this.state.narration=undefined;}))await reconsiderPlayback();
         return;
       }
@@ -2104,18 +2104,20 @@ export class Agent {
     try { await this.p.speech.speak(text); }
     catch(error) { if(epoch===this.playbackEpoch) throw error; }
   }
-  private async say(text: string, current?:()=>Promise<boolean>, onStart?:()=>void) {
+  /** A `reading` of a saved answer can last minutes, so it is tracked, not awaited: the turn queue stays free for a
+   * filler to resume it, or real words to stop it, at once. Staleness is still decided before it starts. */
+  private async say(text: string, current?:()=>Promise<boolean>, onStart?:()=>void, reading=false) {
     const check=async()=> {if(current && !await current())throw stalePlaybackControl;};
     try {await this.appendAssistant(text, this.state.conversationId, undefined, false,check);}
     catch(error) {if(error===stalePlaybackControl)return false;throw error;}
     try {
       if(current) {
-        let playback:Promise<void>|undefined;
+        let playback=Promise.resolve();
         await this.serial(async()=> {
           await check();onStart?.();this.notice(text);playback=this.speak(text);
           if(onStart)await this.persist();
         });
-        await playback;
+        if(reading)this.track(playback);else await playback;
       } else {this.notice(text);await this.speak(text);}
     } catch (e) {
       if(e===stalePlaybackControl)return false;

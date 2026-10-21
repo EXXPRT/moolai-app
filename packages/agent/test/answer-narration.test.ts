@@ -37,8 +37,17 @@ test('playback still matches after a spoken "Moo.", an opener or discourse word,
   assert.equal(playbackRequest('Hey Moo, walk me through it.'), 'walkthrough');
 });
 
+test('playback also matches "read out" the answer, a leading "sorry", a trailing "Moo" or "Please." and two endings', () => {
+  for (const text of ['Moo. Read out the answer.', 'Moo, read out the whole thing.', 'Read out everything.', 'Read it in full, Moo.',
+    'Moo. Read it in full. Please.', 'Read it in full, please, Moo.', 'Moo. Read it to me again.', 'Moo. Read it out to me.', 'Read it out loud to me.'])
+    assert.equal(playbackRequest(text), 'full', text);
+  for (const text of ['Sorry, say that again.', 'Sorry, can you say that again?', 'Sorry Moo, say that again.'])
+    assert.equal(playbackRequest(text), 'repeat', text);
+});
+
 test('guard: negated, compound and other-target requests, an unrelated request and a bare "Moo." are not playback', () => {
-  for (const text of ["Don't read it in full.", 'Read it in full and then search the web.', 'Moo, read the second source in full.', 'Moo. Tell me more.', 'Moo.'])
+  for (const text of ["Don't read it in full.", 'Read it in full and then search the web.', 'Moo, read the second source in full.', 'Moo. Tell me more.', 'Moo.',
+    'Sorry.', 'Moo, please.', "Sorry, don't read it in full.", 'Read it in full, Moo, and search the web.', 'Read out the answer to question three.'])
     assert.equal(playbackRequest(text), undefined, text);
 });
 
@@ -240,5 +249,52 @@ for (const adapter of ['memory', 'sqlite']) {
       assert.equal(s.counts.routes, routes, 'A playback request never reaches J1');
       assert.equal(s.counts.generations, 1, 'A playback request never asks for a new answer');
     } finally {await s.agent.interrupt(); await s.agent.drain(); await t.close();}
+  });
+
+  // A reading lasts minutes. While the turn queue waited on it, a click heard as "Moo." could not resume it, and real
+  // words were heard only after the eight-second stop.
+  for (const kind of ['reading in full', 'walkthrough continuation'])
+  test(`${adapter}: a filler resumes a paused ${kind} and real words stop it, both at once`, async () => {
+    const t = await setup();
+    const walkthrough = kind === 'walkthrough continuation';
+    const providers = new FixtureProviders();
+    const routes: string[] = [];
+    const route = providers.route.bind(providers);
+    providers.route = async input => {routes.push(input.text); return route(input);};
+    const text = Array.from({length: 11}, (_, i) => `## Section ${i + 1}\nEvidence ${i + 1} remains uncertain.`).join('\n');
+    providers.respond = async () => walkthrough ? {text, spokenText: 'Eleven observations remain uncertain.', toolCalls: [],
+      spokenOutline: {overview: 'Eleven observations.', points: Array.from({length: 11}, (_, i) =>
+        ({label: `Section ${i + 1}`, explanation: `Evidence ${i + 1} remains uncertain.`, sourceSections: [i + 1]}))}}
+      : {text, narrationError: 'missing_spoken_summary', toolCalls: []};
+    const s = {playing: false, stops: 0, resumes: 0};
+    let finish: (() => void) | undefined, ids = 0;
+    // The reading plays until it is stopped; everything else Moo says ends at once.
+    const held = (spoken: string) => walkthrough ? spoken.startsWith('6. ') : spoken === plainSpeech(text);
+    const agent = new Agent({brain: t.brain, decisions: providers, generation: providers, search: providers, vision: providers,
+      capture: {async capture() {throw Error('Playback requests cannot capture');}},
+      speech: {async speak(spoken) {if (held(spoken)) {s.playing = true; await new Promise<void>(r => finish = r); s.playing = false;}},
+        async stop() {s.stops++; finish?.(); finish = undefined;}, async resume() {s.resumes++;}},
+      id: () => `generated-${++ids}`, now: () => at});
+    const turn = async (id: string, words: string) => {
+      await agent.ingest({id, turnId: id, revision: 1, speaker: 'user', text: words, final: true, createdAt: at}); await agent.settleTurn(id);};
+    const until = async (done: () => boolean) => {for (let i = 0; i < 500 && !done(); i++) await new Promise(r => setTimeout(r, 4));};
+    try {
+      await agent.initialize();
+      await agent.submitText('Moo, explain the observations.'); await agent.drain();
+      if (walkthrough) {await agent.submitText('Walk me through the points.'); await agent.drain();}
+      void turn('read', walkthrough ? 'Yes.' : 'Moo. Read it in full.');
+      await until(() => s.playing);
+      assert.equal(s.playing, true, 'The reading has started');
+      const stops = s.stops, routed = routes.length;
+      await agent.speechStarted({paused: true}); void turn('click', 'Moo.');
+      await until(() => s.resumes > 0);
+      assert.equal(s.resumes, 1, 'The filler resumes the reading');
+      assert.equal(s.stops, stops, 'The filler does not stop it');
+      await agent.speechStarted({paused: true}); const real = turn('real', 'Wait, what about sample B?');
+      await until(() => !s.playing);
+      assert.equal(s.playing, false, 'Real words stop the reading');
+      await real;
+      assert.deepEqual(routes.slice(routed), ['Wait, what about sample B?'], 'Only the real words reach J1');
+    } finally {await agent.interrupt(); await agent.drain(); await t.close();}
   });
 }

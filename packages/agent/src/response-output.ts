@@ -48,13 +48,14 @@ export function requestsFullNarration(request: string) {
 /** Only whole, referential playback requests bypass routing/research. Quoted,
  * negated and compound requests deliberately fall through to normal routing. */
 export function playbackRequest(request: string): 'full' | 'repeat' | 'walkthrough' | undefined {
-  // The recognizer writes the vocative as "Moo." and people lead with "okay" or end with ", please"; a bare "Moo." is left as it is.
+  // The recognizer writes the vocative as "Moo." and people lead with "okay" or "sorry", or end with ", please" or ", Moo";
+  // a bare "Moo." is left as it is.
   const text = request.trim().replace(/[.!?]+$/, '').replace(/\s+/g, ' ')
-    .replace(/^(?:(?:hey|hi|ok(?:ay)?|so)[,.!\s]+)?moo+[,.!?…]*\s+/i, '').replace(/^(?:ok(?:ay)?|alright|yes|yeah|so|um+|uh+)[,.!\s]+/i, '')
-    .replace(/^(?:(?:please|can you|could you|would you)\s+)+/i, '').replace(/,? please$/i, '');
+    .replace(/^(?:(?:hey|hi|ok(?:ay)?|so|sorry)[,.!\s]+)?moo+[,.!?…]*\s+/i, '').replace(/^(?:ok(?:ay)?|alright|yes|yeah|so|sorry|um+|uh+)[,.!\s]+/i, '')
+    .replace(/^(?:(?:please|can you|could you|would you)\s+)+/i, '').replace(/(?:[,.]? (?:please|moo+))+$/i, '');
   const target = '(?:it|that|this|the whole thing|(?:your|the) (?:(?:last|previous|full|whole) )?(?:answer|response)|everything|all of it)';
   // "Read it again" reads the whole answer; "say it again" repeats what was said.
-  if (new RegExp(`^(?:read|narrate|speak|read me) ${target}(?: (?:in full|fully|out loud|aloud|out|to me|all|again))?$`, 'i').test(text)) return 'full';
+  if (new RegExp(`^(?:read|narrate|speak|read me|(?:read|speak) (?:out|aloud)) ${target}(?: (?:in full|fully|out loud|aloud|out|to me|all|again)){0,2}$`, 'i').test(text)) return 'full';
   if (new RegExp(`^(?:repeat ${target}|say ${target} again)$`, 'i').test(text)) return 'repeat';
   if (/^(?:walk me through (?:it|that|this|(?:the |your )?(?:points|sections|answer|response))|(?:explain|go through) (?:each|all the) (?:point|points|section|sections))$/i.test(text)) return 'walkthrough';
 }

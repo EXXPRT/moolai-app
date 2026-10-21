@@ -19,11 +19,11 @@ async function fixture(mode='normal') {
  const chunk=()=>{emit({id:x.id,pcm:Buffer.alloc(400).toString('base64')});emit({id:x.id,done:true});};
  if(${JSON.stringify(mode)}==='late')setTimeout(chunk,50);else chunk();
  });`);
- const calls:{method:string;params:any}[]=[];
- const speech=new LocalSpeech({async request<T>(method:string,params?:any){calls.push({method,params});return {} as T;}},()=>{},{config,worker});
+ const calls:{method:string;params:any}[]=[],hooks:{request?:(method:string)=>void}={};
+ const speech=new LocalSpeech({async request<T>(method:string,params?:any){calls.push({method,params});hooks.request?.(method);return {} as T;}},()=>{},{config,worker});
  // The texts the worker was asked to synthesize, in order.
  const texts=async():Promise<string[]>=>(await readFile(requests,'utf8').catch(()=>'')).split('\n').filter(Boolean).map(line=>JSON.parse(line));
- return {speech,calls,texts,async close(){speech.close();await rm(dir,{recursive:true,force:true});}};
+ return {speech,calls,texts,hooks,async close(){speech.close();await rm(dir,{recursive:true,force:true});}};
 }
 /** Whole sentences until the text is at least this long. */
 const reading=(length:number)=>{let text='';for(let i=1;text.length<length;i++)text+=`${text?' ':''}Sentence ${i} explains one more part of the saved answer.`;return text;};
@@ -93,6 +93,14 @@ test('stop() during the first part of a long reading begins no later part',async
  await f.speech.stop();await rejected;await new Promise(r=>setTimeout(r,120));
  assert.equal(f.calls.filter(c=>c.method==='beginSpeechAudio').length,1);
  const parts=await f.texts();assert.equal(parts.length,1);assert.ok(parts[0]!.length<=1600,'Only the first part reached the worker');
+ }finally{await f.close();}
+});
+for(const kind of ['stop()','a newer speak()'])test(`${kind} after a part has played, while the next is begun, begins no further part`,async()=>{
+ const f=await fixture();try{let begun=0,newer:Promise<void>|undefined;
+ f.hooks.request=method=>{if(method==='beginSpeechAudio'&&++begun===2){if(kind==='stop()')void f.speech.stop();else newer=f.speech.speak('A newer answer.');}};
+ await f.speech.speak(reading(4000));await newer;
+ assert.equal(f.calls.filter(c=>c.method==='beginSpeechAudio').length,kind==='stop()'?2:3,f.calls.map(c=>c.method).join());
+ assert.deepEqual((await f.texts()).slice(1),kind==='stop()'?[]:['A newer answer.'],'The rest of the reading never reached the worker');
  }finally{await f.close();}
 });
 test('a sentence longer than one part is cut at its last space before the limit',async()=>{
