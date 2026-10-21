@@ -51,6 +51,10 @@ for (const adapter of ['memory', 'sqlite'] as const) for (const finalPhase of [f
       for (const call of calls) {
         assert.ok(call.messages[0]!.content.includes(presentationInstruction));
         assert.ok(call.messages[0]!.content.includes(responseInstructionVersion));
+        // Moo is heard: long text plus its narration once exhausted the 4,096-token output cap.
+        assert.ok(call.messages[0]!.content.includes('Policy native-answer-v7:'));
+        assert.ok(call.messages[0]!.content.includes('Moo is heard, not read: keep text to what was asked, normally under 250 words and under about 600 words even for in-detail, tell-me-more or continue requests; for a larger topic explain the core mechanism first. This bound never shortens requested verbatim quotations, code or JSON.'));
+        assert.ok(call.messages[0]!.content.includes('spokenOutline is detailed narration, separate from spokenText. Include it only when text has three or more sections, using one or two sentences per point; otherwise set it to null.'));
       }
       if (finalPhase) {
         assert.ok(calls.at(-1)!.messages[0]!.content.includes(finalAnswerInstruction));
