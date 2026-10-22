@@ -157,6 +157,22 @@ for(const kind of ['memory','sqlite']) {
     }finally{await r.close();}
   });
 
+  // Review, 23 Oct: Finish while a published answer still waited for "I'm listening…" cut the greeting, then read the
+  // answer, and the conversation closed only when the reading ended.
+  test(`${kind}: Finish conversation while a published answer waits for "I'm listening…" closes it, and the answer is not read`,async()=>{
+    const r=await rig({hold:/^I'm listening/});try{
+      r.p.respond=async()=>({text:'ATP is the main energy carrier in cells.',spokenText:'ATP carries energy in cells.',toolCalls:[]});
+      r.overrides['Moo, what is ATP?']={route:'start_agent',confidence:1};await r.turn('M','Moo, what is ATP?');
+      const ready=async()=>((await r.brain.getState<{action:string}[]>('interaction-trace')) ?? []).some(e=>e.action==='narration_selected');
+      for(let i=0;i<500 && !await ready();i++) await new Promise(res=>setTimeout(res,2));
+      assert.equal(await ready(),true,'The answer is published');assert.equal(r.playing,true,'It waits for the greeting');
+      await r.agent.requestEnd();await r.agent.drain();
+      assert.ok(!r.spoken.includes('ATP carries energy in cells.'),'The answer is not read after Finish');
+      assert.equal(r.agent.getState().conversationId,undefined,'One click closes the conversation');
+      assert.equal(r.spoken.at(-1),'Conversation closed. Your transcript is saved.');
+    }finally{await r.close();}
+  });
+
   test(`${kind}: new dictation during a "which note?" question is kept for the notes (ACL-07)`,async()=>{
     const r=await rig();try{
       await r.turn('A','The first reading covers glycolysis.');await r.agent.drain();

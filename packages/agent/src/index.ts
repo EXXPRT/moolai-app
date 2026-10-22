@@ -2132,8 +2132,8 @@ export class Agent {
     let playback:Promise<void>|undefined;
     await this.serial(async()=> {
       await beforeSpeak();
-      // Onset may arrive while sources are checked. The interrupted answer is never replayed.
-      if(!this.attention)playback=this.speak(spokenAnswer(reply,request));
+      // Onset may arrive while sources are checked, and Finish while the answer waits for Moo's line. The interrupted answer is never replayed.
+      if(!this.attention && !this.endAfterWork)playback=this.speak(spokenAnswer(reply,request));
     });
     await playback;
   }
