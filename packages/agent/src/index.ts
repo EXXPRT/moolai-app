@@ -2144,8 +2144,8 @@ export class Agent {
       return;
     }
     const epoch=this.playbackEpoch;
-    try { await this.p.speech.speak(text); }
     // Mic Off, Stop session and the host's own lines cut speech without the Agent; a cut marked stopped is not a failure.
+    try { await this.p.speech.speak(text); }
     catch(error) { if(epoch===this.playbackEpoch && !(error as {stopped?: boolean})?.stopped) throw error; }
   }
   /** What Moo says is tracked, not awaited, whether a question, an offer or a `reading` of a saved answer lasting minutes:

@@ -380,11 +380,12 @@ createInterface({input:process.stdin}).on('line',line=>{
   }finally{await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
 });
 
-// Code review, 22 Oct: Mic Off or Stop session while Moo read an answer said "Moo’s voice is unavailable", though the voice worked.
-for(const ending of ['Mic Off','Stop session','a worker crash'] as const) test(`${ending} while Moo reads an answer ${ending==='a worker crash'?'is':'is not'} reported as a voice failure`,async()=>{
+// Code review, 22 Oct: Mic Off, Stop session or a newer line while Moo read an answer said "Moo’s voice is unavailable", though the voice worked.
+for(const ending of ['Mic Off','Stop session','a newer line','a worker crash'] as const) test(`${ending} while Moo reads an answer ${ending==='a worker crash'?'is':'is not'} reported as a voice failure`,async()=>{
   const directory=await mkdtemp(join(tmpdir(),'moolai-answer-stop-'));
   const nativePath=join(directory,'companion.mjs'),pidFile=join(directory,'worker.pid');
   // As in the Swift companion, endSpeechAudio returns once the audio has played; the answer's plays until stopSpeaking.
+  // A flush hands over a voice turn J1 cannot route, so the host's failure line is said over the answer.
   await writeFile(nativePath,`#!${process.execPath}
 import {createInterface} from 'node:readline';
 const emit=x=>console.log(JSON.stringify(x));const answers=new Set();let playing;
@@ -393,6 +394,7 @@ createInterface({input:process.stdin}).on('line',line=>{
  if(r.method==='speechAudio'&&Buffer.from(r.params.pcm,'base64')[0]===1)answers.add(r.params.utteranceId);
  if(r.method==='endSpeechAudio'&&answers.has(r.params.utteranceId)){playing=r.id;return;}
  if(r.method==='stopSpeaking'&&playing!==undefined){emit({id:playing,result:{}});playing=undefined;}
+ if(r.method==='flushListening'){emit({event:'transcript',segment:{id:'s2',turnId:'t2',revision:1,speaker:'user',text:'Moo, also mention chlorophyll.',final:true,createdAt:new Date().toISOString()}});emit({event:'turn_end',turnId:'t2'});}
  emit({id:r.id,result:r.method==='health'?{playing:playing!==undefined}:{}});
 });`,{mode:0o700});
   // The real LocalSpeech runs this stand-in for the Kokoro worker; the answer's audio begins with byte 1.
@@ -404,6 +406,7 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
  emit({id:x.id,pcm:Buffer.alloc(400,x.text.startsWith('Photosynthesis')?1:0).toString('base64')});emit({id:x.id,done:true});});`);
   const brain=new MemoryBrain(),providers=new FixtureProviders(),events:AgentEvent[]=[];
   providers.respond=async()=>({text:'Photosynthesis turns light, water and carbon dioxide into sugar.',toolCalls:[]});
+  const route=providers.route.bind(providers);providers.route=async input=>{if(input.text.includes('chlorophyll'))throw Error('J1 unavailable');return route(input);};
   const host=await createAgentHost({brain,providers,nativePath,speechRoot:directory,waitForAsr:async()=>{},onEvent:e=>events.push(e)});
   const playing=async()=>((await host.nativeHealth()) as {playing:boolean}).playing;
   try {
@@ -412,9 +415,11 @@ require('node:readline').createInterface({input:process.stdin}).on('line',line=>
     for(let i=0;i<500&&!await playing();i++)await new Promise(r=>setTimeout(r,5));
     assert.equal(await playing(),true,'Moo is reading the answer');
     if(ending==='a worker crash')process.kill(Number(await readFile(pidFile,'utf8')));
+    else if(ending==='a newer line')await host.voice('flush');
     else {await host.voice('stop');if(ending==='Stop session')await host.agent.stopSession();}
     await host.agent.drain();
     const failed=ending==='a worker crash',notices=events.flatMap(e=>e.type==='notice'?[e.message]:[]);
+    if(ending==='a newer line')assert.ok(notices.includes("Moo saved what you said but couldn't act on it. Try saying it again in a moment."),notices.join('\n'));
     assert.equal(notices.includes('Moo’s voice is unavailable. The full response is on screen.'),failed,notices.join('\n'));
     const trace=await brain.getState<{action:string;reason?:string}[]>('interaction-trace')??[];
     assert.equal(trace.some(e=>e.action==='narration_unavailable'&&e.reason==='playback_failed'),failed,'Only a real failure is traced as one');
