@@ -133,6 +133,8 @@ export class Agent {
   private pausedPlayback?: ReturnType<typeof setTimeout>;
   /** Readings of a saved answer still playing; meanwhile a lone filler, even "mm-hm", is noise, as while Moo works. */
   private replaying = 0;
+  /** Playback of the latest line Moo said that is not a reading, such as "I'm listening…"; the response's own speech starts after it. */
+  private linePlayback: Promise<void> = Promise.resolve();
   /** The response epoch whose answer reached the conversation. */
   private publishedEpoch = -1;
   private heldHelp?: { conversationId: string; sourceId: string; request: UserTurnSnapshot; signal: AbortSignal; captured: boolean; mode: "ocr" | "visual" };
@@ -1285,7 +1287,8 @@ export class Agent {
           this.state.lastError = errorText(e);
           await this.p.brain.setState(`work-status:${conversationId}`, `Unresolved: ${errorText(e)}`);
           await this.persist();
-          // Voice users hear that the answer did not finish (MOO-060), or why a screenshot could not be taken; speech never starts over the user.
+          // Voice users hear that the answer did not finish (MOO-060), or why a screenshot could not be taken, after any line Moo is saying; speech never starts over the user.
+          await this.linePlayback;
           if (!this.attention) await this.speak((e as {spoken?: string})?.spoken ?? ANSWER_FAILED).catch(() => {});
         })
         .finally(async () => {
@@ -1662,7 +1665,8 @@ export class Agent {
           this.publishedEpoch = epoch;
           // "Say that again" repeats the refusal, not the answer before it.
           await rememberAnswerNarration(this.p.brain, id, segment, {text: refused, spokenText: refused, toolCalls: []});
-          // As for an answer: never over the user or a pending finish question, and a failed voice is only a notice.
+          // As for an answer: after Moo's line, never over the user or a pending finish question, and a failed voice is only a notice.
+          await this.linePlayback;
           if (!this.attention && !this.endAfterWork && this.state.pendingOffer?.kind !== "end_work") {
             try { await this.speak(refused); }
             catch (error) {
@@ -2107,8 +2111,10 @@ export class Agent {
   }
   private async speakAnswer(reply: AgentReply, request = "", beforeSpeak?:()=>Promise<void>, signal?:AbortSignal, epoch?:number) {
     await this.trace("narration_selected", narrationDecision(reply, request));
-    if(!beforeSpeak){await this.speak(spokenAnswer(reply,request));return;}
     if(signal && epoch!==undefined)await this.responsePermit(signal,epoch);
+    // An answer ready early never cuts off the line Moo is still saying, such as "I'm listening…".
+    await this.linePlayback;
+    if(!beforeSpeak){await this.speak(spokenAnswer(reply,request));return;}
     let playback:Promise<void>|undefined;
     await this.serial(async()=> {
       await beforeSpeak();
@@ -2127,21 +2133,23 @@ export class Agent {
     try { await this.p.speech.speak(text); }
     catch(error) { if(epoch===this.playbackEpoch) throw error; }
   }
-  /** A `reading` of a saved answer can last minutes, so it is tracked, not awaited: the turn queue stays free for a
-   * filler to resume it, or real words to stop it, at once. Staleness is still decided before it starts. */
+  /** What Moo says is tracked, not awaited, whether a question, an offer or a `reading` of a saved answer lasting minutes:
+   * the turn queue stays free for a filler to resume it, or real words to stop it, at once. Staleness is still decided
+   * before it starts. */
   private async say(text: string, current?:()=>Promise<boolean>, onStart?:()=>void, reading=false) {
     const check=async()=> {if(current && !await current())throw stalePlaybackControl;};
     try {await this.appendAssistant(text, this.state.conversationId, undefined, false,check);}
     catch(error) {if(error===stalePlaybackControl)return false;throw error;}
     try {
+      let playback=Promise.resolve();
       if(current) {
-        let playback=Promise.resolve();
         await this.serial(async()=> {
           await check();onStart?.();this.notice(text);playback=this.speak(text);
           if(onStart)await this.persist();
         });
-        if(reading){this.replaying++;this.track(playback.finally(()=>this.replaying--));}else await playback;
-      } else {this.notice(text);await this.speak(text);}
+      } else {this.notice(text);playback=this.speak(text);}
+      if(reading){this.replaying++;this.track(playback.finally(()=>this.replaying--));}
+      else {this.linePlayback=playback.catch(()=>{});this.track(playback);}
     } catch (e) {
       if(e===stalePlaybackControl)return false;
       this.notice(errorText(e));

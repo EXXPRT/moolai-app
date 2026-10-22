@@ -18,7 +18,7 @@ for(const kind of ['memory','sqlite']) {
   async function rig(options:{resume?:boolean}={}) {
     const dir=await mkdtemp(join(tmpdir(),'moolai-accidental-'));
     const brain:BrainPort=kind==='memory'?new MemoryBrain():new SQLiteBrain(dir);
-    const p=new FixtureProviders();let n=0;
+    const p=new FixtureProviders();let n=0,responses=0,captures=0;
     const speech={spoken:[] as string[],stops:0,resumes:0,playing:false};
     const routes:RouteInput[]=[],overrides:Record<string,RouteDecision|Error>={};
     const route=p.route.bind(p);p.route=async input=>{routes.push(input);const o=overrides[input.text];if(o instanceof Error)throw o;return o ?? route(input);};
@@ -26,19 +26,20 @@ for(const kind of ['memory','sqlite']) {
     let answer:Promise<void>|undefined;
     // A held speak stays pending until the test releases it, as a reading of minutes does; stop() alone does not settle it.
     let hold=false,finish:(()=>void)|undefined;
-    p.respond=async():Promise<AgentReply>=>{if(answer)await answer;return {text:'Osmosis moves water across a membrane.',toolCalls:[]};};
+    p.respond=async():Promise<AgentReply>=>{responses++;if(answer)await answer;return {text:'Osmosis moves water across a membrane.',toolCalls:[]};};
     const port={async speak(text:string){speech.spoken.push(text);if(!hold)return;hold=false;speech.playing=true;await new Promise<void>(r=>finish=r);speech.playing=false;},
       async stop(){speech.stops++;},...(options.resume===false?{}:{async resume(){speech.resumes++;}})};
-    const agent=new Agent({brain,decisions:p,generation:p,search:p,vision:p,capture:{async capture(){throw Error('unused')}},speech:port,id:()=>`id-${++n}`,now:()=>at});
+    const agent=new Agent({brain,decisions:p,generation:p,search:p,vision:p,capture:{async capture(){captures++;return {mimeType:'image/png',bytes:new Uint8Array([137,80,78,71])};}},speech:port,id:()=>`id-${++n}`,now:()=>at});
     await agent.initialize();await agent.startSession();
-    return {brain,agent,speech,routes,overrides,
+    return {brain,agent,speech,routes,overrides,get responses(){return responses;},get captures(){return captures;},
       holdAnswer(){answer=new Promise<void>(r=>release=r);return ()=>{answer=undefined;release?.();};},
       holdSpeech(){hold=true;return ()=>finish?.();},
       async turn(id:string,text:string){await agent.ingest(seg(id,text));await agent.settleTurn(id);},
       async close(){finish?.();await agent.drain();await brain.close();await rm(dir,{recursive:true,force:true});}};
   }
-  /** Whether the work finishes within a second, while a held reading still plays; a reading awaited on the turn queue holds it up. */
+  /** Whether the work finishes within a second, while a held reading or line still plays; one awaited on the turn queue holds it up. */
   const soon=(work:Promise<unknown>)=>Promise.race([work.then(()=>true),new Promise<boolean>(res=>setTimeout(res,1000,false).unref())]);
+  const until=async(done:()=>boolean)=>{for(let i=0;i<500&&!done();i++)await new Promise(res=>setTimeout(res,2));};
   /** Moo answers, then reads the answer in full until the test releases it. */
   async function reading(r:Awaited<ReturnType<typeof rig>>) {
     await r.turn('ask','Moo, explain osmosis.');await r.agent.drain();
@@ -46,6 +47,14 @@ for(const kind of ['memory','sqlite']) {
     for(let i=0;i<500&&!r.speech.playing;i++)await new Promise(res=>setTimeout(res,2));
     assert.equal(r.speech.playing,true,'The reading has started');
     assert.equal(r.speech.spoken.at(-1),'Osmosis moves water across a membrane.');
+    return {routed:r.routes.length,stops:r.speech.stops,end};
+  }
+  /** Moo answers a turn with a line of its own, such as "I'm listening…" or the screen offer, which plays until the test releases it. */
+  async function line(r:Awaited<ReturnType<typeof rig>>,id:string,text:string,said:RegExp) {
+    const end=r.holdSpeech();void r.turn(id,text);
+    await until(()=>r.speech.playing);
+    assert.equal(r.speech.playing,true,'The line has started');
+    assert.match(r.speech.spoken.at(-1)!,said);
     return {routed:r.routes.length,stops:r.speech.stops,end};
   }
 
@@ -281,6 +290,63 @@ for(const kind of ['memory','sqlite']) {
       assert.equal(await r.brain.getState('handled:later'),'later:1');
       assert.deepEqual(r.routes.slice(routed).map(x=>x.text),['And how does it differ from diffusion?']);
       assert.equal(r.speech.playing,true,'The reading is still being spoken');
+    }finally{await r.close();}
+  });
+
+  // Code review, 22 Oct: Moo's other lines still held the turn queue, as readings once did, so a reply said over "I'm
+  // listening…" or the screen offer waited for the eight-second stop, and a click heard as "Moo." cut the offer.
+  test(`${kind}: a request said over "I'm listening…" stops it at once and is answered`,async()=>{
+    const r=await rig();try{
+      const {routed,stops}=await line(r,'call','Moo.',/^I'm listening/);
+      await r.agent.speechStarted({paused:true});
+      assert.equal(await soon(r.turn('ask','Explain osmosis.')),true,'The turn queue is free');
+      assert.equal(r.speech.stops,stops+1,'The line is stopped at once');
+      assert.deepEqual(r.routes.slice(routed).map(x=>x.text),['Explain osmosis.']);
+      await until(()=>r.responses>0);
+      assert.equal(r.responses,1,'The answer is requested');
+      assert.equal(r.speech.playing,true,'Before the held line settles');
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: "Yes please." over the screen offer starts the help at once`,async()=>{
+    const r=await rig();try{
+      const doubt="Sample A kept a lower minimum. I'm not sure why.";
+      r.overrides[doubt]={route:'dictate',confidence:1,doubt:.95};
+      const {stops}=await line(r,'doubt',doubt,/^I saved your thought/);
+      assert.equal(r.agent.getState().pendingOffer?.kind,'help');
+      await r.agent.speechStarted({paused:true});
+      assert.equal(await soon(r.turn('yes','Yes please.')),true,'The turn queue is free');
+      assert.equal(r.speech.stops,stops+1,'The offer is stopped at once');
+      await until(()=>r.captures>0);
+      assert.equal(r.captures,1,'The screen is captured for the help');
+      assert.equal(r.speech.playing,true,'Before the held offer settles');
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: "Mm." over the screen offer resumes it once, without stopping or routing it`,async()=>{
+    const r=await rig();try{
+      const doubt="Sample A kept a lower minimum. I'm not sure why.";
+      r.overrides[doubt]={route:'dictate',confidence:1,doubt:.95};
+      const {routed,stops}=await line(r,'doubt',doubt,/^I saved your thought/);
+      await r.agent.speechStarted({paused:true});await soon(r.turn('noise','Mm.'));
+      assert.equal(r.speech.resumes,1,'The filler resumes the offer at once');
+      assert.equal(r.speech.stops,stops,'It does not stop it');
+      assert.equal(r.routes.length,routed,'J1 is never asked about the filler');
+      assert.equal(r.agent.getState().pendingOffer?.kind,'help','The offer stays open');
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: an answer ready while "I'm listening…" plays is spoken after it, not over it`,async()=>{
+    const r=await rig();try{
+      const {end}=await line(r,'ask','Moo, explain osmosis.',/^I'm listening/);
+      const ready=async()=>((await r.brain.getState<{action:string}[]>('interaction-trace')) ?? []).some(e=>e.action==='narration_selected');
+      for(let i=0;i<500&&!await ready();i++)await new Promise(res=>setTimeout(res,2));
+      assert.equal(r.responses,1,'The answer is prepared while the line plays');
+      assert.equal(await ready(),true,'The answer is ready to be spoken');
+      await new Promise(res=>setTimeout(res,50));
+      assert.match(r.speech.spoken.at(-1)!,/^I'm listening/,'The answer waits for the line');
+      end();await r.agent.drain();
+      assert.equal(r.speech.spoken.at(-1),'Osmosis moves water across a membrane.','Then it is spoken');
     }finally{await r.close();}
   });
 }
