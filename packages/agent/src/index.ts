@@ -912,11 +912,13 @@ export class Agent {
         this.state.pendingOffer = undefined;
         await this.persist();
       }
-      // New words replace a screen offer the same way; its thought stays saved. An "mm-hm" to the offer has it asked again.
-      const replaced = !this.state.conversationId && (pending?.kind === "help" || pending?.kind === "general_help") && !fillerOnly(text) && offerUnchanged();
+      // New words replace a screen offer the same way; its thought stays saved. An "mm-hm" or an unsure acceptance has the
+      // offer asked again, and an unsure decline withdraws it as a sure one does, with nothing saved or asked.
+      const replaced = !this.state.conversationId && (pending?.kind === "help" || pending?.kind === "general_help") && !fillerOnly(text) && decision.helpAccepted !== true && offerUnchanged();
       if (replaced) {
         this.state.pendingOffer = undefined;
         await this.persist();
+        if (decision.route === "no_action") return;
       }
       if (!this.state.conversationId && (!pending || replaced)) {
         const thought = await this.saveThought(segments);

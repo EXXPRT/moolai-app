@@ -458,6 +458,34 @@ for (const kind of ["memory", "sqlite"] as const) {
     assert.equal(await t.answers(), 1, "The new words are answered");
   });
 
+  // J1 can also be unsure of a reply to the offer itself: "No, just save it." was no_action 0.73 (20 Sep J1 check).
+  for (const reply of ["Mm-hm, yes.", "Yeah, go ahead."])
+    run(`an unsure "${reply}" to a screen offer has it asked again, and "Yes." captures once`, async t => {
+      t.hooks.doubt = doubtful;
+      await t.agent.submitText("I'm not sure why the minimum is lower."); await t.agent.drain();
+      const offer = t.agent.getState().pendingOffer;
+      t.hooks.route = async input => ({ route: "start_agent", confidence: input.text === reply ? 0.6 : 1, helpAccepted: true });
+      const said = t.calls.spoken.length;
+      await t.agent.submitText(reply); await t.agent.drain();
+      assert.deepEqual(t.calls.spoken.slice(said), ["Would you like Moo to answer that?"]);
+      assert.deepEqual(t.agent.getState().pendingOffer, offer, "The offer stays open");
+      await t.agent.submitText("Yes."); await t.agent.drain();
+      assert.equal(t.calls.captures, 1);
+    });
+
+  run("an unsure decline withdraws a screen offer, with nothing saved or asked", async t => {
+    t.hooks.doubt = doubtful;
+    await t.agent.submitText("I'm not sure why the minimum is lower."); await t.agent.drain();
+    const doubt = (t.agent.getState().pendingOffer as { recordId: string }).recordId;
+    t.hooks.route = async () => ({ route: "no_action", confidence: 0.73 });
+    const said = t.calls.spoken.length;
+    await t.agent.submitText("No, just save it."); await t.agent.drain();
+    assert.deepEqual(t.calls.spoken.slice(said), [], "Nothing is asked again");
+    assert.equal(t.agent.getState().pendingOffer, undefined);
+    assert.ok(!(await t.brain.listRecords()).some(r => r.kind === "dictation" && /just save it/.test(transcriptText(r))), "The reply is not saved as a thought");
+    assert.ok(await t.brain.getRecord(doubt), "The doubt stays saved");
+  });
+
   run("a corrected doubt turn needs fresh acceptance and captures the corrected words", async t => {
     t.hooks.doubt = doubtful;
     await t.agent.submitText("I'm not sure why sample A's minimum is lower."); await t.agent.drain();
