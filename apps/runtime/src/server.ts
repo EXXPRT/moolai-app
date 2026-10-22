@@ -23,6 +23,7 @@ export function createRuntimeServer(options: {
   nativeHealth: () => Promise<unknown>;
   nativeSnapshot?: () => Record<string, unknown>;
   ownerLost?: () => Promise<void>;
+  heartbeatMs?: number;
 }) {
   const listeners = new Set<http.ServerResponse>();
   let sequence = 0;
@@ -31,6 +32,11 @@ export function createRuntimeServer(options: {
     for (const stream of listeners)
       stream.write(`data: ${JSON.stringify({...event, sequence})}\n\n`);
   };
+  // Electron's fetch ends a stream idle for 300 s; a comment frame keeps it open without making an event.
+  const heartbeat = setInterval(() => {
+    for (const stream of listeners) stream.write(": ping\n\n");
+  }, options.heartbeatMs ?? 30_000);
+  heartbeat.unref();
   const voiceOwner = new VoiceOwner(async()=>{
     try { if(options.ownerLost) await options.ownerLost(); else await options.voice("stop"); }
     catch(error) { emit({type:"notice",message:`App closed; microphone shutdown failed: ${String(error)}`}); }
@@ -229,6 +235,7 @@ export function createRuntimeServer(options: {
     }
   });
   server.on("close", () => {
+    clearInterval(heartbeat);
     voiceOwner.clear();
     for (const stream of listeners) stream.end();
     listeners.clear();

@@ -22,6 +22,13 @@ test("reader notices replace operational details without changing ordinary conve
   assert.equal(readableNotice("Speech superseded"), undefined);
   assert.match(actionMessage("Record changed; reload before editing", "/api/record/example"), /Reopen/);
 });
+test("a dropped event stream shows no transport error, while other notices still show", () => {
+  // Node's fetch ends a stream left idle for 300 s, or one whose runtime stopped, with these; Electron reconnects by itself.
+  for (const message of ["terminated", "other side closed", "SocketError: other side closed", "Body Timeout Error (UND_ERR_BODY_TIMEOUT)"])
+    assert.equal(readableNotice(message), undefined, message);
+  for (const message of ["The previous conversation was closed for this session. Its transcript is saved.", "The upload terminated early. Try again."])
+    assert.equal(readableNotice(message), message);
+});
 
 test("a delayed save acknowledgement cannot erase text typed while waiting", () => {
   assert.equal(clearAcknowledgedDraft("New thought", "Sent thought"), "New thought");

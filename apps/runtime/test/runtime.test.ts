@@ -21,7 +21,7 @@ import { NativeBridge } from "../src/native.js";
 const token = "test-runtime-token";
 const state: AgentState = { listening: false, busy: false, webAllowed: true };
 
-async function runtime(localFiles?: LocalFilesPort, processingStatus?: () => {status:"available"|"unavailable"|"checking";checkedAt?:string}, initialState=state) {
+async function runtime(localFiles?: LocalFilesPort, processingStatus?: () => {status:"available"|"unavailable"|"checking";checkedAt?:string}, initialState=state, heartbeatMs?: number) {
   const actions: { name: string; value?: unknown }[] = [];
   const brain = new MemoryBrain();
   const agent = {
@@ -69,6 +69,7 @@ async function runtime(localFiles?: LocalFilesPort, processingStatus?: () => {st
     token,
     mode: "fixture",
     processingStatus,
+    heartbeatMs,
     voice: async (action) => {
       actions.push({ name: "voice", value: action });
     },
@@ -353,6 +354,37 @@ test("runtime SSE delivers valid initial state and serialized Agent events", asy
     controller.abort();
     await host.close();
   }
+});
+
+test("an idle event stream gets a comment every heartbeat that makes no event, and closing the server stops the heartbeat", async (t) => {
+  const started = t.mock.method(globalThis, "setInterval");
+  const stopped = t.mock.method(globalThis, "clearInterval");
+  const host = await runtime(undefined, undefined, state, 20);
+  try {
+    // Electron's fetch ends a body idle for 300 s as "terminated"; with no heartbeat this read waits for the 5 s signal.
+    const response = await fetch(host.base + "/api/events", {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    while (text.split(": ping\n\n").length < 3) {
+      const { done, value } = await reader.read().catch((error) => assert.fail(`${error}; the idle stream got only ${JSON.stringify(text)}`));
+      assert.ok(!done, "the event stream stays open");
+      text += decoder.decode(value, { stream: true });
+    }
+    // Read as electron.cjs reads frames: only data lines make an event.
+    const events = text.split("\n\n").map((frame) => frame.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n")).filter(Boolean);
+    assert.deepEqual(events.map((data) => JSON.parse(data)), [{ type: "state", state, sequence: 0 }]);
+    const snapshot = await (await fetch(host.base + "/api/state", { headers: { Authorization: `Bearer ${token}` } })).json();
+    assert.equal(snapshot.sequence, 0);
+    await reader.cancel();
+  } finally {
+    await host.close();
+  }
+  const heartbeat = started.mock.calls.find((call) => call.arguments[1] === 20)?.result;
+  assert.ok(heartbeat && stopped.mock.calls.some((call) => call.arguments[0] === heartbeat), "closing the server stops the heartbeat");
 });
 
 test("live provider errors remain errors and never fall back to fixtures", async (t) => {
