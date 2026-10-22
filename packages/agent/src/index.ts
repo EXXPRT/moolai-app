@@ -1127,6 +1127,12 @@ export class Agent {
   }
   async requestEnd() {
     if (!this.state.conversationId) return;
+    // Reading an answer already published is not running work: stop it, and the response's end closes the conversation.
+    if (this.state.busy && this.publishedEpoch === this.taskEpoch) {
+      this.endAfterWork = true;
+      await this.stopSpeech();
+      return;
+    }
     if (this.state.busy) {
       this.state.pendingOffer = { kind: "end_work" };
       await this.persist();

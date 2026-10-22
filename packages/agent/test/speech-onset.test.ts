@@ -15,13 +15,15 @@ const seg=(id:string,text:string):Segment=>({id,turnId:id,revision:1,speaker:'us
 /** Lets work started by a mocked timer finish; setImmediate is not mocked. */
 const settle=async()=>{for(let i=0;i<20;i++)await new Promise<void>(r=>setImmediate(r));};
 for(const kind of ['memory','sqlite']) {
-  async function rig(options:{legacy?:boolean}={}) {
+  async function rig(options:{legacy?:boolean,hold?:RegExp}={}) {
     const dir=await mkdtemp(join(tmpdir(),'moolai-onset-'));
     const brain:BrainPort=kind==='memory'?new MemoryBrain():new SQLiteBrain(dir);
     const p=new FixtureProviders();let n=0,captures=0;
     const spoken:string[]=[],requests:string[]=[],visionQuestions:string[]=[],notices:string[]=[],activities:unknown[]=[];
     const overrides:Record<string,RouteDecision>={};
     let gateNext=false,entered!:()=>void,enteredP=Promise.resolve(),release!:(d:RouteDecision)=>void;
+    // A held line plays as LocalSpeech plays it: until stop(), or until newer speech rejects it with "Speech superseded".
+    let playing:((e:Error)=>void)|undefined;
     const route=p.route.bind(p);
     p.route=async input=>{
       if(gateNext){gateNext=false;entered();return new Promise<RouteDecision>(r=>release=r);}
@@ -33,17 +35,18 @@ for(const kind of ['memory','sqlite']) {
     const generation=options.legacy?{summarize:(r:Parameters<typeof p.summarize>[0])=>p.summarize(r),respond:(...a:Parameters<typeof p.respond>)=>p.respond(...a)}:p;
     const agent=new Agent({brain,decisions:p,generation,search:p,vision,
       capture:{async capture(){captures++;return {mimeType:'image/png',bytes:new Uint8Array([137,80,78,71])};}},
-      speech:{async speak(text){spoken.push(text);},async stop(){}},id:()=>`id-${++n}`,now:()=>at,
+      speech:{async speak(text){playing?.(Error('Speech superseded'));playing=undefined;spoken.push(text);if(options.hold?.test(text))await new Promise<void>((_,reject)=>playing=reject);},
+        async stop(){playing?.(Error('Speech interrupted'));playing=undefined;}},id:()=>`id-${++n}`,now:()=>at,
       onEvent:e=>{if(e.type==='notice')notices.push(e.message!);if(e.state)activities.push(e.state.activity);}});
     await agent.initialize();await agent.startSession();
     const sessionId=agent.getState().sessionId!;
-    return {brain,p,agent,spoken,requests,visionQuestions,notices,activities,overrides,get captures(){return captures},
+    return {brain,p,agent,spoken,requests,visionQuestions,notices,activities,overrides,get captures(){return captures},get playing(){return !!playing},
       /** The next J1 call stays in flight until resolve(). */
       gate(){gateNext=true;enteredP=new Promise<void>(r=>entered=r);return ()=>enteredP;},
       resolve(d:RouteDecision){release(d);},
       async turn(id:string,text:string){await agent.ingest(seg(id,text));return agent.settleTurn(id);},
       async spans(){return ((await brain.getState<{spans?:{segmentId:string}[]}>(`thought-buffer:${sessionId}`))?.spans ?? []).map(s=>s.segmentId);},
-      async close(){await agent.recognitionRejected();await agent.drain();await brain.close();await rm(dir,{recursive:true,force:true});}};
+      async close(){playing?.(Error('Speech interrupted'));await agent.recognitionRejected();await agent.drain();await brain.close();await rm(dir,{recursive:true,force:true});}};
   }
 
   test(`${kind}: a pause during dictation keeps both sentences for the growing note`,async()=>{
@@ -131,6 +134,26 @@ for(const kind of ['memory','sqlite']) {
       const id=r.agent.getState().conversationId;assert.ok(id);
       await r.agent.resolveEnd('cancel');await r.agent.drain();
       assert.equal(r.agent.getState().conversationId,id,'A stale Cancel does not close the conversation');
+    }finally{await r.close();}
+  });
+
+  // Code review, 22 Oct: Finish conversation while Moo read a published answer asked about running work, cut the reading
+  // as a voice failure, then said "The work ended. The conversation is still open." and left it open.
+  test(`${kind}: Finish conversation while Moo reads a published answer closes it, with no question about running work`,async()=>{
+    const r=await rig({hold:/^ATP carries energy/});try{
+      r.p.respond=async()=>({text:'ATP is the main energy carrier in cells.',spokenText:'ATP carries energy in cells.',toolCalls:[]});
+      r.overrides['Moo.']={route:'start_agent',confidence:1};await r.turn('M','Moo.');await r.agent.drain();
+      r.overrides['What is ATP?']={route:'continue_agent',confidence:1};await r.turn('A','What is ATP?');
+      for(let i=0;i<500 && !r.playing;i++) await new Promise(res=>setTimeout(res,2));
+      assert.equal(r.playing,true,'Moo is reading the published answer');assert.equal(r.agent.getState().busy,true);
+      await r.agent.requestEnd();await r.agent.drain();
+      assert.equal(r.agent.getState().conversationId,undefined,'One click closes the conversation');
+      const said=(await r.brain.listRecords()).flatMap(x=>x.segments).filter(s=>s.speaker==='assistant').map(s=>s.text);
+      assert.ok(said.includes('ATP is the main energy carrier in cells.'),'The answer is kept');
+      assert.ok(!said.some(t=>/^(?:Work is still running|The work ended)/.test(t)),'No question about running work, and none withdrawn');
+      assert.ok(!r.notices.some(m=>/voice is unavailable/.test(m)),'The cut reading is not a voice failure');
+      assert.ok(!((await r.brain.getState<{action:string}[]>('interaction-trace')) ?? []).some(e=>e.action==='narration_unavailable'),'No playback failure is traced');
+      assert.equal(r.spoken.at(-1),'Conversation closed. Your transcript is saved.');
     }finally{await r.close();}
   });
 
