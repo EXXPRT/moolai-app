@@ -71,15 +71,19 @@ for (const adapter of ['memory', 'sqlite'] as const) {
       const state = agent.getState();
       if (calls === 1) {
         turnId = (await s.brain.getRecord(state.sessionId!))!.segments.filter(segment => segment.speaker === 'user').at(-1)!.turnId;
+        // An earlier question in this conversation, folded into a growing note with nothing else in it.
+        await s.brain.upsertSegment(state.conversationId!, {id: 'earlier-question', turnId: 'conversation-turn', revision: 1, speaker: 'user', text: 'Inspection question.', final: true, createdAt: at});
         await note(s.brain, 'settled-current', turnId, state.conversationId!, 'settled');
-        await note(s.brain, 'active-growing', 'older-turn', state.conversationId!, 'growing');
+        await note(s.brain, 'active-growing', 'conversation-turn', state.conversationId!, 'growing');
+        await note(s.brain, 'growing-dictation', 'older-turn', state.conversationId!, 'growing');
         await note(s.brain, 'earlier-settled', 'older-turn', state.conversationId!, 'settled');
         await s.brain.setState(`evidence-index:${state.conversationId}`, {
-          refs: ['settled-current', 'active-growing', 'earlier-settled'].map(id => ({id, offset: 0, length: 2400})), outcomes: [],
+          refs: ['settled-current', 'active-growing', 'growing-dictation', 'earlier-settled'].map(id => ({id, offset: 0, length: 2400})), outcomes: [],
         });
         return {text: '', toolCalls: [
           {id: 'current-read', name: 'read_note', arguments: {id: 'settled-current'}},
           {id: 'growing-read', name: 'read_note', arguments: {id: 'active-growing'}},
+          {id: 'dictation-read', name: 'read_note', arguments: {id: 'growing-dictation'}},
           {id: 'earlier-read', name: 'read_note', arguments: {id: 'earlier-settled'}},
         ]};
       }
@@ -88,9 +92,11 @@ for (const adapter of ['memory', 'sqlite'] as const) {
         assert.equal(outcome.result.status, 'failed');
         assert.match(outcome.result.error, /independent evidence/);
       }
-      assert.equal((await s.brain.getState<any>(`tool:${state.conversationId}:earlier-read`)).result.status, 'success');
+      // Dictation from outside this conversation stays evidence in a growing note linked to it.
+      for (const call of ['dictation-read', 'earlier-read'])
+        assert.equal((await s.brain.getState<any>(`tool:${state.conversationId}:${call}`)).result.status, 'success');
       const evidence = await loadEvidence(s.brain, state.conversationId!, undefined, false, [turnId]);
-      assert.deepEqual(evidence.notes.map(record => record.id), ['earlier-settled']);
+      assert.deepEqual(evidence.notes.map(record => record.id), ['growing-dictation', 'earlier-settled']);
       assert.doesNotMatch(messages[0]!.content, /"id":"(?:settled-current|active-growing)"/);
       return {text: 'Only the earlier settled observation is independent evidence.', spokenText: 'Only the earlier settled observation is independent evidence.', toolCalls: []};
     };
@@ -102,7 +108,7 @@ for (const adapter of ['memory', 'sqlite'] as const) {
       assert.equal(agent.getState().lastError, undefined); assert.equal(calls, 2);
       const conversationId = agent.getState().conversationId!;
       await agent.interrupt(); await agent.drain(); stopped = true; await s.restart();
-      assert.deepEqual((await loadEvidence(s.brain, conversationId, undefined, false, [turnId])).notes.map(record => record.id), ['earlier-settled']);
+      assert.deepEqual((await loadEvidence(s.brain, conversationId, undefined, false, [turnId])).notes.map(record => record.id), ['growing-dictation', 'earlier-settled']);
     } finally {if (!stopped) {await agent.interrupt(); await agent.drain();}}
   });
 

@@ -1448,7 +1448,7 @@ export class Agent {
           const current=await this.p.brain.getRecord(recordId);
           if(!current || segments.some(s=>!current.segments.some(c=>c.id===s.id && c.revision===s.revision))) throw Error("Conversation history changed; stale answer not published.");
         }
-        if (production && (!(await this.responseSourcesCurrent(record, linkedSources)) || (sourceTurn && !(await this.isSourceTurnCurrent(sourceTurn))) || (currentEvidence && !(await evidenceCurrent(this.p.brain, currentEvidence, this.p.localFiles))))) {
+        if (production && (!(await this.responseSourcesCurrent(record, linkedSources)) || (sourceTurn && !(await this.isSourceTurnCurrent(sourceTurn))) || (currentEvidence && !(await evidenceCurrent(this.p.brain, currentEvidence, this.p.localFiles, id, requestTurnIds))))) {
           await this.p.brain.setState(`stale-response:${id}:${epoch}`, {reply, currentEvidence});
           throw new Error("Source or evidence changed while answering; stale answer retained for review, not published.");
         }
@@ -1924,14 +1924,15 @@ export class Agent {
       case "search_notes": {
         const request = this.activeRequest?.conversationId === id ? this.activeRequest : await this.latestUserTurn(id);
         const turns = request ? [request.turnId, ...(request.constraintTurns?.map(turn => turn.turnId) ?? [])] : [];
+        const conversation = await this.p.brain.getRecord(id);
         // Exclude derived request drafts before limiting, so they cannot crowd
         // out real evidence or invalidate their own answer when it is saved.
-        const excludeIds = (await this.p.brain.listRecords()).filter((record): boolean => !independentNote(record,id,turns)).map(record => record.id);
+        const excludeIds = (await this.p.brain.listRecords()).filter((record): boolean => !independentNote(record,id,turns,conversation)).map(record => record.id);
         const matches = await this.p.brain.search(str("query"), 5, {excludeIds: [...new Set([id,...excludeIds])], kinds: ["note", "dictation", "conversation"]});
         const evidence = [];
         for (const match of matches) {
-          const current = await this.p.brain.getRecord(match.id);
-          if (independentNote(current,id,turns)) evidence.push(noteEvidence(current,0,2400,str("query")));
+          const current = independentNote(await this.p.brain.getRecord(match.id),id,turns,conversation);
+          if (current) evidence.push(noteEvidence(current,0,2400,str("query")));
         }
         return evidence;
       }
@@ -1939,7 +1940,8 @@ export class Agent {
         const record = await this.p.brain.getRecord(str("id"));
         const request = this.activeRequest?.conversationId === id ? this.activeRequest : await this.latestUserTurn(id);
         const turns = request ? [request.turnId, ...(request.constraintTurns?.map(turn => turn.turnId) ?? [])] : [];
-        return independentNote(record,id,turns) ? noteEvidence(record, Number(a.offset) || 0, Number(a.length) || 2400, a.offset===undefined && typeof a.query==="string" ? a.query : "") : { error: "Note not available as independent evidence" };
+        const note = independentNote(record,id,turns,await this.p.brain.getRecord(id));
+        return note ? noteEvidence(note, Number(a.offset) || 0, Number(a.length) || 2400, a.offset===undefined && typeof a.query==="string" ? a.query : "") : { error: "Note not available as independent evidence" };
       }
       case "search_local_files": {
         if (!this.p.localFiles) throw new Error("Local file search unavailable");

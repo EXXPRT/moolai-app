@@ -12,7 +12,7 @@ export class GraphRetrieval {
   constructor(private brain: BrainPort, private conversationId: string, private query: string,
     private requestTurnIds: readonly string[] = []) {}
   private eligible(r: BrainRecord | undefined): r is BrainRecord {
-    return independentNote(r, this.conversationId, this.requestTurnIds);
+    return !!independentNote(r, this.conversationId, this.requestTurnIds);
   }
   async retrieved(output: unknown) {
     for (const item of Array.isArray(output) ? output : [output]) {

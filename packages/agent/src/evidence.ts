@@ -72,10 +72,11 @@ export function noteEvidence(record: BrainRecord, offset = 0, length = 2400, que
 export async function loadEvidence(brain: BrainPort, id: string, local?: LocalFilesPort, webAllowed = true,
   requestTurnIds: readonly string[] = [], runCallIds: ReadonlySet<string> = new Set()) {
   const index = await brain.getState<EvidenceIndex>(`evidence-index:${id}`) ?? {refs: [], outcomes: []};
+  const conversation = await brain.getRecord(id);
   const notes = [];
   for (const ref of index.refs) {
-    const record = await brain.getRecord(ref.id);
-    if (independentNote(record, id, requestTurnIds))
+    const record = independentNote(await brain.getRecord(ref.id), id, requestTurnIds, conversation);
+    if (record)
       notes.push(noteEvidence(record, ref.selection === 'query' ? 0 : ref.offset, ref.length, ref.query));
   }
   const files: LocalFileRead[] = [];
@@ -133,9 +134,18 @@ export async function rememberEvidence(brain: BrainPort, id: string, event: Expe
     .slice(-5).map(outcome => retainedOutcome(outcome, requestTurnIds));
   await brain.setState(`evidence-index:${id}`, index);
 }
-export async function evidenceCurrent(brain: BrainPort, snapshot: Awaited<ReturnType<typeof loadEvidence>>, local?: LocalFilesPort) {
+/** The passages shown must read the same, from the same segment revisions. Moo's own organizer and J7/J6
+ * writes elsewhere in a note (metadata, later source, this conversation's turns) leave the answer current. */
+export async function evidenceCurrent(brain: BrainPort, snapshot: Awaited<ReturnType<typeof loadEvidence>>, local?: LocalFilesPort,
+  id = '', requestTurnIds: readonly string[] = []) {
   const {notes, files} = snapshot;
-  for (const note of notes) if ((await brain.getRecord(note.id))?.revision !== note.revision) return false;
+  const conversation = await brain.getRecord(id);
+  for (const note of notes) {
+    const record = independentNote(await brain.getRecord(note.id), id, requestTurnIds, conversation), text = record ? transcriptText(record) : '';
+    if (!record || [note, ...note.additionalPassages].some(passage => text.slice(passage.offset, passage.nextOffset) !== passage.original ||
+      (passage.attribution ?? []).some(origin => origin.segmentId && !record.segments.some(segment => segment.id === origin.segmentId && segment.revision === origin.segmentRevision))))
+      return false;
+  }
   for (const f of files) {
     try { if (!local || (await local.read({rootId:f.rootId,path:f.path,startLine:f.startLine,lineCount:1})).fingerprint !== f.fingerprint) return false; }
     catch { return false; }
