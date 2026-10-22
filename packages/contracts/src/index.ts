@@ -334,6 +334,7 @@ export interface CapturePort {
   capture(): Promise<{ mimeType: string; bytes: Uint8Array; excluded?: string[] }>;
 }
 export interface SpeechPort {
+  /** When stop() or newer speech cuts it off on purpose, it may reject with an error marked `stopped: true`; that is not a failure. */
   speak(text: string): Promise<void>;
   stop(): Promise<void>;
   /** Continues playback a sound paused; hosts without it stop instead. */

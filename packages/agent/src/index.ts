@@ -2145,7 +2145,8 @@ export class Agent {
     }
     const epoch=this.playbackEpoch;
     try { await this.p.speech.speak(text); }
-    catch(error) { if(epoch===this.playbackEpoch) throw error; }
+    // Mic Off, Stop session and the host's own lines cut speech without the Agent; a cut marked stopped is not a failure.
+    catch(error) { if(epoch===this.playbackEpoch && !(error as {stopped?: boolean})?.stopped) throw error; }
   }
   /** What Moo says is tracked, not awaited, whether a question, an offer or a `reading` of a saved answer lasting minutes:
    * the turn queue stays free for a filler to resume it, or real words to stop it, at once. Staleness is still decided

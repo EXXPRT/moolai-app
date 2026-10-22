@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join,relative} from 'node:path';
 import {MemoryBrain} from '../../../packages/brain/src/index.js';
 import {createAgentHost,FixtureProviders} from '../../../packages/agent-host/src/index.js';
 import type {AgentEvent} from '../../../packages/contracts/src/index.js';
@@ -377,5 +377,46 @@ createInterface({input:process.stdin}).on('line',line=>{
     for(let i=0;i<200&&!methods.includes('resumeSpeaking');i++){await new Promise(r=>setTimeout(r,5));methods=((await host.nativeHealth()) as {methods:string[]}).methods;}
     assert.ok(methods.includes('resumeSpeaking'),'The companion is asked to resume');
     assert.ok(!methods.includes('stopSpeaking'),'The reading is not stopped');
+  }finally{await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
+});
+
+// Code review, 22 Oct: Mic Off or Stop session while Moo read an answer said "Moo’s voice is unavailable", though the voice worked.
+for(const ending of ['Mic Off','Stop session','a worker crash'] as const) test(`${ending} while Moo reads an answer ${ending==='a worker crash'?'is':'is not'} reported as a voice failure`,async()=>{
+  const directory=await mkdtemp(join(tmpdir(),'moolai-answer-stop-'));
+  const nativePath=join(directory,'companion.mjs'),pidFile=join(directory,'worker.pid');
+  // As in the Swift companion, endSpeechAudio returns once the audio has played; the answer's plays until stopSpeaking.
+  await writeFile(nativePath,`#!${process.execPath}
+import {createInterface} from 'node:readline';
+const emit=x=>console.log(JSON.stringify(x));const answers=new Set();let playing;
+createInterface({input:process.stdin}).on('line',line=>{
+ const r=JSON.parse(line);
+ if(r.method==='speechAudio'&&Buffer.from(r.params.pcm,'base64')[0]===1)answers.add(r.params.utteranceId);
+ if(r.method==='endSpeechAudio'&&answers.has(r.params.utteranceId)){playing=r.id;return;}
+ if(r.method==='stopSpeaking'&&playing!==undefined){emit({id:playing,result:{}});playing=undefined;}
+ emit({id:r.id,result:r.method==='health'?{playing:playing!==undefined}:{}});
+});`,{mode:0o700});
+  // The real LocalSpeech runs this stand-in for the Kokoro worker; the answer's audio begins with byte 1.
+  await mkdir(join(directory,'native/tts'),{recursive:true});
+  await writeFile(join(directory,'tts-config.json'),JSON.stringify({provider:'kokoro',python:relative(directory,process.execPath)}));
+  await writeFile(join(directory,'native/tts/worker.py'),`require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(process.pid));
+const emit=x=>console.log(JSON.stringify(x));emit({event:'ready'});
+require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const x=JSON.parse(line);if(x.method==='cancel')return;
+ emit({id:x.id,pcm:Buffer.alloc(400,x.text.startsWith('Photosynthesis')?1:0).toString('base64')});emit({id:x.id,done:true});});`);
+  const brain=new MemoryBrain(),providers=new FixtureProviders(),events:AgentEvent[]=[];
+  providers.respond=async()=>({text:'Photosynthesis turns light, water and carbon dioxide into sugar.',toolCalls:[]});
+  const host=await createAgentHost({brain,providers,nativePath,speechRoot:directory,waitForAsr:async()=>{},onEvent:e=>events.push(e)});
+  const playing=async()=>((await host.nativeHealth()) as {playing:boolean}).playing;
+  try {
+    await host.voice('start');
+    await host.agent.submitText('Moo, explain how photosynthesis works.');
+    for(let i=0;i<500&&!await playing();i++)await new Promise(r=>setTimeout(r,5));
+    assert.equal(await playing(),true,'Moo is reading the answer');
+    if(ending==='a worker crash')process.kill(Number(await readFile(pidFile,'utf8')));
+    else {await host.voice('stop');if(ending==='Stop session')await host.agent.stopSession();}
+    await host.agent.drain();
+    const failed=ending==='a worker crash',notices=events.flatMap(e=>e.type==='notice'?[e.message]:[]);
+    assert.equal(notices.includes('Moo’s voice is unavailable. The full response is on screen.'),failed,notices.join('\n'));
+    const trace=await brain.getState<{action:string;reason?:string}[]>('interaction-trace')??[];
+    assert.equal(trace.some(e=>e.action==='narration_unavailable'&&e.reason==='playback_failed'),failed,'Only a real failure is traced as one');
   }finally{await host.close();await brain.close();await rm(directory,{recursive:true,force:true});}
 });

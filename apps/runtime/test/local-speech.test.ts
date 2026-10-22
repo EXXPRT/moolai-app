@@ -123,3 +123,15 @@ test('guard: a reading under 1,600 characters is still one utterance and one wor
  assert.deepEqual(await f.texts(),[text]);
  }finally{await f.close();}
 });
+
+// Code review, 22 Oct: Mic Off while Moo read an answer said "Moo’s voice is unavailable". A cut made on purpose is marked stopped.
+for(const kind of ['stop()','a newer speak()'])test(`${kind} during a part rejects it marked stopped, with its message unchanged`,async()=>{
+ const f=await fixture('late');try{const speaking=f.speech.speak('Original answer.');
+ const rejected=assert.rejects(speaking,{message:kind==='stop()'?'Speech interrupted':'Speech superseded',stopped:true});
+ while(!f.calls.some(c=>c.method==='beginSpeechAudio'))await new Promise(r=>setTimeout(r,1));
+ if(kind==='stop()')await f.speech.stop();else await f.speech.speak('A newer answer.');await rejected;
+ }finally{await f.close();}
+});
+test('guard: a synthesis failure is not marked stopped',async()=>{
+ const f=await fixture('failure');try{await assert.rejects(f.speech.speak('A short answer.'),e=>e instanceof Error&&/Synthetic synthesis failure/.test(e.message)&&!('stopped' in e));}finally{await f.close();}
+});

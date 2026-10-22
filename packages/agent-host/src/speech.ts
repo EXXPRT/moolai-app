@@ -67,7 +67,8 @@ export class LocalSpeech {
   }
   async speak(text:string) {
     if (!text.trim()) throw Error("Speech text is empty; playback was not started.");
-    this.active?.reject(Error("Speech superseded"));
+    // A cut made on purpose, here or by stop(), is marked stopped so it is never reported as a voice failure.
+    this.active?.reject(Object.assign(Error("Speech superseded"),{stopped:true}));
     const epoch=++this.epoch;
     await this.warm();
     if(epoch!==this.epoch)return;
@@ -116,7 +117,7 @@ export class LocalSpeech {
   }
   async stop() {
     this.epoch++;
-    if(this.active){const pending=this.active;this.active=undefined;pending.reject(Error("Speech interrupted"));}
+    if(this.active){const pending=this.active;this.active=undefined;pending.reject(Object.assign(Error("Speech interrupted"),{stopped:true}));}
     await this.native.request("stopSpeaking");
   }
   close(){this.active?.reject(Error("Speech session closed"));this.lifecycle++;this.epoch++;this.active=undefined;this.child?.kill();this.child=undefined;this.ready=undefined;}
