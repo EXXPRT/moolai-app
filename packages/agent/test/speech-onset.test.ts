@@ -12,7 +12,7 @@ import {FixtureProviders} from '../../agent-host/src/providers.js';
 // (FixtureProviders provides consolidate); every scenario drives the real speechStarted()/recognitionRejected() API.
 const at='2026-10-16T10:00:00.000Z';
 const seg=(id:string,text:string):Segment=>({id,turnId:id,revision:1,speaker:'user',text,final:true,createdAt:at});
-/** Lets work a mocked timer started finish; setImmediate is not mocked. */
+/** Lets work started by a mocked timer finish; setImmediate is not mocked. */
 const settle=async()=>{for(let i=0;i<20;i++)await new Promise<void>(r=>setImmediate(r));};
 for(const kind of ['memory','sqlite']) {
   async function rig(options:{legacy?:boolean}={}) {
@@ -187,6 +187,8 @@ for(const kind of ['memory','sqlite']) {
         await r.agent.speechStarted();r.resolve({route,confidence:1});await turn;
       }
       await r.agent.recognitionRejected();await r.agent.drain();
+      // Releasing the hold cancels the timer the last onset restarted, so nothing fires a minute later.
+      t.mock.timers.tick(60000);await settle();
       assert.ok(!r.notices.some(m=>/interpret the interruption/.test(m)),'No lost-recognition interrupt');
       assert.ok(!r.activities.includes('interrupted'));
       assert.ok(r.agent.getState().conversationId,'The request routed over the minute mark opens a conversation');
