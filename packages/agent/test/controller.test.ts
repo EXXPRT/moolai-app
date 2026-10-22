@@ -293,6 +293,57 @@ for (const adapter of ["memory", "sqlite"] as const) {
     await agent.submitText("The tide was high today."); await agent.drain();
     assert.ok((await brain.listRecords()).some(r => r.kind === "dictation" && transcriptText(r).includes("tide was high")));
   });
+  run("after a failed answer and Finish, a bare Moo opens a conversation without that failure", async ({agent,hooks,calls}) => {
+    const respond = hooks.respond, route = hooks.route;
+    hooks.respond = async () => { throw new Error("Backend 503: provider unavailable"); };
+    await agent.submitText("Moo, explain tides."); await agent.drain();
+    const failed = agent.getState().conversationId;
+    assert.equal(agent.getState().lastError, "Backend 503: provider unavailable");
+    hooks.respond = respond;
+    await agent.requestEnd(); await agent.drain();
+    assert.equal(agent.getState().lastError, undefined, "Finish conversation ends the failure with its conversation");
+    await agent.submitText("Moo"); await agent.drain();
+    const opened = agent.getState().conversationId;
+    assert.ok(opened && opened !== failed, "A bare Moo opens a new conversation");
+    assert.equal(agent.getState().lastError, undefined);
+    hooks.route = async input => input.activeConversation && /are you there/i.test(input.text) ? {route: "check_status", confidence: 1} : route(input);
+    await agent.submitText("Moo, are you there?"); await agent.drain();
+    assert.equal(calls.speech.at(-1), "I’m here and listening.");
+  });
+  run("a J1 failure on an idle turn is not shown in the conversation opened after it", async ({agent,hooks}) => {
+    const route = hooks.route;
+    hooks.route = async () => { throw new Error("Jev offline"); };
+    await assert.rejects(agent.submitText("An orchid thought."), /Jev offline/); await agent.drain();
+    assert.equal(agent.getState().lastError, "Jev offline");
+    hooks.route = route;
+    await agent.submitText("Moo"); await agent.drain();
+    assert.ok(agent.getState().conversationId);
+    assert.equal(agent.getState().lastError, undefined);
+  });
+  run("a request opening a conversation after a failure is greeted without that failure", async ({agent,hooks,options,calls}) => {
+    const route = hooks.route;
+    hooks.route = async () => { throw new Error("Jev offline"); };
+    await assert.rejects(agent.submitText("An orchid thought."), /Jev offline/); await agent.drain();
+    hooks.route = route;
+    const greeted: (string | undefined)[] = [];
+    options.speech.speak = async text => { calls.speech.push(text); if (text.startsWith("I'm listening")) greeted.push(agent.getState().lastError); };
+    await agent.submitText("Moo, explain orchids."); await agent.drain();
+    assert.deepEqual(greeted, [undefined], "No failure shows while Moo greets the new conversation");
+  });
+  run("a failed answer stays shown in its conversation until the next answer starts", async ({agent,hooks,calls}) => {
+    const respond = hooks.respond, route = hooks.route;
+    hooks.respond = async () => { throw new Error("Backend 503: provider unavailable"); };
+    await agent.submitText("Moo, explain tides."); await agent.drain();
+    const id = agent.getState().conversationId;
+    hooks.respond = respond;
+    hooks.route = async input => input.activeConversation && /are you there/i.test(input.text) ? {route: "check_status", confidence: 1} : route(input);
+    await agent.submitText("Moo, are you there?"); await agent.drain();
+    assert.equal(calls.speech.at(-1), "I’m here. The last response could not finish; your request is saved.");
+    assert.equal(agent.getState().conversationId, id);
+    assert.equal(agent.getState().lastError, "Backend 503: provider unavailable");
+    await agent.submitText("Explain tides again."); await agent.drain();
+    assert.equal(agent.getState().lastError, undefined, "The next answer starts without it");
+  });
   run("yes/no clarification preserves the original question and new constraint", async ({agent,hooks,calls}, brain) => {
     hooks.route = async input => ({route: input.pendingOffer?.kind === "clarification" ? "start_agent" : "unclear", confidence: 1});
     await agent.submitText("How does a siphon work?"); await agent.drain();

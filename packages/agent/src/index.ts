@@ -1084,6 +1084,8 @@ export class Agent {
       });
       if(this.thoughts) record=(await this.patch(record.id,{sourceOnly:true})) ?? record;
       this.state.conversationId = record.id;
+      // A failure from before, such as J1's on an idle turn, is not this conversation's to show.
+      this.state.lastError = undefined;
       await this.p.brain.setState(`subject:${record.id}`, subject ?? null);
     }
     for (const s of segments) {
@@ -1198,6 +1200,7 @@ export class Agent {
       this.state.pendingOffer = undefined;
       this.endAfterWork = false;
       this.state.webAllowed = true;
+      this.state.lastError = undefined;
       await this.persist();
       if (announce) await this.say("Conversation closed. Your transcript is saved.");
       else this.notice("The previous conversation was closed for this session. Its transcript is saved.");
