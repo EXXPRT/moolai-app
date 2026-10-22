@@ -12,12 +12,14 @@ import {FixtureProviders} from '../../agent-host/src/providers.js';
 // (FixtureProviders provides consolidate); every scenario drives the real speechStarted()/recognitionRejected() API.
 const at='2026-10-16T10:00:00.000Z';
 const seg=(id:string,text:string):Segment=>({id,turnId:id,revision:1,speaker:'user',text,final:true,createdAt:at});
+/** Lets work a mocked timer started finish; setImmediate is not mocked. */
+const settle=async()=>{for(let i=0;i<20;i++)await new Promise<void>(r=>setImmediate(r));};
 for(const kind of ['memory','sqlite']) {
   async function rig(options:{legacy?:boolean}={}) {
     const dir=await mkdtemp(join(tmpdir(),'moolai-onset-'));
     const brain:BrainPort=kind==='memory'?new MemoryBrain():new SQLiteBrain(dir);
     const p=new FixtureProviders();let n=0,captures=0;
-    const spoken:string[]=[],requests:string[]=[],visionQuestions:string[]=[];
+    const spoken:string[]=[],requests:string[]=[],visionQuestions:string[]=[],notices:string[]=[],activities:unknown[]=[];
     const overrides:Record<string,RouteDecision>={};
     let gateNext=false,entered!:()=>void,enteredP=Promise.resolve(),release!:(d:RouteDecision)=>void;
     const route=p.route.bind(p);
@@ -31,10 +33,11 @@ for(const kind of ['memory','sqlite']) {
     const generation=options.legacy?{summarize:(r:Parameters<typeof p.summarize>[0])=>p.summarize(r),respond:(...a:Parameters<typeof p.respond>)=>p.respond(...a)}:p;
     const agent=new Agent({brain,decisions:p,generation,search:p,vision,
       capture:{async capture(){captures++;return {mimeType:'image/png',bytes:new Uint8Array([137,80,78,71])};}},
-      speech:{async speak(text){spoken.push(text);},async stop(){}},id:()=>`id-${++n}`,now:()=>at});
+      speech:{async speak(text){spoken.push(text);},async stop(){}},id:()=>`id-${++n}`,now:()=>at,
+      onEvent:e=>{if(e.type==='notice')notices.push(e.message!);if(e.state)activities.push(e.state.activity);}});
     await agent.initialize();await agent.startSession();
     const sessionId=agent.getState().sessionId!;
-    return {brain,p,agent,spoken,requests,visionQuestions,overrides,get captures(){return captures},
+    return {brain,p,agent,spoken,requests,visionQuestions,notices,activities,overrides,get captures(){return captures},
       /** The next J1 call stays in flight until resolve(). */
       gate(){gateNext=true;enteredP=new Promise<void>(r=>entered=r);return ()=>enteredP;},
       resolve(d:RouteDecision){release(d);},
@@ -169,6 +172,47 @@ for(const kind of ['memory','sqlite']) {
       // The onset arrived before turn E reached the controller, so it cannot be told apart from E itself.
       assert.equal(r.agent.getState().conversationId,undefined);
     }finally{await r.close();}
+  });
+
+  // Code review, 22 Oct: the lost-recognition timer ran a minute from the first onset while each sentence began as J1
+  // routed the one before, so reading aloud showed "couldn't interpret" and dropped the request being routed.
+  test(`${kind}: over a minute of sentences each begun while J1 routes the one before is not interrupted, and its request is answered`,async t=>{
+    const r=await rig();try{
+      t.mock.timers.enable({apis:['setTimeout']});
+      await r.agent.speechStarted();
+      for(const [id,text,route] of [['A','The enzyme works best at 37 degrees.','dictate'],['B','Above 45 degrees it denatures.','dictate'],
+        ['Q','Moo, what is osmosis?','start_agent']] as const) {
+        const entered=r.gate();const turn=r.turn(id,text);await entered();
+        t.mock.timers.tick(25000);await settle();
+        await r.agent.speechStarted();r.resolve({route,confidence:1});await turn;
+      }
+      await r.agent.recognitionRejected();await r.agent.drain();
+      assert.ok(!r.notices.some(m=>/interpret the interruption/.test(m)),'No lost-recognition interrupt');
+      assert.ok(!r.activities.includes('interrupted'));
+      assert.ok(r.agent.getState().conversationId,'The request routed over the minute mark opens a conversation');
+      assert.equal(r.requests.length,1);assert.match(r.requests[0]!,/osmosis/);
+    }finally{t.mock.timers.reset();await r.close();}
+  });
+
+  test(`${kind}: speech that is never recognized still times out a minute after its own onset`,async t=>{
+    const r=await rig();try{
+      t.mock.timers.enable({apis:['setTimeout']});
+      const timeouts=()=>r.notices.filter(m=>m==='I couldn’t interpret the interruption. Your request is saved; please say it again.').length;
+      await r.agent.speechStarted();
+      t.mock.timers.tick(59999);await settle();
+      assert.equal(timeouts(),0);
+      t.mock.timers.tick(1);await settle();
+      assert.equal(timeouts(),1,'A lost recognition event times out visibly');
+      assert.equal(r.agent.getState().activity,'interrupted');
+      // Speech begun while J1 routes a sentence, then lost, times out a minute after it began, not after the first onset.
+      await r.agent.speechStarted();
+      const entered=r.gate();const a=r.turn('A','The enzyme works best at 37 degrees.');await entered();
+      t.mock.timers.tick(30000);await r.agent.speechStarted();r.resolve({route:'dictate',confidence:1});await a;
+      t.mock.timers.tick(59999);await settle();
+      assert.equal(timeouts(),1,'Timed from the latest onset');
+      t.mock.timers.tick(1);await settle();
+      assert.equal(timeouts(),2);
+    }finally{t.mock.timers.reset();await r.close();}
   });
 }
 

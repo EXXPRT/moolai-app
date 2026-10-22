@@ -155,14 +155,16 @@ export class Agent {
     const pause = options.paused === true && !!this.p.speech.resume;
     if (!pause) this.playbackEpoch++;
     this.speechEpoch++;
-    if (!this.attention) {
+    const timer=setTimeout(()=> {
+      // A lost recognition event must not leave a task suspended forever or publish through unknown speech.
+      void this.interrupt().then(()=>this.notice("I couldn’t interpret the interruption. Your request is saved; please say it again.")).catch(e=>this.notice(errorText(e)));
+    },60000);
+    timer.unref?.();
+    // Each onset restarts the wait: a sentence begun while J1 routes the one before keeps the hold, though nothing was lost.
+    if (this.attention) { clearTimeout(this.attention.timer); this.attention.timer=timer; }
+    else {
       let release!:()=>void;
       const done=new Promise<void>(resolve=>release=resolve);
-      const timer=setTimeout(()=> {
-        // A lost recognition event must not leave a task suspended forever or publish through unknown speech.
-        void this.interrupt().then(()=>this.notice("I couldn’t interpret the interruption. Your request is saved; please say it again.")).catch(e=>this.notice(errorText(e)));
-      },60000);
-      timer.unref?.();
       this.attention={done,release,timer,previous:this.state.activity};
     }
     this.state.activity='listening';
