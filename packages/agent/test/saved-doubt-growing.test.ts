@@ -385,6 +385,79 @@ for (const kind of ["memory", "sqlite"] as const) {
     assert.equal(t.calls.captures, 1);
   });
 
+  // An offer belongs to its session: a stray "Yes." as the next session's first words captured the screen for the old doubt.
+  run("an offer left unanswered at Stop is dropped at Start, so the next session's \"Yes.\" captures nothing", async t => {
+    t.hooks.doubt = doubtful;
+    await t.agent.submitText("I'm not sure why the minimum is lower."); await t.agent.drain();
+    const doubt = (t.agent.getState().pendingOffer as { recordId: string }).recordId;
+    await t.agent.stopSession(); await t.agent.drain(); await t.agent.startSession();
+    assert.equal(t.agent.getState().pendingOffer, undefined);
+    await t.agent.submitText("Yes."); await t.agent.drain();
+    assert.equal(t.calls.routes.at(-1)!.pendingOffer, undefined, "J1 hears new speech, not a reply to the old offer");
+    assert.equal(t.calls.captures, 0);
+    assert.ok(await t.brain.getRecord(doubt), "The doubt stays saved");
+    const trace = await t.brain.getState<{ action: string; kind?: string }[]>("interaction-trace");
+    assert.ok(trace!.some(e => e.action === "offer_dropped" && e.kind === "help"));
+  });
+
+  run("an offer left unanswered before a restart is dropped at Start, so \"Yes.\" captures nothing", async t => {
+    t.hooks.doubt = doubtful;
+    await t.agent.submitText("I'm not sure why the minimum is lower."); await t.agent.drain();
+    await t.restart();
+    assert.equal(t.agent.getState().pendingOffer?.kind, "help", "Until Start, the offer card can still answer it");
+    await t.agent.startSession();
+    assert.equal(t.agent.getState().pendingOffer, undefined);
+    await t.agent.submitText("Yes."); await t.agent.drain();
+    assert.equal(t.calls.captures, 0);
+  });
+
+  run("within one session a pending offer survives Start, as when the microphone is turned on, and \"Yes please\" captures once", async t => {
+    t.hooks.doubt = doubtful;
+    await t.agent.submitText("I'm not sure why the minimum is lower."); await t.agent.drain();
+    await t.agent.startSession();
+    assert.equal(t.agent.getState().pendingOffer?.kind, "help");
+    await t.agent.submitText("Yes please"); await t.agent.drain();
+    assert.equal(t.calls.captures, 1);
+  });
+
+  run("a question left unanswered at Stop never takes the next session's words into its thought", async t => {
+    t.hooks.route = async input => /mitochondria/.test(input.text) ? { route: "unclear", confidence: 0.6 } : { route: "dictate", confidence: 1 };
+    await t.agent.submitText("The mitochondria thing from earlier."); await t.agent.drain();
+    const offer = t.agent.getState().pendingOffer as { kind: string; recordId: string };
+    assert.equal(offer.kind, "clarification");
+    await t.agent.stopSession(); await t.agent.drain(); await t.agent.startSession();
+    assert.equal(t.agent.getState().pendingOffer, undefined);
+    await t.agent.submitText("Today we start the chapter on enzymes."); await t.agent.drain();
+    assert.deepEqual((await t.brain.getRecord(offer.recordId))!.segments.map(s => s.text), ["The mitochondria thing from earlier."]);
+  });
+
+  run("a \"which note?\" question left unanswered at Stop is dropped at Start", async t => {
+    await t.agent.submitText("Glycolysis makes two ATP."); await t.agent.drain();
+    t.hooks.route = async () => ({ route: "suppress_note", confidence: 0.79 });
+    await t.agent.submitText("Don't save that."); await t.agent.drain();
+    assert.equal(t.agent.getState().pendingOffer?.kind, "note_suppression");
+    await t.agent.stopSession(); await t.agent.drain(); await t.agent.startSession();
+    assert.equal(t.agent.getState().pendingOffer, undefined);
+  });
+
+  run("words J1 is unsure of replace a pending screen offer, so \"Yes.\" to Moo's question about them captures nothing", async t => {
+    t.hooks.doubt = doubtful;
+    await t.agent.submitText("I'm not sure why the minimum is lower."); await t.agent.drain();
+    const doubt = (t.agent.getState().pendingOffer as { recordId: string }).recordId;
+    // J1 is only fairly sure an ordinary remark is dictation; an explicit "Yes." accepts whatever is asked.
+    t.hooks.route = async input => input.text === "Yes." ? { route: "start_agent", confidence: 1, helpAccepted: true } : { route: "dictate", confidence: 0.7 };
+    await t.agent.submitText("Today we start the chapter on enzymes."); await t.agent.drain();
+    assert.equal(t.calls.spoken.at(-1), "Would you like Moo to answer that?");
+    const offer = t.agent.getState().pendingOffer as { kind: string; recordId: string };
+    assert.equal(offer.kind, "clarification", "The question about the new words replaces the screen offer");
+    assert.notEqual(offer.recordId, doubt);
+    assert.match(transcriptText((await t.brain.getRecord(offer.recordId))!), /chapter on enzymes/);
+    assert.ok(await t.brain.getRecord(doubt), "The doubt stays saved");
+    await t.agent.submitText("Yes."); await t.agent.drain();
+    assert.equal(t.calls.captures, 0);
+    assert.equal(await t.answers(), 1, "The new words are answered");
+  });
+
   run("a corrected doubt turn needs fresh acceptance and captures the corrected words", async t => {
     t.hooks.doubt = doubtful;
     await t.agent.submitText("I'm not sure why sample A's minimum is lower."); await t.agent.drain();

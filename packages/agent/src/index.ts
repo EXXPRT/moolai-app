@@ -375,6 +375,12 @@ export class Agent {
         // A new session starts without the previous conversation, which would otherwise turn new dictation into a
         // reply (MOO-075). One whose answer is still being prepared stays open for that answer.
         if (this.state.conversationId && !this.state.busy) await this.closeConversation(false);
+        // Nor with an offer left unanswered, whose "yes" would answer an earlier thought or capture the screen for it; the thought stays saved.
+        const offer = this.state.pendingOffer;
+        if (offer && ["help", "general_help", "clarification", "note_suppression"].includes(offer.kind)) {
+          this.state.pendingOffer = undefined;
+          this.track(this.trace("offer_dropped", {kind: offer.kind, reason: "new_session"}));
+        }
         const id = this.p.id();
         await this.p.brain.createRecord({ id, kind: "session", createdAt: this.p.now() });
         this.state.sessionId = id;
@@ -906,7 +912,13 @@ export class Agent {
         this.state.pendingOffer = undefined;
         await this.persist();
       }
-      if (!this.state.conversationId && !pending) {
+      // New words replace a screen offer the same way; its thought stays saved. An "mm-hm" to the offer has it asked again.
+      const replaced = !this.state.conversationId && (pending?.kind === "help" || pending?.kind === "general_help") && !fillerOnly(text) && offerUnchanged();
+      if (replaced) {
+        this.state.pendingOffer = undefined;
+        await this.persist();
+      }
+      if (!this.state.conversationId && (!pending || replaced)) {
         const thought = await this.saveThought(segments);
         // J1 is unsure of the action but confident this is the user's own study doubt: spoken doubts mostly
         // route this way, so the clarifying question becomes the screen offer (blocker 5, 19 Oct J1 check).
