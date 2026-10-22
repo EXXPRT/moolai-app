@@ -385,6 +385,9 @@ test("an idle event stream gets a comment every heartbeat that makes no event, a
   }
   const heartbeat = started.mock.calls.find((call) => call.arguments[1] === 20)?.result;
   assert.ok(heartbeat && stopped.mock.calls.some((call) => call.arguments[0] === heartbeat), "closing the server stops the heartbeat");
+  // main.ts passes no heartbeatMs, so the default is what keeps Electron's stream open: well under its 300 s.
+  await (await runtime()).close();
+  assert.equal(started.mock.calls.at(-1)?.arguments[1], 30_000);
 });
 
 test("live provider errors remain errors and never fall back to fixtures", async (t) => {

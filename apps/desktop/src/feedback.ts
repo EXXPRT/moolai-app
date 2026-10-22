@@ -27,8 +27,8 @@ export function readableNotice(value: string): string | undefined {
   if (/^(Transcript saved; thought organization|Source saved; enrichment pending)/.test(value)) return "Your text is saved. The summary could not finish; you can retry it.";
   if (/^Connections unavailable:/.test(value)) return "Connections could not be checked. Your note is still saved.";
   if (/^(Loading local Heart voice|Local Heart voice ready)/.test(value)) return value.startsWith("Loading") ? "Preparing Moo’s voice…" : undefined;
-  // A dropped event stream ("terminated", "other side closed", UND_ERR_*) reconnects by itself.
-  if (/^(?:Error:|TypeError:|Backend \d|fetch failed|Failed to fetch|Agent event connection|Runtime unavailable)|^terminated$|other side closed|UND_ERR_/i.test(value)) return undefined;
+  // A dropped event stream reconnects by itself: hide its bare "terminated" or "other side closed", or an UND_ERR_ code, but not a spoken line using those words.
+  if (/^(?:Error:|TypeError:|Backend \d|fetch failed|Failed to fetch|Agent event connection|Runtime unavailable)|^(?:terminated|other side closed)$|UND_ERR_/i.test(value)) return undefined;
   if (/(?:Kokoro unavailable|Local speech|speech worker|Speech interrupted|Speech superseded|Speech session closed)/i.test(value))
     return /interrupted|superseded|closed/i.test(value) ? undefined : "Moo’s voice is unavailable. The full response is on screen.";
   return value;
