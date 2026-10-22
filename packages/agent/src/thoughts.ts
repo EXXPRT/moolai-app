@@ -20,8 +20,8 @@ interface BufferState {
   operation?: string;
   status?: "pending" | "running" | "failed";
   error?: string;
-  /** Records a failure was copied onto, with its text, so the next successful pass clears those copies. */
-  surfaced?: Record<string,string>;
+  /** Records a failure was copied onto, with its text and the error each carried before, which the next successful pass restores. */
+  surfaced?: Record<string,{error:string;previous?:string}>;
   finalize?: boolean;
   /** A bounded close completed successfully but has more source awaiting explicit continuation. */
   continuationRequired?: boolean;
@@ -387,8 +387,10 @@ export class ThoughtConsolidator {
             const active=await this.p.brain.getRecord(current.activeId);
             if(active){const updated=await this.p.brain.updateRecord(active.id,active.revision,{thoughtStatus:"settled"});if(updated)this.p.emit(updated);}
             current.activeId=undefined;
-            await this.clearSurfaced(current);
           }
+          // A retried failure with nothing left to organize is over, and so are its copies.
+          if(current.status==="failed"){current.status=undefined;current.error=undefined;current.continuationRequired=undefined;}
+          await this.clearSurfaced(current);
           await this.p.brain.setState(key(sessionId),current);
           return undefined;
         }
@@ -522,19 +524,19 @@ export class ThoughtConsolidator {
   }
   private async surfaceError(sessionId: string, state: BufferState) {
     const ids=new Set([sessionId,state.draftId,state.activeId].filter((id):id is string=>!!id));
-    // Noted before the copies are written, so the next successful pass clears them even across a restart.
-    if(state.error){state.surfaced ??= {}; for(const id of ids)state.surfaced[id]=state.error; await this.p.brain.setState(key(sessionId),state);}
+    // Noted before the copies are written, with the error each record carried before them, so the next successful pass restores it even across a restart.
+    if(state.error){state.surfaced ??= {}; for(const id of ids){const r=await this.p.brain.getRecord(id),mark=state.surfaced[id];if(r)state.surfaced[id]={error:state.error,previous:r.error===state.error || r.error===mark?.error?mark?.previous:r.error};} await this.p.brain.setState(key(sessionId),state);}
     // Surface organization failures on the visible note as well as its retained session.
     for(const id of ids) {
       const r=await this.p.brain.getRecord(id);
       if(r && r.error!==state.error) {const updated=await this.p.brain.updateRecord(id,r.revision,{error:state.error});if(updated)this.p.emit(updated);}
     }
   }
-  /** A later pass may file the speech elsewhere, so it clears every copy still showing that failure, and no other error. */
+  /** A later pass may file the speech elsewhere, so every copy still showing that failure gets back the error it replaced, e.g. a failed enrichment's; no other error changes. */
   private async clearSurfaced(state: BufferState) {
-    for(const [id,error] of Object.entries(state.surfaced ?? {})) {
+    for(const [id,{error,previous}] of Object.entries(state.surfaced ?? {})) {
       const r=await this.p.brain.getRecord(id);
-      if(r?.error===error) {const updated=await this.p.brain.updateRecord(id,r.revision,{error:undefined});if(updated)this.p.emit(updated);}
+      if(r?.error===error) {const updated=await this.p.brain.updateRecord(id,r.revision,{error:previous});if(updated)this.p.emit(updated);}
     }
     state.surfaced=undefined;
   }

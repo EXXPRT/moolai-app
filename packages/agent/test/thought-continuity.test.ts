@@ -269,6 +269,29 @@ for (const kind of ["memory", "sqlite"] as const) {
       await f.engine.process("study", true, true);
       assert.equal(f.inputs.length, 2); assert.equal((await f.state()).activeId, undefined);
       assert.equal((await f.brain.getRecord(id))!.error, undefined);
+      const state = await f.state();
+      assert.equal(state.status, undefined, "With nothing left to organize, the retried failure is over");
+      assert.equal(organizingStatus({ status: state.status ?? "collecting", error: state.error, pending: !!state.spans.length, recordId: state.activeId ?? state.draftId }, await f.notes()).label,
+        "All notes organized");
+    } finally { await f.close(); }
+  });
+
+  test(`${kind}: a later pass leaves alone an error that reached the note after the organizer's copy`, async () => {
+    const f = await fixture(kind);
+    try {
+      await f.add(segment("first", "The current review covers capture and playback.")); await f.engine.process("study");
+      const id = (await f.notes())[0]!.id;
+      f.infer = async () => { throw Error("Provider output incomplete"); };
+      await f.add(segment("second", "Separately, the garden needs watering.")); await f.engine.process("study");
+      const note = (await f.brain.getRecord(id))!;
+      assert.match(note.error!, /Provider output incomplete/);
+      // A connection check that fails after the copy writes the note's own error.
+      await f.brain.updateRecord(id, note.revision, { error: "Connections pending: provider unavailable" });
+      f.infer = async input => ({ groups: [{ ...summarized(input, "Garden").groups[0]!, continuesActive: false }], remainder: [] });
+      await f.engine.process("study", false, true);
+      assert.equal((await f.notes()).length, 2); assert.equal((await f.state()).status, undefined);
+      assert.equal((await f.brain.getRecord(id))!.error, "Connections pending: provider unavailable", "Only the organizer's own copy is cleared");
+      assert.equal((await f.brain.getRecord("study"))!.error, undefined);
     } finally { await f.close(); }
   });
 
@@ -430,6 +453,33 @@ for (const kind of ["memory", "sqlite"] as const) {
       assert.equal(notes.length, 2); assert.equal(glaciers.title, "Glaciers"); assert.equal(glaciers.thoughtStatus, "settled");
       assert.equal(state.activeId, glaciers.id); assert.equal(state.status, undefined); assert.equal(settled.thoughtStatus, "settled");
       assert.equal(settled.error, undefined, "The successful pass clears the failure it copied onto the earlier note");
+      assert.equal(organizingStatus({ status: state.status ?? "collecting", error: state.error, pending: !!state.spans.length, recordId: state.activeId ?? state.draftId }, notes).label,
+        "All notes organized");
+    } finally { await f.close(); }
+  });
+
+  test(`${kind}: a retry that files the waiting speech as a new note gives the old note back its own failed enrichment`, async () => {
+    const f = await agentFixture(kind);
+    try {
+      f.organize = input => ({ groups: [{ ...summarized(input, "Wind-driven ocean currents").groups[0]!, ongoing: true }], remainder: [] });
+      f.failTags = true;
+      await f.agent.submitText("Wind-driven ocean currents move warm water toward the poles."); await f.agent.drain();
+      await f.agent.consolidateThoughts(false); await f.agent.drain();
+      const ocean = (await f.notes())[0]!;
+      assert.match(ocean.error!, /Classification unavailable/);
+      f.failTags = false; f.failOrganization = true;
+      await f.agent.submitText("Separately, glaciers carve U-shaped valleys as they advance."); await f.agent.drain();
+      await f.agent.consolidateThoughts(false); await f.agent.drain();
+      assert.match((await f.brain.getRecord(ocean.id))!.error!, /Incomplete organization output/);
+      f.failOrganization = false;
+      f.organize = input => ({ groups: [{ ...summarized(input, "Glaciers").groups[0]!, continuesActive: false }], remainder: [] });
+      await f.agent.retrySummary(ocean.id); await f.agent.drain();
+      assert.equal((await f.notes()).length, 2);
+      assert.match((await f.brain.getRecord(ocean.id))!.error!, /Classification unavailable/, "The note's own failure, and its Retry, outlast the organizer's copy");
+      const tags = f.tags;
+      await f.agent.retrySummary(ocean.id); await f.agent.drain();
+      const notes = await f.notes(), state = await f.state(), settled = notes.find(note => note.id === ocean.id)!;
+      assert.equal(f.tags, tags + 1); assert.equal(settled.quality, "ready"); assert.equal(settled.error, undefined);
       assert.equal(organizingStatus({ status: state.status ?? "collecting", error: state.error, pending: !!state.spans.length, recordId: state.activeId ?? state.draftId }, notes).label,
         "All notes organized");
     } finally { await f.close(); }
