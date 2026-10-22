@@ -2221,6 +2221,7 @@ export class Agent {
     if (summaryOnly) await this.p.brain.setState(`summary-only:${op.id}`, true);
     await this.p.brain.putOperation(op);
     this.track(this.enrich(op, summaryOnly));
+    return true;
   }
   private async enrich(op: PendingOperation, summaryOnly = false) {
     if (this.enriching.has(op.recordId)) return;
@@ -2503,7 +2504,11 @@ export class Agent {
       await this.p.brain.setState(`summary-only:${latest.id}`, true);
       this.track(this.enrich(latest, true));
     }
-    else await this.queueEnrichment(recordId, true);
+    else {
+      // An explicit retry runs even on unchanged input, e.g. a note an earlier organizer failure left flagged.
+      await this.p.brain.setState(`enriched-input:${recordId}`, null);
+      if (!await this.queueEnrichment(recordId, true)) throw new Error("This note can't be summarized again; its source is saved");
+    }
   }
   async retryPending(recordId?: string) {
     if(this.thoughts && (!recordId || recordId === this.state.sessionId)) await this.consolidateThoughts(!this.state.listening,true);

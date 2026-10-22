@@ -49,7 +49,7 @@ for (const adapter of ['memory', 'sqlite']) test(`${adapter}: suppressing one to
       capture:{async capture(){throw Error('No capture');}},speech:{async speak(){},async stop(){}},id:()=> 'unused',now});
     await agent.queueEnrichment(cooling.id);await agent.drain();
     assert.equal(paidCalls,0,'A changed partial source projection cannot be resummarized or certified against obsolete copied text');
-    await agent.retrySummary(cooling.id);await agent.drain();
+    await assert.rejects(agent.retrySummary(cooling.id),/can't be summarized again/);await agent.drain();
     assert.equal(paidCalls,0,'A changed partial source projection cannot be resummarized or certified against obsolete copied text');
     assert.equal((await brain.getRecord(cooling.id))!.quality,'needs_review');
     assert.match((await brain.getRecord(cooling.id))!.error!,/source.*correct|projection/i);

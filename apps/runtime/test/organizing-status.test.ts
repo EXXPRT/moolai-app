@@ -20,3 +20,13 @@ test("the graph says when organizing is running, finished or needs Retry", () =>
   assert.equal(organizingStatus(undefined, [note("plain", { thoughtStatus: undefined, error: "summary failed" })]).label, "All notes organized",
     "Only organized notes count; a standalone summary failure has its own Retry in the reader");
 });
+
+test("a running pass still says Organizing… while older notes need Retry", () => {
+  const older = note("older", { error: "Backend 504: timed out" }), today = note("today", { thoughtStatus: "growing" });
+  assert.deepEqual(organizingStatus({ status: "running", pending: true, recordId: "today" }, [older, today]), { label: "Organizing… · 1 note needs Retry", tone: "busy" });
+  assert.deepEqual(organizingStatus({ status: "collecting", pending: true, recordId: "today" }, [older, note("other", { error: "x" }), today]),
+    { label: "Organizing… · 2 notes need Retry", tone: "busy" });
+  assert.deepEqual(organizingStatus({ status: "failed", pending: true, error: "Generation exceeded", recordId: "today" }, [older, today]),
+    { label: "2 notes need Retry", tone: "attention" }, "A failed current pass with pending speech still shows Retry");
+  assert.deepEqual(organizingStatus({ status: "collecting", pending: false, recordId: "today" }, [today]), { label: "All notes organized", tone: "done" });
+});

@@ -8,6 +8,7 @@ import type { BrainPort, Segment, SourceSpan, ThoughtInput, ThoughtResult } from
 import { ThoughtConsolidator } from "../src/thoughts.js";
 import { Agent } from "../src/index.js";
 import { FixtureProviders } from "../../agent-host/src/providers.js";
+import { organizingStatus } from "../../../apps/desktop/src/organizing-status.js";
 
 const now = () => "2026-10-03T12:00:00Z";
 const segment = (id: string, text: string, revision = 1): Segment =>
@@ -67,11 +68,12 @@ function deferred() {
 async function agentFixture(kind: "memory" | "sqlite") {
   const f = await fixture(kind), providers = new FixtureProviders();
   let counter = 0, routes = 0, summaries = 0, tags = 0, failOrganization = false, failTags = false;
+  let organize = (input: ThoughtInput): ThoughtResult => summarized(input);
   providers.route = async () => { routes++; return { route: "dictate", confidence: 1 }; };
   providers.consolidate = async input => {
     f.inputs.push(structuredClone(input));
     if (failOrganization) throw Error("Incomplete organization output");
-    return summarized(input);
+    return organize(input);
   };
   providers.summarize = async () => { summaries++; throw Error("Do not replace organization with standalone summary"); };
   providers.tag = async () => {
@@ -94,6 +96,7 @@ async function agentFixture(kind: "memory" | "sqlite") {
     get failOrganization() { return failOrganization; }, get failTags() { return failTags; },
     set failOrganization(value: boolean) { failOrganization = value; },
     set failTags(value: boolean) { failTags = value; },
+    get organize() { return organize; }, set organize(next: typeof organize) { organize = next; },
   };
 }
 
@@ -254,6 +257,21 @@ for (const kind of ["memory", "sqlite"] as const) {
     } finally { await f.close(); }
   });
 
+  test(`${kind}: settling the last note clears the organizer error it carried for speech that was withdrawn`, async () => {
+    const f = await fixture(kind);
+    try {
+      await f.add(segment("first", "The current review covers capture and playback.")); await f.engine.process("study");
+      const id = (await f.notes())[0]!.id;
+      f.infer = async () => { throw Error("Provider output incomplete"); };
+      await f.add(segment("second", "Playback should stop when I speak.")); await f.engine.process("study");
+      assert.match((await f.brain.getRecord(id))!.error!, /Provider output incomplete/);
+      await f.restart(); await f.add(segment("second", "", 2));
+      await f.engine.process("study", true, true);
+      assert.equal(f.inputs.length, 2); assert.equal((await f.state()).activeId, undefined);
+      assert.equal((await f.brain.getRecord(id))!.error, undefined);
+    } finally { await f.close(); }
+  });
+
   test(`${kind}: correcting earlier candidate source rejects a delayed extension and retry reads current evidence`, async () => {
     const f = await fixture(kind);
     try {
@@ -389,6 +407,61 @@ for (const kind of ["memory", "sqlite"] as const) {
       assert.equal(f.inputs.length, 1, "An empty thought buffer must not consume the enrichment retry");
       assert.equal(f.tags, 2); assert.equal(f.summaries, 0);
       assert.equal((await f.notes())[0]!.quality, "ready"); assert.equal((await f.notes())[0]!.error, undefined);
+    } finally { await f.close(); }
+  });
+
+  test(`${kind}: a retry that files the waiting speech as a new note clears the old note's organizer error`, async () => {
+    const f = await agentFixture(kind);
+    try {
+      f.organize = input => ({ groups: [{ ...summarized(input, "Wind-driven ocean currents").groups[0]!, ongoing: true }], remainder: [] });
+      await f.agent.submitText("Wind-driven ocean currents move warm water toward the poles."); await f.agent.drain();
+      await f.agent.consolidateThoughts(false); await f.agent.drain();
+      const ocean = (await f.notes())[0]!;
+      assert.equal(ocean.thoughtStatus, "growing");
+      f.failOrganization = true;
+      await f.agent.submitText("Separately, glaciers carve U-shaped valleys as they advance."); await f.agent.drain();
+      await f.agent.consolidateThoughts(false); await f.agent.drain();
+      assert.equal((await f.state()).activeId, ocean.id); assert.match((await f.brain.getRecord(ocean.id))!.error!, /Incomplete organization output/);
+      f.failOrganization = false;
+      f.organize = input => ({ groups: [{ ...summarized(input, "Glaciers").groups[0]!, continuesActive: false }], remainder: [] });
+      await f.agent.retrySummary(ocean.id); await f.agent.drain();
+      const notes = await f.notes(), state = await f.state();
+      const settled = notes.find(note => note.id === ocean.id)!, glaciers = notes.find(note => note.id !== ocean.id)!;
+      assert.equal(notes.length, 2); assert.equal(glaciers.title, "Glaciers"); assert.equal(glaciers.thoughtStatus, "settled");
+      assert.equal(state.activeId, glaciers.id); assert.equal(state.status, undefined); assert.equal(settled.thoughtStatus, "settled");
+      assert.equal(settled.error, undefined, "The successful pass clears the failure it copied onto the earlier note");
+      assert.equal(organizingStatus({ status: state.status ?? "collecting", error: state.error, pending: !!state.spans.length, recordId: state.activeId ?? state.draftId }, notes).label,
+        "All notes organized");
+    } finally { await f.close(); }
+  });
+
+  test(`${kind}: Retry summary on a note an earlier organizer failure left flagged runs its enrichment again`, async () => {
+    const f = await agentFixture(kind);
+    try {
+      await f.agent.submitText("User reaction: the testers liked watching their notes grow."); await f.agent.drain();
+      await f.agent.consolidateThoughts(false); await f.agent.drain(); await f.agent.stopSession(); await f.agent.drain();
+      let note = (await f.notes())[0]!;
+      assert.equal(note.thoughtStatus, "settled"); assert.equal((await f.state()).activeId, undefined);
+      assert.ok(await f.brain.getState(`enriched-input:${note.id}`));
+      // What an earlier build left behind: a settled note no buffer references, still carrying an organizer error.
+      note = (await f.brain.updateRecord(note.id, note.revision, { error: "Error: Backend 422: Invalid thought organization; full transcript retained" }))!;
+      const tags = f.tags;
+      await f.agent.retrySummary(note.id); await f.agent.drain();
+      assert.equal(f.tags, tags + 1, "The explicit retry calls the provider again");
+      assert.equal((await f.brain.getRecord(note.id))!.error, undefined);
+      assert.equal(f.inputs.length, 1); assert.equal(f.summaries, 0);
+    } finally { await f.close(); }
+  });
+
+  test(`${kind}: Retry summary says so when a flagged note can't be enriched again`, async () => {
+    const f = await agentFixture(kind);
+    try {
+      await f.agent.submitText("An archived thought about playback latency."); await f.agent.drain();
+      await f.agent.consolidateThoughts(false); await f.agent.drain(); await f.agent.stopSession(); await f.agent.drain();
+      const note = (await f.notes())[0]!, tags = f.tags;
+      await f.brain.updateRecord(note.id, note.revision, { archived: true, error: "Error: Backend 422: Invalid thought organization; full transcript retained" });
+      await assert.rejects(f.agent.retrySummary(note.id), /can't be summarized again/);
+      await f.agent.drain(); assert.equal(f.tags, tags);
     } finally { await f.close(); }
   });
 }
