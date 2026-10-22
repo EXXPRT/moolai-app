@@ -28,8 +28,8 @@ export function readableNotice(value: string): string | undefined {
   if (/^Connections unavailable:/.test(value)) return "Connections could not be checked. Your note is still saved.";
   if (/^(Loading local Heart voice|Local Heart voice ready)/.test(value)) return value.startsWith("Loading") ? "Preparing Moo’s voice…" : undefined;
   if (/^(?:Error:|TypeError:|Backend \d|fetch failed|Failed to fetch|Agent event connection|Runtime unavailable)/i.test(value)) return undefined;
-  if (/(?:Kokoro unavailable|Local speech|speech worker|Speech interrupted|Speech session closed)/i.test(value))
-    return /interrupted|closed/i.test(value) ? undefined : "Moo’s voice is unavailable. The full response is on screen.";
+  if (/(?:Kokoro unavailable|Local speech|speech worker|Speech interrupted|Speech superseded|Speech session closed)/i.test(value))
+    return /interrupted|superseded|closed/i.test(value) ? undefined : "Moo’s voice is unavailable. The full response is on screen.";
   return value;
 }
 

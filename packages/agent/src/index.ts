@@ -219,6 +219,11 @@ export class Agent {
     }
     this.assertCurrent(signal,epoch);
   }
+  /** The response's own speech waits for the line Moo is saying, such as "I'm listening…", then for the meaning of any
+   * words said over it and for any line said in reply: it is never said over a line, nor lost to words that stopped one. */
+  private async speechPermit(signal?:AbortSignal,epoch?:number) {
+    for(let line:Promise<void>|undefined;line!==this.linePlayback;) {line=this.linePlayback;await line;if(signal && epoch!==undefined)await this.responsePermit(signal,epoch);}
+  }
   constructor(private readonly p: AgentOptions) {
     this.threshold = p.threshold ?? 0.8;
     if (p.generation.consolidate) this.thoughts = new ThoughtConsolidator({
@@ -1288,7 +1293,7 @@ export class Agent {
           await this.p.brain.setState(`work-status:${conversationId}`, `Unresolved: ${errorText(e)}`);
           await this.persist();
           // Voice users hear that the answer did not finish (MOO-060), or why a screenshot could not be taken, after any line Moo is saying; speech never starts over the user.
-          await this.linePlayback;
+          try { await this.speechPermit(controller.signal, epoch); } catch { return; }
           if (!this.attention) await this.speak((e as {spoken?: string})?.spoken ?? ANSWER_FAILED).catch(() => {});
         })
         .finally(async () => {
@@ -1666,7 +1671,7 @@ export class Agent {
           // "Say that again" repeats the refusal, not the answer before it.
           await rememberAnswerNarration(this.p.brain, id, segment, {text: refused, spokenText: refused, toolCalls: []});
           // As for an answer: after Moo's line, never over the user or a pending finish question, and a failed voice is only a notice.
-          await this.linePlayback;
+          await this.speechPermit(signal, epoch);
           if (!this.attention && !this.endAfterWork && this.state.pendingOffer?.kind !== "end_work") {
             try { await this.speak(refused); }
             catch (error) {
@@ -2111,9 +2116,8 @@ export class Agent {
   }
   private async speakAnswer(reply: AgentReply, request = "", beforeSpeak?:()=>Promise<void>, signal?:AbortSignal, epoch?:number) {
     await this.trace("narration_selected", narrationDecision(reply, request));
-    if(signal && epoch!==undefined)await this.responsePermit(signal,epoch);
     // An answer ready early never cuts off the line Moo is still saying, such as "I'm listening…".
-    await this.linePlayback;
+    await this.speechPermit(signal,epoch);
     if(!beforeSpeak){await this.speak(spokenAnswer(reply,request));return;}
     let playback:Promise<void>|undefined;
     await this.serial(async()=> {

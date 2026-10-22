@@ -18,6 +18,8 @@ test("reader notices replace operational details without changing ordinary conve
   assert.equal(readableNotice("TypeError: fetch failed"), undefined);
   assert.equal(readableNotice("Source saved; enrichment pending: Backend 502: incomplete output"), "Your text is saved. The summary could not finish; you can retry it.");
   assert.equal(readableNotice("Would you like Moo to answer that?"), "Would you like Moo to answer that?");
+  // A line Moo cut short with its own next line, such as "I'm listening…" after a reply to the screen offer.
+  assert.equal(readableNotice("Speech superseded"), undefined);
   assert.match(actionMessage("Record changed; reload before editing", "/api/record/example"), /Reopen/);
 });
 

@@ -15,24 +15,26 @@ import {FixtureProviders} from '../../agent-host/src/providers.js';
 const at='2026-10-21T10:00:00.000Z';
 const seg=(id:string,text:string):Segment=>({id,turnId:id,revision:1,speaker:'user',text,final:true,createdAt:at});
 for(const kind of ['memory','sqlite']) {
-  async function rig(options:{resume?:boolean}={}) {
+  async function rig(options:{resume?:boolean,stopEnds?:boolean}={}) {
     const dir=await mkdtemp(join(tmpdir(),'moolai-accidental-'));
     const brain:BrainPort=kind==='memory'?new MemoryBrain():new SQLiteBrain(dir);
-    const p=new FixtureProviders();let n=0,responses=0,captures=0;
+    const p=new FixtureProviders();let n=0,responses=0,captures=0,fails=false;
     const speech={spoken:[] as string[],stops:0,resumes:0,playing:false};
-    const routes:RouteInput[]=[],overrides:Record<string,RouteDecision|Error>={};
+    const routes:RouteInput[]=[],overrides:Record<string,RouteDecision|Error|Promise<RouteDecision>>={};
     const route=p.route.bind(p);p.route=async input=>{routes.push(input);const o=overrides[input.text];if(o instanceof Error)throw o;return o ?? route(input);};
     let release:(()=>void)|undefined;
     let answer:Promise<void>|undefined;
-    // A held speak stays pending until the test releases it, as a reading of minutes does; stop() alone does not settle it.
+    // A held speak stays pending until the test releases it, as a reading of minutes does; stop() alone does not settle
+    // it unless the rig is made with stopEnds, as LocalSpeech.stop() does.
     let hold=false,finish:(()=>void)|undefined;
-    p.respond=async():Promise<AgentReply>=>{responses++;if(answer)await answer;return {text:'Osmosis moves water across a membrane.',toolCalls:[]};};
+    p.respond=async():Promise<AgentReply>=>{responses++;if(answer)await answer;if(fails)throw Error('Model unavailable');return {text:'Osmosis moves water across a membrane.',toolCalls:[]};};
     const port={async speak(text:string){speech.spoken.push(text);if(!hold)return;hold=false;speech.playing=true;await new Promise<void>(r=>finish=r);speech.playing=false;},
-      async stop(){speech.stops++;},...(options.resume===false?{}:{async resume(){speech.resumes++;}})};
+      async stop(){speech.stops++;if(options.stopEnds)finish?.();},...(options.resume===false?{}:{async resume(){speech.resumes++;}})};
     const agent=new Agent({brain,decisions:p,generation:p,search:p,vision:p,capture:{async capture(){captures++;return {mimeType:'image/png',bytes:new Uint8Array([137,80,78,71])};}},speech:port,id:()=>`id-${++n}`,now:()=>at});
     await agent.initialize();await agent.startSession();
     return {brain,agent,speech,routes,overrides,get responses(){return responses;},get captures(){return captures;},
       holdAnswer(){answer=new Promise<void>(r=>release=r);return ()=>{answer=undefined;release?.();};},
+      failAnswer(){fails=true;},
       holdSpeech(){hold=true;return ()=>finish?.();},
       async turn(id:string,text:string){await agent.ingest(seg(id,text));await agent.settleTurn(id);},
       async close(){finish?.();await agent.drain();await brain.close();await rm(dir,{recursive:true,force:true});}};
@@ -56,6 +58,12 @@ for(const kind of ['memory','sqlite']) {
     assert.equal(r.speech.playing,true,'The line has started');
     assert.match(r.speech.spoken.at(-1)!,said);
     return {routed:r.routes.length,stops:r.speech.stops,end};
+  }
+  /** Waits until the answer is published and about to be spoken. */
+  async function answerReady(r:Awaited<ReturnType<typeof rig>>) {
+    const ready=async()=>((await r.brain.getState<{action:string}[]>('interaction-trace')) ?? []).some(e=>e.action==='narration_selected');
+    for(let i=0;i<500&&!await ready();i++)await new Promise(res=>setTimeout(res,2));
+    assert.equal(await ready(),true,'The answer is ready to be spoken');
   }
 
   test(`${kind}: a sound with no words pauses Moo's reading and it resumes`,async()=>{
@@ -348,5 +356,66 @@ for(const kind of ['memory','sqlite']) {
       end();await r.agent.drain();
       assert.equal(r.speech.spoken.at(-1),'Osmosis moves water across a membrane.','Then it is spoken');
     }finally{await r.close();}
+  });
+
+  // Code review, 22 Oct: an answer ready during "I'm listening…" waited only for the line; when real words stopped it,
+  // the answer found the user still being heard and was never said.
+  test(`${kind}: an answer waiting on "I'm listening…" is still said once words that stopped it are handled`,async()=>{
+    const r=await rig({stopEnds:true});let decide!:(d:RouteDecision)=>void;try{
+      r.overrides['Okay.']=new Promise<RouteDecision>(res=>decide=res);
+      await line(r,'ask','Moo, explain osmosis.',/^I'm listening/);
+      await answerReady(r);
+      await r.agent.speechStarted({paused:true});
+      const said=r.turn('ok','Okay.');
+      await until(()=>r.routes.some(x=>x.text==='Okay.'));
+      assert.equal(r.speech.playing,false,'The words stop the line');
+      await new Promise(res=>setTimeout(res,50));
+      decide({route:'no_action',confidence:1});await said;await r.agent.drain();
+      assert.equal(r.speech.spoken.at(-1),'Osmosis moves water across a membrane.','The answer is said after the words are handled');
+    }finally{decide({route:'no_action',confidence:1});await r.close();}
+  });
+
+  test(`${kind}: a status line said in reply to words over "I'm listening…" is not cut off by the waiting answer`,async()=>{
+    const r=await rig({stopEnds:true});try{
+      await line(r,'ask','Moo, explain osmosis.',/^I'm listening/);
+      await answerReady(r);
+      await r.agent.speechStarted({paused:true});
+      const end=r.holdSpeech();
+      assert.equal(await soon(r.turn('status','Are you there?')),true,'The turn queue is free');
+      await until(()=>r.speech.playing);
+      await new Promise(res=>setTimeout(res,50));
+      assert.match(r.speech.spoken.at(-1)!,/^I’m preparing the answer/,'The answer waits for the status line');
+      end();await r.agent.drain();
+      assert.equal(r.speech.spoken.at(-1),'Osmosis moves water across a membrane.','Then it is said');
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: an answer that fails while "I'm listening…" plays is reported after the line and the words said over it`,async()=>{
+    const r=await rig({stopEnds:true});let decide!:(d:RouteDecision)=>void;try{
+      r.failAnswer();r.overrides['Okay.']=new Promise<RouteDecision>(res=>decide=res);
+      await line(r,'ask','Moo, explain osmosis.',/^I'm listening/);
+      await until(()=>!!r.agent.getState().lastError);
+      await new Promise(res=>setTimeout(res,50));
+      assert.match(r.speech.spoken.at(-1)!,/^I'm listening/,'The failure waits for the line');
+      await r.agent.speechStarted({paused:true});
+      const said=r.turn('ok','Okay.');
+      await until(()=>r.routes.some(x=>x.text==='Okay.'));
+      await new Promise(res=>setTimeout(res,50));
+      decide({route:'no_action',confidence:1});await said;await r.agent.drain();
+      assert.match(r.speech.spoken.at(-1)!,/^I couldn't finish that answer/,'Then the failure is said');
+    }finally{decide({route:'no_action',confidence:1});await r.close();}
+  });
+
+  // A line said without a staleness check, such as the finish question, no longer holds the turn queue either.
+  test(`${kind}: "Cancel." said over "Work is still running…?" is acted on at once`,async()=>{
+    const r=await rig(),release=r.holdAnswer();try{
+      await r.turn('ask','Moo, explain osmosis.');
+      assert.equal(r.agent.getState().busy,true);
+      const {stops}=await line(r,'end','Moo, finish conversation.',/^Work is still running/);
+      await r.agent.speechStarted({paused:true});
+      assert.equal(await soon(r.turn('cancel','Cancel.')),true,'The turn queue is free');
+      assert.equal(r.speech.stops,stops+1,'The question is stopped at once');
+      assert.equal(r.agent.getState().conversationId,undefined,'The work is cancelled and the conversation closed');
+    }finally{release();await r.close();}
   });
 }
