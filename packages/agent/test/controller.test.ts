@@ -325,8 +325,11 @@ for (const adapter of ["memory", "sqlite"] as const) {
     hooks.route = async () => { throw new Error("Jev offline"); };
     await assert.rejects(agent.submitText("An orchid thought."), /Jev offline/); await agent.drain();
     hooks.route = route;
+    // The window shows the state Moo last sent, not the Agent's own.
+    let shown = agent.getState().lastError;
+    options.onEvent = event => { if (event.type === "state") shown = event.state?.lastError; };
     const greeted: (string | undefined)[] = [];
-    options.speech.speak = async text => { calls.speech.push(text); if (text.startsWith("I'm listening")) greeted.push(agent.getState().lastError); };
+    options.speech.speak = async text => { calls.speech.push(text); if (text.startsWith("I'm listening")) greeted.push(shown); };
     await agent.submitText("Moo, explain orchids."); await agent.drain();
     assert.deepEqual(greeted, [undefined], "No failure shows while Moo greets the new conversation");
   });
