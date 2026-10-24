@@ -490,7 +490,10 @@ export class Agent {
     await this.persist();
   }
   /** ASR revisions are stored before any classifier or agent can see them. */
-  async ingest(segment: Segment) {
+  async ingest(segment: Segment, typed = false) {
+    // Ian, 24 Oct: a sound or bare call Moo ignores is never shown, so it joins the conversation only once handleTurn acts
+    // on it, and it does not clear "Moo understood". Typed words always show.
+    const noise = !typed && segment.speaker === "user" && (fillerOnly(segment.text) || wakeOnly(segment.text));
     return this.serial(async () => {
       if (!this.state.sessionId) await this.startSession();
       const source = await this.p.brain.upsertSegment(
@@ -498,7 +501,7 @@ export class Agent {
         segment,
       );
       this.emit({ type: "record", record: source });
-      if (segment.speaker === "user" && this.state.understoodRequest && this.state.understoodRequest.turnId !== segment.turnId) {
+      if (!noise && segment.speaker === "user" && this.state.understoodRequest && this.state.understoodRequest.turnId !== segment.turnId) {
         this.state.understoodRequest = undefined;
         await this.persist();
       }
@@ -513,11 +516,12 @@ export class Agent {
       if(this.thoughts && source.segments.some(s=>s.id===segment.id && s.revision>0) &&
         await this.p.brain.getState(`thought-eligible:${segment.id}`))
         await this.thoughts.append(source.id,[segment]);
-      const owner =
-        (await this.p.brain.getState<string>(
-          `turn-record:${segment.turnId}`,
-        )) ?? this.state.conversationId;
-      if (owner) {
+      const recorded = await this.p.brain.getState<string>(
+        `turn-record:${segment.turnId}`,
+      );
+      const owner = recorded ?? this.state.conversationId;
+      // A preview already shown is still replaced by its final.
+      if (owner && (!noise || recorded)) {
         const record = await this.p.brain.upsertSegment(owner, segment);
         this.emit({ type: "record", record });
         await this.p.brain.setState(`turn-record:${segment.turnId}`, owner);
@@ -539,7 +543,7 @@ export class Agent {
       text: text.trim(),
       final: true,
       createdAt: this.p.now(),
-    });
+    }, true);
     try { await this.settleTurn(turnId); }
     catch (error) { throw new Error(`Saved; Moo couldn't act on it: ${errorText(error)}`); }
   }
@@ -708,7 +712,8 @@ export class Agent {
       return;
     }
     if (this.state.conversationId) {
-      // These segments may have arrived while the invocation's J1 request was still pending.
+      // These segments may have arrived while the invocation's J1 request was still pending; a sound or bare call Moo
+      // acts on is first shown here, before any reply.
       let conversation = await this.p.brain.getRecord(
         this.state.conversationId,
       );
@@ -1410,8 +1415,11 @@ export class Agent {
     await execution?.initializeEvidence(this.p.brain, id);
     const workflow = this.p.responseExperiment === "workflow";
     const experimental = !!this.p.responseExperiment || !!seed;
-    const priorSpeech = production && this.thoughts && this.state.sessionId
-      ? recentSpeechContext(await this.p.brain.getRecord(this.state.sessionId), record.segments, sourceTurn) : undefined;
+    const session = production && this.thoughts && this.state.sessionId ? await this.p.brain.getRecord(this.state.sessionId) : undefined;
+    // Sounds and bare calls Moo ignored are kept out of the conversation, so this block would fill its five turns with them;
+    // the request itself, which may be "Okay Moo." accepting an offer, still anchors it.
+    const priorSpeech = session && recentSpeechContext({...session, segments: session.segments.filter(s => s.turnId === sourceTurn?.turnId ||
+      !(s.speaker === "user" && (fillerOnly(s.text) || wakeOnly(s.text))))}, record.segments, sourceTurn);
     let closureReason: string | undefined;
     const messages: ChatMessage[] = [
       {

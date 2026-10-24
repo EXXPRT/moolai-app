@@ -4,7 +4,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {MemoryBrain,SQLiteBrain} from '../../brain/src/index.js';
-import type {AgentReply,BrainPort,RouteDecision,RouteInput,Segment} from '../../contracts/src/index.js';
+import type {AgentReply,BrainPort,ChatMessage,RouteDecision,RouteInput,Segment} from '../../contracts/src/index.js';
 import {Agent} from '../src/index.js';
 import {FixtureProviders} from '../../agent-host/src/providers.js';
 
@@ -20,19 +20,19 @@ for(const kind of ['memory','sqlite']) {
     const brain:BrainPort=kind==='memory'?new MemoryBrain():new SQLiteBrain(dir);
     const p=new FixtureProviders();let n=0,responses=0,captures=0,fails=false,clock=Date.parse(at);
     const speech={spoken:[] as string[],stops:0,resumes:0,playing:false};
-    const routes:RouteInput[]=[],overrides:Record<string,RouteDecision|Error|Promise<RouteDecision>>={};
+    const routes:RouteInput[]=[],overrides:Record<string,RouteDecision|Error|Promise<RouteDecision>>={},prompts:ChatMessage[][]=[];
     const route=p.route.bind(p);p.route=async input=>{routes.push(input);const o=overrides[input.text];if(o instanceof Error)throw o;return o ?? route(input);};
     let release:(()=>void)|undefined;
     let answer:Promise<void>|undefined;
     // A held speak stays pending until the test releases it, as a reading of minutes does; stop() alone does not settle
     // it unless the rig is made with stopEnds, as LocalSpeech.stop() does.
     let hold=false,finish:(()=>void)|undefined;
-    p.respond=async():Promise<AgentReply>=>{responses++;if(answer)await answer;if(fails)throw Error('Model unavailable');return {text:'Osmosis moves water across a membrane.',toolCalls:[]};};
+    p.respond=async(messages):Promise<AgentReply>=>{responses++;prompts.push(messages);if(answer)await answer;if(fails)throw Error('Model unavailable');return {text:'Osmosis moves water across a membrane.',toolCalls:[]};};
     const port={async speak(text:string){speech.spoken.push(text);if(!hold)return;hold=false;speech.playing=true;await new Promise<void>(r=>finish=r);speech.playing=false;},
       async stop(){speech.stops++;if(options.stopEnds)finish?.();},...(options.resume===false?{}:{async resume(){speech.resumes++;}})};
     const agent=new Agent({brain,decisions:p,generation:p,search:p,vision:p,capture:{async capture(){captures++;return {mimeType:'image/png',bytes:new Uint8Array([137,80,78,71])};}},speech:port,id:()=>`id-${++n}`,now:()=>new Date(clock).toISOString()});
     await agent.initialize();await agent.startSession();
-    return {brain,agent,speech,routes,overrides,get responses(){return responses;},get captures(){return captures;},
+    return {brain,agent,speech,routes,overrides,prompts,get responses(){return responses;},get captures(){return captures;},
       holdAnswer(){answer=new Promise<void>(r=>release=r);return ()=>{answer=undefined;release?.();};},
       failAnswer(){fails=true;},
       holdSpeech(){hold=true;return ()=>finish?.();},
@@ -616,5 +616,99 @@ for(const kind of ['memory','sqlite']) {
       assert.equal(r.speech.stops,stops+1,'The question is stopped at once');
       assert.equal(r.agent.getState().conversationId,undefined,'The work is cancelled and the conversation closed');
     }finally{release();await r.close();}
+  });
+
+  // Ian, 23-24 Oct: the chat showed "You: Moo." and "You: Uh huh." for sounds Moo ignored, and he asked that none be shown.
+  test(`${kind}: sounds and bare calls heard while Moo reads stay out of the conversation, which still shows words said then, and the session record and the trace keep them`,async()=>{
+    const r=await rig();try{
+      await reading(r);
+      const conversationId=r.agent.getState().conversationId!,sounds=['Moo.','Phew.','Okay Moo.','Uh huh.'];
+      for(const [i,sound] of sounds.entries()) {await r.agent.speechStarted({paused:true});await soon(r.turn(`sound${i}`,sound));}
+      const conversation=(await r.brain.getRecord(conversationId))!,session=(await r.brain.getRecord(r.agent.getState().sessionId!))!;
+      const trace=(await r.brain.getState<{action:string;turnId?:string}[]>('interaction-trace'))!;
+      for(const [i,sound] of sounds.entries()) {
+        assert.ok(!conversation.segments.some(s=>s.turnId===`sound${i}`),`"${sound}" is not in the conversation`);
+        assert.ok(session.segments.some(s=>s.turnId===`sound${i}`&&s.text===sound),`"${sound}" stays in the session record`);
+        assert.ok(trace.some(e=>e.action==='filler_ignored'&&e.turnId===`sound${i}`),`"${sound}" is traced as ignored`);
+      }
+      await r.agent.speechStarted({paused:true});await soon(r.turn('real','Wait, what about osmosis in plant roots?'));
+      assert.ok((await r.brain.getRecord(conversationId))!.segments.some(s=>s.turnId==='real'&&s.text==='Wait, what about osmosis in plant roots?'),'Words show');
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: a sound heard while Moo prepares an answer stays out of the conversation, and the answer is still published`,async()=>{
+    const r=await rig(),finish=r.holdAnswer();try{
+      await r.turn('ask','Moo, explain osmosis.');
+      assert.equal(r.agent.getState().busy,true);
+      await r.agent.speechStarted();await r.turn('noise','Mm.');
+      finish();await r.agent.drain();
+      const conversation=(await r.brain.getRecord(r.agent.getState().conversationId!))!;
+      assert.ok(!conversation.segments.some(s=>s.turnId==='noise'),'"Mm." is not in the conversation');
+      assert.ok(conversation.segments.some(s=>s.speaker==='assistant'&&s.text==='Osmosis moves water across a membrane.'),'The answer is published');
+    }finally{finish();await r.close();}
+  });
+
+  test(`${kind}: a preview that grows into words shows them, and a preview already shown is replaced by its final, not left transcribing`,async()=>{
+    const r=await rig(),finish=r.holdAnswer();try{
+      await r.turn('ask','Moo, explain osmosis.');
+      assert.equal(r.agent.getState().busy,true);
+      r.overrides['Moo, wait.']={route:'no_action',confidence:1};
+      await r.agent.speechStarted();
+      await r.agent.ingest({...seg('p','Moo'),final:false});await r.agent.ingest({...seg('p','Moo, wait.'),revision:2});await r.agent.settleTurn('p');
+      await r.agent.speechStarted();
+      await r.agent.ingest({...seg('q','Wait'),final:false});await r.agent.ingest({...seg('q','Mm.'),revision:2});await r.agent.settleTurn('q');
+      const conversation=(await r.brain.getRecord(r.agent.getState().conversationId!))!;
+      const shown=(turnId:string)=>conversation.segments.filter(s=>s.turnId===turnId).map(s=>[s.text,s.revision,s.final]);
+      assert.deepEqual(shown('p'),[['Moo, wait.',2,true]],'The words show');
+      assert.deepEqual(shown('q'),[['Mm.',2,true]],'Not a preview left transcribing');
+    }finally{finish();await r.close();}
+  });
+
+  test(`${kind}: a typed “Mm.” while Moo works shows in the conversation, though it is not routed`,async()=>{
+    const r=await rig(),finish=r.holdAnswer();try{
+      await r.turn('ask','Moo, explain osmosis.');
+      assert.equal(r.agent.getState().busy,true);
+      const routed=r.routes.length;
+      await r.agent.submitText('Mm.');
+      assert.ok((await r.brain.getRecord(r.agent.getState().conversationId!))!.segments.some(s=>s.speaker==='user'&&s.text==='Mm.'),'Typed words always show');
+      assert.equal(r.routes.length,routed,'J1 is not asked');
+    }finally{finish();await r.close();}
+  });
+
+  test(`${kind}: a bare call Moo answers in an idle conversation shows above “I’m here and listening.”, and not before it is answered`,async()=>{
+    const r=await rig();try{
+      await r.turn('ask','Moo, explain osmosis.');await r.agent.drain();
+      const conversationId=r.agent.getState().conversationId!;
+      await r.agent.ingest(seg('call','Moo.'));
+      assert.ok(!(await r.brain.getRecord(conversationId))!.segments.some(s=>s.turnId==='call'),'Moo might still ignore it');
+      await r.agent.settleTurn('call');await r.agent.drain();
+      assert.deepEqual((await r.brain.getRecord(conversationId))!.segments.slice(-2).map(s=>[s.speaker,s.text]),[['user','Moo.'],['assistant','I’m here and listening.']]);
+    }finally{await r.close();}
+  });
+
+  // Code review, 24 Oct: Ultra's recent-speech block keeps the five newest turns outside the conversation, so sounds kept out
+  // of it would push out the dictation that block is for.
+  test(`${kind}: sounds hidden during a reading are not sent with the next request, and dictation said before the conversation still is`,async()=>{
+    const r=await rig();try{
+      await r.turn('note','Sample A kept 12 kPa.');await r.agent.drain();
+      const {end}=await reading(r),sounds=['Moo.','Phew.','Uh huh.','Hm.','Okay Moo.'];
+      for(const [i,sound] of sounds.entries()) {await r.agent.speechStarted({paused:true});await soon(r.turn(`sound${i}`,sound));}
+      end();await r.agent.drain();
+      await r.turn('more','And what about sample B?');await r.agent.drain();
+      const sent=r.prompts.at(-1)!.map(m=>m.content);
+      assert.match(sent.find(c=>c.startsWith('Recent retained dictation')) ?? '',/Sample A kept 12 kPa\./,'The dictation is sent');
+      for(const sound of sounds) assert.ok(!sent.some(c=>c.includes(`"text":"${sound}"`)),`"${sound}" is not sent`);
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: “Okay Moo.” accepting “Would you like Moo to answer that?” is answered with the dictation said before it`,async()=>{
+    const r=await rig();try{
+      const request='I explain how the conveyor belt works in detail.';
+      r.overrides[request]={route:'start_agent',confidence:.45};
+      await r.turn('note','Sample A kept 12 kPa.');await r.turn('ask',request);await r.agent.drain();
+      await r.turn('yes','Okay Moo.');await r.agent.drain();
+      assert.equal(r.responses,1,'The request is answered');
+      assert.match(r.prompts.at(-1)!.map(m=>m.content).find(c=>c.startsWith('Recent retained dictation')) ?? '',/Sample A kept 12 kPa\./);
+    }finally{await r.close();}
   });
 }

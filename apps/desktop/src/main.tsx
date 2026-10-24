@@ -3,6 +3,7 @@ import { BrainWorkspace } from "./BrainWorkspace.js";
 import { useChatFollow } from "./useChatFollow.js";
 import React, { useEffect, useRef, useState } from "react";
 import { actionMessage, connectionAfterRefresh, processingMessage, readableNotice, clearAcknowledgedDraft, stopControl, type ConnectionStatus } from "./feedback.js";
+import { chatSegments } from "./chat-segments.js";
 import { createRoot } from "react-dom/client";
 import type {
   AgentEvent,
@@ -137,7 +138,7 @@ function App() {
     (item) => item.id === state?.conversationId,
   );
   const transcript = conversation || session;
-  const visibleSegments = transcript?.segments.filter(segment => segment.text.trim()) ?? [];
+  const visibleSegments = chatSegments(transcript);
   const follow = useChatFollow(transcriptPane, `${transcript?.id ?? ""}:${transcript?.sourceRevision ?? 0}`);
   const micRequested = Boolean(snapshot?.native?.requestedOn || snapshot?.native?.enabled);
   const processingAvailable = snapshot?.processing?.status === "available";

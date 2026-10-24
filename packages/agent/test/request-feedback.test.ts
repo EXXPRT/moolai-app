@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {Agent} from '../src/index.js';
 import {loadEvidence, rememberEvidence} from '../src/evidence.js';
 import {MemoryBrain, SQLiteBrain} from '../../brain/src/index.js';
-import {rig} from '../../../experiments/agent-closeout/support.js';
+import {rig, segment} from '../../../experiments/agent-closeout/support.js';
 import type {AgentReply} from '../../contracts/src/index.js';
 
 for (const adapter of ['memory','sqlite']) {
@@ -113,6 +113,18 @@ for (const adapter of ['memory','sqlite']) {
    await f.agent.submitText('Ask John, no Ian.');await f.agent.drain();assert.ok(f.agent.getState().understoodRequest);
    f.hooks.decisions.route=async()=>({route:'unclear',confidence:1});
    await f.agent.submitText('Wait, maybe something else.');await f.agent.drain();
+   assert.equal(f.agent.getState().understoodRequest,undefined);
+  }finally{await f.close();}
+ });
+ // Code review, 24 Oct: a sound Moo ignores is no longer shown in the chat, so it must not clear "Moo understood" either.
+ test(`${adapter}: a sound or bare call heard after the answer leaves the interpretation shown, and words clear it`,async()=>{
+  const f=await setup();try {
+   f.hooks.generation.respond=async()=>({text:'I will use the corrected target.',understoodRequest:'Ask Ian.',toolCalls:[]});
+   await f.agent.submitText('Moo, ask John, no Ian.');await f.agent.drain();
+   for(const [id,text] of [['mm','Mm.'],['call','Moo.']]) {await f.agent.ingest(segment(id!,text!));await f.agent.settleTurn(id!);}
+   await f.agent.drain();
+   assert.equal(f.agent.getState().understoodRequest?.text,'Ask Ian.');
+   await f.agent.ingest(segment('words','Now explain a different subject.'));
    assert.equal(f.agent.getState().understoodRequest,undefined);
   }finally{await f.close();}
  });
