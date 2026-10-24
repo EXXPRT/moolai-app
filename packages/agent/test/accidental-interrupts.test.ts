@@ -18,7 +18,7 @@ for(const kind of ['memory','sqlite']) {
   async function rig(options:{resume?:boolean,stopEnds?:boolean}={}) {
     const dir=await mkdtemp(join(tmpdir(),'moolai-accidental-'));
     const brain:BrainPort=kind==='memory'?new MemoryBrain():new SQLiteBrain(dir);
-    const p=new FixtureProviders();let n=0,responses=0,captures=0,fails=false;
+    const p=new FixtureProviders();let n=0,responses=0,captures=0,fails=false,clock=Date.parse(at);
     const speech={spoken:[] as string[],stops:0,resumes:0,playing:false};
     const routes:RouteInput[]=[],overrides:Record<string,RouteDecision|Error|Promise<RouteDecision>>={};
     const route=p.route.bind(p);p.route=async input=>{routes.push(input);const o=overrides[input.text];if(o instanceof Error)throw o;return o ?? route(input);};
@@ -30,12 +30,14 @@ for(const kind of ['memory','sqlite']) {
     p.respond=async():Promise<AgentReply>=>{responses++;if(answer)await answer;if(fails)throw Error('Model unavailable');return {text:'Osmosis moves water across a membrane.',toolCalls:[]};};
     const port={async speak(text:string){speech.spoken.push(text);if(!hold)return;hold=false;speech.playing=true;await new Promise<void>(r=>finish=r);speech.playing=false;},
       async stop(){speech.stops++;if(options.stopEnds)finish?.();},...(options.resume===false?{}:{async resume(){speech.resumes++;}})};
-    const agent=new Agent({brain,decisions:p,generation:p,search:p,vision:p,capture:{async capture(){captures++;return {mimeType:'image/png',bytes:new Uint8Array([137,80,78,71])};}},speech:port,id:()=>`id-${++n}`,now:()=>at});
+    const agent=new Agent({brain,decisions:p,generation:p,search:p,vision:p,capture:{async capture(){captures++;return {mimeType:'image/png',bytes:new Uint8Array([137,80,78,71])};}},speech:port,id:()=>`id-${++n}`,now:()=>new Date(clock).toISOString()});
     await agent.initialize();await agent.startSession();
     return {brain,agent,speech,routes,overrides,get responses(){return responses;},get captures(){return captures;},
       holdAnswer(){answer=new Promise<void>(r=>release=r);return ()=>{answer=undefined;release?.();};},
       failAnswer(){fails=true;},
       holdSpeech(){hold=true;return ()=>finish?.();},
+      /** Moves the clock on, as when the user waits before calling again. */
+      advance(ms:number){clock+=ms;},
       async turn(id:string,text:string){await agent.ingest(seg(id,text));await agent.settleTurn(id);},
       async close(){finish?.();await agent.drain();await brain.close();await rm(dir,{recursive:true,force:true});}};
   }
@@ -111,6 +113,36 @@ for(const kind of ['memory','sqlite']) {
     }finally{await r.close();}
   });
 
+  // Ian, 24 Oct: a bare call while Moo works with nothing playing (23 Oct: "Moo." during a 90 s screen read) gets a status line.
+  test(`${kind}: a bare call while an answer is prepared in silence gets a status line once, without J1, and the answer follows it`,async()=>{
+    const r=await rig(),finish=r.holdAnswer();try{
+      await r.turn('ask','Moo, explain osmosis.');
+      assert.equal(r.agent.getState().busy,true);
+      const routed=r.routes.length,said=r.speech.spoken.length;
+      await r.agent.speechStarted();await r.turn('call','Moo.');
+      assert.deepEqual(r.speech.spoken.slice(said),['I’m preparing the answer to your request.']);
+      await r.agent.speechStarted();await r.turn('again','Moo.');
+      assert.deepEqual(r.speech.spoken.slice(said),['I’m preparing the answer to your request.'],'A second call is not answered again');
+      assert.equal(r.routes.length,routed,'J1 is not asked');
+      finish();await r.agent.drain();
+      assert.deepEqual(r.speech.spoken.slice(said),['I’m preparing the answer to your request.','Osmosis moves water across a membrane.'],'The answer follows the line');
+      const conversation=(await r.brain.getRecord(r.agent.getState().conversationId!))!;
+      assert.ok(conversation.segments.some(s=>s.speaker==='assistant'&&s.text==='Osmosis moves water across a membrane.'),'The answer is published');
+    }finally{finish();await r.close();}
+  });
+
+  test(`${kind}: a bare call while the finish question waits on running work is not taken as its answer`,async()=>{
+    const r=await rig(),release=r.holdAnswer();try{
+      await r.turn('ask','Moo, explain osmosis.');await r.turn('end','Moo, finish conversation.');
+      assert.equal(r.agent.getState().pendingOffer?.kind,'end_work');
+      const routed=r.routes.length,said=r.speech.spoken.length;
+      await r.turn('call','Moo.');
+      assert.equal(r.routes.length,routed,'J1 is not asked');
+      assert.deepEqual(r.speech.spoken.slice(said),[],'Nothing is said');
+      assert.equal(r.agent.getState().pendingOffer?.kind,'end_work','The question still waits');
+    }finally{release();await r.close();}
+  });
+
   test(`${kind}: with no conversation open, "Moo." is still routed`,async()=>{
     const r=await rig();try{
       await r.turn('call','Moo.');await r.agent.drain();
@@ -118,17 +150,73 @@ for(const kind of ['memory','sqlite']) {
     }finally{await r.close();}
   });
 
-  test(`${kind}: in an open conversation with Moo idle, "Um." and "Moo." are not routed and Moo says nothing`,async()=>{
+  test(`${kind}: in an open conversation with Moo idle, "Um." and "Moo." are not routed, and only "Moo." is answered`,async()=>{
     const r=await rig();try{
       await r.turn('ask','Moo, explain osmosis.');await r.agent.drain();
       const routed=r.routes.length,said=r.speech.spoken.length;
       r.overrides['Um.']={route:'no_action',confidence:.45};
       await r.turn('um','Um.');await r.turn('noise','Moo.');await r.agent.drain();
       assert.equal(r.routes.length,routed,'J1 is never asked about the fillers');
-      assert.deepEqual(r.speech.spoken.slice(said),[],'Nothing is spoken');
+      assert.deepEqual(r.speech.spoken.slice(said),['I’m here and listening.'],'Nothing is said to "Um.", and "Moo." is answered');
       const texts=(await r.brain.getRecord(r.agent.getState().sessionId!))!.segments.map(s=>s.text);
       assert.ok(texts.includes('Um.') && texts.includes('Moo.'),'The words stay in the transcript');
       assert.ok(r.agent.getState().conversationId,'The conversation stays open');
+    }finally{await r.close();}
+  });
+
+  // Ian, 23-24 Oct: a bare "Moo." or "Hey Moo." said with Moo idle in an open conversation was ignored 4 times out of 4.
+  test(`${kind}: with Moo idle in an open conversation, a bare call gets “I’m here and listening.” at once, without J1 or a new answer`,async()=>{
+    const r=await rig();try{
+      await r.turn('ask','Moo, explain osmosis.');await r.agent.drain();
+      const conversationId=r.agent.getState().conversationId!;
+      for(const [i,call] of ['Moo.','Hey Moo.','Hey, Moo.','Okay Moo.','Moo?','Um, Moo.'].entries()) {
+        const routed=r.routes.length,said=r.speech.spoken.length,responses=r.responses;
+        r.advance(11000);await r.turn(`call${i}`,call);await r.agent.drain();
+        assert.deepEqual(r.speech.spoken.slice(said),['I’m here and listening.'],call);
+        assert.equal(r.routes.length,routed,`J1 is not asked about "${call}"`);
+        assert.equal(r.responses,responses,'No new answer');
+        const last=(await r.brain.getRecord(conversationId))!.segments.slice(-2).map(s=>[s.speaker,s.text]);
+        assert.deepEqual(last,[['user',call],['assistant','I’m here and listening.']],'The call, then Moo’s line');
+        const trace=(await r.brain.getState<{action:string;turnId?:string}[]>('interaction-trace'))!;
+        assert.ok(trace.some(e=>e.action==='wake_acknowledged'&&e.turnId===`call${i}`));
+        assert.equal(r.agent.getState().conversationId,conversationId,'The conversation stays open');
+        assert.equal(r.agent.getState().pendingOffer,undefined,'Nothing is offered');
+      }
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: after an answer that could not finish, a bare call in its conversation says so`,async()=>{
+    const r=await rig();try{
+      r.failAnswer();await r.turn('ask','Moo, explain osmosis.');await r.agent.drain();
+      assert.equal(r.agent.getState().lastError,'Model unavailable');
+      const said=r.speech.spoken.length;
+      await r.turn('call','Moo.');await r.agent.drain();
+      assert.deepEqual(r.speech.spoken.slice(said),['I’m here. The last response could not finish; your request is saved.']);
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: two bare calls back to back in an idle conversation get one reply, and words since let the next be answered`,async()=>{
+    const r=await rig();try{
+      await r.turn('ask','Moo, explain osmosis.');await r.agent.drain();
+      const routed=r.routes.length,said=r.speech.spoken.length;
+      await r.turn('call','Moo.');await r.turn('echo','Moo.');await r.agent.drain();
+      assert.deepEqual(r.speech.spoken.slice(said),['I’m here and listening.'],'One reply');
+      assert.equal(r.routes.length,routed,'Neither call reaches J1');
+      await r.turn('more','And how does it differ from diffusion?');await r.agent.drain();
+      const after=r.speech.spoken.length;
+      await r.turn('again','Moo.');await r.agent.drain();
+      assert.deepEqual(r.speech.spoken.slice(after),['I’m here and listening.'],'Words since the reply let the next call be answered');
+    }finally{await r.close();}
+  });
+
+  test(`${kind}: in an open conversation with Moo idle, "Uh huh." still reaches J1 and "Phew." is not routed`,async()=>{
+    const r=await rig();try{
+      await r.turn('ask','Moo, explain osmosis.');await r.agent.drain();
+      const routed=r.routes.length,said=r.speech.spoken.length;
+      r.overrides['Uh huh.']={route:'no_action',confidence:.9};
+      await r.turn('agree','Uh huh.');await r.turn('phew','Phew.');await r.agent.drain();
+      assert.deepEqual(r.routes.slice(routed).map(x=>x.text),['Uh huh.'],'Like "mm-hm", an "uh huh" may answer something');
+      assert.deepEqual(r.speech.spoken.slice(said),[],'Nothing is said');
     }finally{await r.close();}
   });
 
@@ -184,16 +272,78 @@ for(const kind of ['memory','sqlite']) {
     }finally{await r.close();}
   });
 
-  test(`${kind}: with no conversation open, an unsure "Moo." asks nothing and saves no thought`,async()=>{
+  test(`${kind}: with no conversation open, an unsure "Moo." gets “I’m here and listening.”, asks nothing and saves no thought`,async()=>{
     const r=await rig();try{
       r.overrides['Moo.']={route:'unclear',confidence:.3};
       await r.turn('call','Moo.');await r.agent.drain();
       assert.equal(r.routes.at(-1)!.text,'Moo.');
+      assert.deepEqual(r.speech.spoken,['I’m here and listening.']);
       assert.ok(!r.speech.spoken.some(t=>/answer that/.test(t)),'No "Would you like Moo to answer that?"');
       assert.equal(r.agent.getState().pendingOffer,undefined);
       assert.ok(!(await r.brain.listRecords()).some(x=>x.kind==='dictation'&&x.segments.some(s=>s.text==='Moo.')),'No saved "Moo." thought');
       assert.equal(await r.brain.getState('handled:call'),'call:1','The turn is handled, not routed again');
       assert.deepEqual((await r.brain.listOperations()).filter(o=>o.turnId==='call').map(o=>o.status),['done']);
+    }finally{await r.close();}
+  });
+
+  // 20 Sep: live J1 routed a bare idle "Moo." no_action 0.76, which ended in silence.
+  const callDecisions:RouteDecision[]=[{route:'no_action',confidence:.76},{route:'dictate',confidence:1,doubt:.95}];
+  for(const decision of callDecisions)
+    test(`${kind}: with no conversation open, a bare "Moo." J1 routes ${decision.route} gets “I’m here and listening.”, and nothing is opened, saved or offered`,async()=>{
+      const r=await rig();try{
+        r.overrides['Moo.']=decision;
+        await r.turn('call','Moo.');await r.turn('again','Moo.');await r.agent.drain();
+        assert.equal(r.routes.at(-1)!.text,'Moo.','J1 still hears it');
+        assert.deepEqual(r.speech.spoken,['I’m here and listening.'],'A repeat at once gets nothing');
+        assert.equal(r.agent.getState().conversationId,undefined,'No conversation is opened');
+        assert.equal(r.agent.getState().pendingOffer,undefined,'Nothing is offered');
+        assert.ok(!(await r.brain.listRecords()).some(x=>x.kind==='dictation'&&x.segments.some(s=>s.text==='Moo.')),'No saved "Moo." thought');
+      }finally{await r.close();}
+    });
+
+  test(`${kind}: with no conversation open, “Okay Moo.” J1 is sure of opens the conversation with the greeting, and starts no answer`,async()=>{
+    const r=await rig();try{
+      r.overrides['Okay Moo.']={route:'start_agent',confidence:1};
+      await r.turn('call','Okay Moo.');await r.agent.drain();
+      assert.ok(r.agent.getState().conversationId,'The conversation opens');
+      assert.deepEqual(r.speech.spoken,["I'm listening. Say ‘Moo, finish conversation’ when you're done."]);
+      assert.equal(r.responses,0,'The call itself is not answered');
+    }finally{await r.close();}
+  });
+
+  // Ian, 23 Oct: "Moo, explain how the global conveyor belt works in detail.", heard as "Moo. I explain…" (J1 start_agent
+  // 0.7), was asked "Would you like Moo to answer that?". On 24 Oct he asked that a request starting with "Moo" be answered.
+  test(`${kind}: with no conversation open, a request that starts with "Moo" is answered when J1 is fairly sure, and asked about otherwise`,async()=>{
+    const said=async(text:string,decision:RouteDecision)=>{
+      const r=await rig();try{
+        r.overrides[text]=decision;await r.turn('ask',text);await r.agent.drain();
+        return {spoken:r.speech.spoken,responses:r.responses};
+      }finally{await r.close();}
+    };
+    const request='Moo. I explain how the conveyor belt works in detail.';
+    const answered=await said(request,{route:'start_agent',confidence:.7});
+    assert.equal(answered.responses,1,'It is answered');
+    assert.ok(!answered.spoken.includes('Would you like Moo to answer that?'),'Without a question');
+    assert.deepEqual((await said(request,{route:'start_agent',confidence:.45})).spoken,['Would you like Moo to answer that?'],'Below 0.5 it is asked about');
+    assert.deepEqual((await said('I explain how the conveyor belt works in detail.',{route:'start_agent',confidence:.7})).spoken,
+      ['Would you like Moo to answer that?'],'Without "Moo" it is asked about');
+    const doubt=await said("Moo, I'm not sure why sample A's minimum pressure is lower than sample B's.",{route:'start_agent',confidence:.6,doubt:.95});
+    assert.deepEqual(doubt.spoken,['I saved your thought. Would you like me to look at your screen to help with it?'],'A stated doubt still gets the screen offer');
+    assert.equal(doubt.responses,0);
+  });
+
+  test(`${kind}: a bare "Moo." while the screen offer waits for an answer leaves it open, and "Yes please." captures once`,async()=>{
+    const r=await rig();try{
+      const doubt="Sample A kept a lower minimum. I'm not sure why.";
+      r.overrides[doubt]={route:'dictate',confidence:1,doubt:.95};
+      await r.turn('doubt',doubt);await r.agent.drain();
+      const offer=r.agent.getState().pendingOffer;
+      assert.equal(offer?.kind,'help');
+      r.overrides['Moo.']={route:'no_action',confidence:1};
+      await r.turn('call','Moo.');await r.agent.drain();
+      assert.deepEqual(r.agent.getState().pendingOffer,offer,'The offer stays open');
+      await r.turn('yes','Yes please.');await r.agent.drain();
+      assert.equal(r.captures,1,'The screen is captured once');
     }finally{await r.close();}
   });
 
@@ -278,6 +428,24 @@ for(const kind of ['memory','sqlite']) {
       end();await r.agent.drain();
       await r.turn('idle','Mm-hm.');await r.agent.drain();
       assert.deepEqual(r.routes.slice(routed).map(x=>x.text),['Mm-hm.'],'Once the reading has ended, J1 hears an "mm-hm" again');
+    }finally{await r.close();}
+  });
+
+  // Ian, 23-24 Oct: "Uh huh." over an answer and "Phew." over a reading went to J1 and stopped the speech. "Okay Moo."
+  // and "Hey, Moo." are bare calls but not fillers, so they stopped it too.
+  test(`${kind}: bare calls and other sounds during a held reading resume it, without stopping or routing it`,async()=>{
+    const r=await rig();try{
+      const {routed,stops}=await reading(r);
+      const said=r.speech.spoken.length;
+      for(const [i,sound] of ['Moo.','Okay Moo.','Hey, Moo.','Uh huh.','Phew.','Hm.','Moo. Phew.','Uh, huh.'].entries()) {
+        const resumes=r.speech.resumes;
+        await r.agent.speechStarted({paused:true});await soon(r.turn(`sound${i}`,sound));
+        assert.equal(r.speech.resumes,resumes+1,`"${sound}" resumes the reading`);
+        assert.equal(r.speech.stops,stops,`"${sound}" does not stop it`);
+      }
+      assert.equal(r.routes.length,routed,'J1 is never asked');
+      assert.equal(r.speech.spoken.length,said,'Nothing is said');
+      assert.equal(r.speech.playing,true);
     }finally{await r.close();}
   });
 

@@ -15,6 +15,7 @@ import { spokenAnswer, narrationDecision, compactToolOutcome, speechOutline, nar
 import { validateEdit } from "../../contracts/src/workspace.js";
 import { transcriptText } from "../../contracts/src/index.js";
 import { safeEnd, safeStart } from "../../contracts/src/records.js";
+import { fillerOnly, wakeOnly, wakePrefixed } from "../../contracts/src/utterances.js";
 import type {
   AcceptancePort,
   AgentEvent,
@@ -135,6 +136,10 @@ export class Agent {
   private replaying = 0;
   /** Playback of the latest line Moo said that is not a reading, such as "I'm listening…"; the response's own speech starts after it. */
   private linePlayback: Promise<void> = Promise.resolve();
+  /** Lines of any kind Moo is saying now. A bare call never cuts one off, as a new line would (LocalSpeech.speak). */
+  private speaking = 0;
+  /** When Moo last answered a bare call; real words since clear it. */
+  private wakeAckAt?: number;
   /** The response epoch whose answer reached the conversation. */
   private publishedEpoch = -1;
   private heldHelp?: { conversationId: string; sourceId: string; request: UserTurnSnapshot; signal: AbortSignal; captured: boolean; mode: "ocr" | "visual" };
@@ -207,6 +212,17 @@ export class Agent {
     this.attention=undefined; clearTimeout(held.timer);
     this.state.activity=this.state.busy ? held.previous ?? 'preparing' : undefined;
     held.release();
+  }
+  /** Moo is saying something, holding a line a sound paused, or reading a saved answer. */
+  private speakingNow() { return this.speaking > 0 || !!this.pausedPlayback || this.replaying > 0; }
+  /** While Moo works on a request or speaks, a sound or a bare call is not an interruption. */
+  private agentActive() { return this.speakingNow() || this.state.busy; }
+  /** A bare call was answered moments ago with no words since, so this one is its echo or a repeat. */
+  private recentAck() { return this.wakeAckAt !== undefined && Date.parse(this.p.now()) - this.wakeAckAt < WAKE_ACK_MS; }
+  /** What Moo says to a bare call or "are you there?". */
+  private statusLine() {
+    const activity=this.attention?.previous ?? this.state.activity;
+    return this.state.busy ? activity === "searching" ? STATUS.searching : STATUS.preparing : this.state.lastError ? STATUS.failed : STATUS.listening;
   }
   private async responsePermit(signal:AbortSignal,epoch:number) {
     while(this.attention) {
@@ -599,16 +615,20 @@ export class Agent {
       .join(" ")
       .trim();
     if (!text) return;
-    // A lone filler while Moo speaks or works (often a click or breath the recognizer heard as "Moo"), or in an open
-    // conversation with nothing asked, is not an interruption or a reply: the reading resumes, nothing is routed or
-    // cancelled, and the words stay in the transcript. An idle "mm-hm" may answer something, so J1 still hears it.
-    const affirmative = /\b(?:mm+[-\s]?hm+|mhm+|uh-?huh)\b/i.test(text);
-    if ((this.pausedPlayback || this.state.busy || this.replaying || (this.state.conversationId && !this.state.pendingOffer && !affirmative)) && fillerOnly(text)) {
+    // A lone filler or bare call while Moo speaks or works (often a click or breath the recognizer heard as "Moo"), or a
+    // filler in an open conversation with nothing asked, is not an interruption or a reply: the reading resumes, nothing
+    // is routed or cancelled, and the words stay in the transcript. An idle "mm-hm" may answer something, so J1 still
+    // hears it. A bare call while Moo waits, or works with nothing playing, is answered below, but not twice running.
+    const affirmative = /\b(?:mm+[-\s]?hm+|mhm+|uh[-\s,]?huh)\b/i.test(text);
+    const wake = wakeOnly(text), noise = wake || fillerOnly(text);
+    const statusCall = wake && this.state.busy && !this.speakingNow() && !!this.state.conversationId && !this.state.pendingOffer && !this.recentAck();
+    if (noise && !statusCall && (this.agentActive() || (this.state.conversationId && !this.state.pendingOffer && !affirmative && (!wake || this.recentAck())))) {
       await this.p.brain.setState(`handled:${turnId}`, revisionKey);
       await this.trace("filler_ignored", {turnId, text: text.slice(0, 40)});
       await this.resumePausedPlayback();
       return;
     }
+    if (!noise) this.wakeAckAt = undefined;
     // Real words stop a paused reading, as an interruption always did.
     await this.stopPausedPlayback();
     this.track(this.queueAcceptance(session));
@@ -703,6 +723,13 @@ export class Agent {
         this.track(this.queueAcceptance(conversation));
       }
     }
+    // Answered here, not by J1, whose continue_agent ignores confidence and would answer "Moo." as a request.
+    if (wake && this.state.conversationId && !this.state.pendingOffer && (statusCall || !this.agentActive()) && !this.recentAck()) {
+      await this.p.brain.setState(`handled:${turnId}`, revisionKey);
+      await this.trace("wake_acknowledged", {turnId});
+      if (await this.say(this.statusLine(), async () => routing.speech === this.speechEpoch)) this.wakeAckAt = Date.parse(this.p.now());
+      return;
+    }
     const priorWebAllowed=this.state.webAllowed;
     // User constraints apply before any later tool dispatch, including while a response is pending.
     // An explicit "use only ... notes" restriction still applies when ASR loses the
@@ -763,9 +790,9 @@ export class Agent {
         text,
         // The utterance is latestUserUtterance; repeating it here made J1's doubt question read it as already
         // mentioned (0.95 without the copy, 0.68-0.79 with it; 20 Oct check). A stray "Moo." before a stated doubt
-        // made it a confident start_agent (0.84 with it, 0.52-0.58 without; 21 Oct check).
+        // made it a confident start_agent (0.84 with it, 0.52-0.58 without; 21 Oct check), so Moo's reply to it goes too.
         recentContext: (this.state.busy && this.activeRequest ? `Current work (background): ${this.activeRequest.text}\nStatus: ${this.attention?.previous ?? this.state.activity ?? "preparing"}\n` : "") + (linkedRequest ? `Original linked request:\n${transcriptText(linkedRequest)}\nRecent conversation:\n` : "") + session.segments
-          .filter((s) => s.turnId !== turnId && !(s.speaker === "user" && fillerOnly(s.text)))
+          .filter((s) => s.turnId !== turnId && !(s.speaker === "user" && (fillerOnly(s.text) || wakeOnly(s.text))) && !(s.speaker === "assistant" && Object.values(STATUS).includes(s.text)))
           .slice(-20)
           .map((s) => `${s.speaker}: ${s.text}`)
           .join("\n"),
@@ -787,7 +814,10 @@ export class Agent {
     const quietReply = () => decision.route === "no_action" && !!this.state.conversationId && !pending && text.split(/\s+/).filter(Boolean).length < 4;
     // J1 can route a stated doubt as a confident start_agent (0.84, doubt 0.96; 21 Oct check); it still gets the offer.
     const idleStatedDoubt = () => decision.route === "start_agent" && !this.state.conversationId && !pending && this.statesDoubt(decision) && !requestPhrased(text) && !fillerOnly(text);
-    const needsClarification = () => (decision.confidence < this.threshold && !(decision.route === "continue_agent" && this.state.conversationId && (!pending || pending.kind === "close")) && !(decision.route === "dictate" && !this.state.conversationId && !pending) && !quietReply()) ||
+    // Ian, 24 Oct: a request that starts with "Moo" is answered when J1 is fairly sure of it ("Moo. I explain how the
+    // global conveyor belt works in detail.", start_agent 0.7 on 23 Oct, was asked "Would you like Moo to answer that?").
+    const calledRequest = () => decision.route === "start_agent" && decision.confidence >= 0.5 && !this.state.conversationId && !pending && wakePrefixed(text);
+    const needsClarification = () => (decision.confidence < this.threshold && !(decision.route === "continue_agent" && this.state.conversationId && (!pending || pending.kind === "close")) && !(decision.route === "dictate" && !this.state.conversationId && !pending) && !quietReply() && !calledRequest()) ||
       decision.route === "unclear" || idleStatedDoubt();
     // New speech only invalidates a close, a reply to an end/close question, or a result that would ask something new.
     // Dictation and requests the user made are still applied; a response waits on the attention hold.
@@ -796,7 +826,7 @@ export class Agent {
       (decision.route === "check_status" ? !!constrainedRequest && !!this.state.conversationId :
         !needsClarification() && ["dictate","start_agent","continue_agent","no_action","suppress_note"].includes(decision.route))));
     const appendToNotes = async () => {
-      if(this.thoughts && !/^(?:hey\s+)?moo[.!?,\s]*$/i.test(text) && ["dictate","start_agent","continue_agent","offer_help","unclear"].includes(decision.route)) {
+      if(this.thoughts && !wakeOnly(text) && ["dictate","start_agent","continue_agent","offer_help","unclear"].includes(decision.route)) {
         for(const s of segments) await this.p.brain.setState(`thought-eligible:${s.id}`,true);
         await this.thoughts.append(session.id,segments);
       }
@@ -894,13 +924,21 @@ export class Agent {
             constraintTurns:[...(constrainedRequest.constraintTurns ?? []),{turnId,revisionKey,text}]});
         return;
       }
-      const activity=this.attention?.previous ?? this.state.activity;
-      await this.say(this.state.busy ? activity === "searching" ? "I’m still searching for your request." : "I’m preparing the answer to your request." : this.state.lastError ? "I’m here. The last response could not finish; your request is saved." : "I’m here and listening.",stillCurrent);
+      await this.say(this.statusLine(),stillCurrent);
       return;
     }
     if (previous?.error && this.state.lastError === previous.error) {
       this.state.lastError = undefined;
       await this.persist();
+    }
+    // A bare call J1 does not open a conversation for is answered, with nothing opened, saved or offered, even when J1
+    // calls "Moo." a doubt; its echo or a repeat gets nothing.
+    if (wake && !this.state.conversationId && !pending && (decision.route !== "start_agent" || needsClarification())) {
+      if (!this.recentAck()) {
+        await this.trace("wake_acknowledged", {turnId, route: decision.route});
+        if (await this.say(STATUS.listening, stillCurrent)) this.wakeAckAt = Date.parse(this.p.now());
+      }
+      return;
     }
     // An unsure filler is not worth a question, a saved thought or an offer; a pending question answered "mm-hm" is asked again.
     if (fillerOnly(text) && needsClarification() && !(pending && affirmative)) return;
@@ -953,8 +991,8 @@ export class Agent {
       await this.persist();
     }
     if (decision.route === "no_action") {
-      // An offer created while J1 was running (for example by enrichment) stays pending (ACL-04).
-      if (offerUnchanged()) this.state.pendingOffer = undefined;
+      // An offer created while J1 was running (for example by enrichment) stays pending (ACL-04), as does one a bare call left unanswered.
+      if (offerUnchanged() && !wakeOnly(text)) this.state.pendingOffer = undefined;
       await this.persist();
       if (pending && "recordId" in pending) {
         await this.p.brain.setState(`offered:${pending.recordId}`, true);
@@ -997,7 +1035,7 @@ export class Agent {
         const request = {sessionId:session.id,conversationId:record.id,turnId,revisionKey,text};
         // A saved doubt is read as text with GLM OCR; a "what is this" offer keeps the visual model.
         this.startSavedDoubtHelp(record.id, pending.recordId, request, pending.kind === "help" ? "ocr" : "visual");
-      } else if (!/^\s*(?:hey\s+)?moo[.!?,\s]*$/i.test(text)) {
+      } else if (!wakeOnly(text)) {
         this.startResponse(record.id, undefined, {sessionId:session.id,conversationId:record.id,turnId,revisionKey,text});
       }
       return;
@@ -2161,9 +2199,11 @@ export class Agent {
       return;
     }
     const epoch=this.playbackEpoch;
+    this.speaking++;
     // Mic Off, Stop session and the host's own lines cut speech without the Agent; a cut marked stopped is not a failure.
     try { await this.p.speech.speak(text); }
     catch(error) { if(epoch===this.playbackEpoch && !(error as {stopped?: boolean})?.stopped) throw error; }
+    finally { this.speaking--; }
   }
   /** What Moo says is tracked, not awaited, whether a question, an offer or a `reading` of a saved answer lasting minutes:
    * the turn queue stays free for a filler to resume it, or real words to stop it, at once. Staleness is still decided
@@ -2713,10 +2753,11 @@ const FIDELITY_REVIEW_BELOW = 0.4;
 const CONTEXT_REVIEW_BELOW = 0.6;
 const PAUSED_PLAYBACK_MS = 8000;
 const TRACE_ENTRIES = 400;
-/** "Moo", "mm", "uh" and the like, alone: what clicks, breaths and echo turn into while Moo is speaking. */
-function fillerOnly(text: string) {
-  return /^(?:(?:hey\s+)?moo+|m+|mm+-?hm+|mhm+|hmm+|uh+|um+|ah+|oh+|er+|erm+|huh|uh-?huh|eh)(?:[\s.,!?…]+(?:moo+|m+|mm+|uh+|um+|hmm+))*[\s.,!?…]*$/i.test(text.trim());
-}
+/** A bare call this soon after the last one answered, with no words between, is its echo or a repeat. */
+const WAKE_ACK_MS = 10_000;
+/** Moo's replies to a bare call or "are you there?". */
+const STATUS = {searching: "I’m still searching for your request.", preparing: "I’m preparing the answer to your request.",
+  failed: "I’m here. The last response could not finish; your request is saved.", listening: "I’m here and listening."};
 /** A question or a request to Moo, which is answered even when it carries a doubt. Each sentence is read after any
  * opener ("Okay, Moo,"); a request can follow the doubt ("..., can you explain it.") and a question can lack its "?". */
 function requestPhrased(text: string) {
