@@ -31,6 +31,11 @@ def receive():
 threading.Thread(target=receive, daemon=True).start()
 try:
     import numpy as np
+    import mlx.core as mx
+    # MLX keeps freed buffers for reuse, and its default limit is larger than the Mac's memory. Every reply
+    # length needs buffers of new sizes, so the cache grew by about 6 GB a reply (31 GB after five; 86 GB live
+    # on 23 Oct). One GB keeps reuse within a reply; the rest is returned after each reply.
+    mx.set_cache_limit(1 << 30)
     from importlib.metadata import version
     from kokoro_mlx import KokoroTTS
     if version('kokoro-mlx') != '0.1.2': raise RuntimeError('Kokoro runtime pin mismatch')
@@ -68,6 +73,8 @@ try:
                     emit({'id':ident,'pcm':base64.b64encode(pcm[offset:offset+24000].tobytes()).decode()})
             emit({'id':ident,'done':True,'cancelled':ident in cancelled})
         except Exception as error: emit({'id':ident,'error':str(error)})
-        finally: cancelled.discard(ident)
+        finally:
+            cancelled.discard(ident)
+            mx.clear_cache()
 except Exception as error:
     emit({'event':'failed','error':str(error)}); sys.exit(1)
