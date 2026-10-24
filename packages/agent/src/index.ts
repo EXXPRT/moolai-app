@@ -711,9 +711,13 @@ export class Agent {
       await this.queueEnrichment(owner.id);
       return;
     }
-    if (this.state.conversationId) {
-      // These segments may have arrived while the invocation's J1 request was still pending; a sound or bare call Moo
-      // acts on is first shown here, before any reply.
+    // These segments may have arrived while the invocation's J1 request was still pending; a sound or bare call Moo
+    // acts on is first shown here, before any reply, except one J1 hears with nothing asked ("uh huh"): J1 mostly has
+    // Moo ignore it, so it is shown only where Moo replies to it or acts on it.
+    let shown = false;
+    const show = async () => {
+      if (shown || !this.state.conversationId) return;
+      shown = true;
       let conversation = await this.p.brain.getRecord(
         this.state.conversationId,
       );
@@ -727,7 +731,8 @@ export class Agent {
         this.emit({ type: "record", record: conversation });
         this.track(this.queueAcceptance(conversation));
       }
-    }
+    };
+    if (!noise || wake || this.state.pendingOffer) await show();
     // Answered here, not by J1, whose continue_agent ignores confidence and would answer "Moo." as a request.
     if (wake && this.state.conversationId && !this.state.pendingOffer && (statusCall || !this.agentActive()) && !this.recentAck()) {
       await this.p.brain.setState(`handled:${turnId}`, revisionKey);
@@ -891,6 +896,7 @@ export class Agent {
         decision={route:this.state.conversationId?"continue_agent":"dictate",confidence:1};
     }
     if(decision.route === "suppress_note") {
+      await show();
       const result=retentionScope ? await this.thoughts?.suppress(session.id,pending?.kind==="note_suppression"?pending.proposalId:undefined,
         retentionScope,decision.confidence<this.threshold) : undefined;
       if(result?.status==="clarify") {
@@ -918,6 +924,7 @@ export class Agent {
       if(decision.route==="no_action") {await this.say("Okay. I’ll keep the note.");return;}
     }
     if (decision.route === "check_status" && this.state.conversationId) {
+      await show();
       if(constrainedRequest) {
         // A status question may carry a new instruction. Rebuild under that instruction;
         // this is user-requested work, not an automatic retry of a failed provider call.
@@ -1011,6 +1018,7 @@ export class Agent {
     ) {
       const currentTurn = await this.latestUserTurn(this.state.conversationId!);
       if (speechEpoch!==this.speechEpoch || !currentTurn || currentTurn.turnId !== turnId || currentTurn.revisionKey !== revisionKey) return;
+      await show();
       const substantive = removeEndCommand(text);
       // J1 can distinguish a misheard address from a real final request.
       // Missing/uncertain assessment preserves the conservative mixed-turn behavior.
@@ -1070,6 +1078,8 @@ export class Agent {
     }
     if (this.state.conversationId) {
       if (decision.route === "continue_agent") {
+        // The answer is built from the conversation, so its request must be in it.
+        await show();
         const help = this.heldHelp;
         if (help && help.conversationId === this.state.conversationId && help.signal === this.task?.signal && !help.signal.aborted && !help.captured)
           this.startSavedDoubtHelp(help.conversationId, help.sourceId, {...help.request,

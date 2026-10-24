@@ -686,6 +686,32 @@ for(const kind of ['memory','sqlite']) {
     }finally{await r.close();}
   });
 
+  // Code review, 24 Oct: with Moo idle in a conversation an "uh huh" still reaches J1, and it was shown before J1 had Moo
+  // ignore it. With a question pending it may be the answer, so it shows at once, as before.
+  test(`${kind}: in an idle conversation, an “uh huh” J1 has Moo ignore stays out of it, and one Moo acts on shows above the reply`,async()=>{
+    const heard=async(sound:string,decision:RouteDecision,pending=false)=>{
+      const r=await rig();try{
+        await r.turn('note','The first reading covers glycolysis.');await r.turn('ask','Moo, explain osmosis.');await r.agent.drain();
+        if(pending) {r.overrides["Don't save that."]={route:'suppress_note',confidence:.5};await r.turn('hide',"Don't save that.");await r.agent.drain();}
+        const conversationId=r.agent.getState().conversationId!,said=r.speech.spoken.length;
+        r.overrides[sound]=decision;await r.turn('sound',sound);await r.agent.drain();
+        const segments=(await r.brain.getRecord(conversationId))!.segments,at=segments.findIndex(s=>s.turnId==='sound');
+        return {spoken:r.speech.spoken.slice(said),shown:at<0?[]:segments.slice(at).map(s=>s.text)};
+      }finally{await r.close();}
+    };
+    assert.deepEqual(await heard('Uh huh.',{route:'no_action',confidence:.9}),{spoken:[],shown:[]},'Moo says nothing, and it is not shown');
+    assert.deepEqual(await heard('Mm-hm.',{route:'unclear',confidence:.3}),{spoken:[],shown:[]},'Nor when J1 is unsure of it');
+    const replies:[RouteDecision,string][]=[[{route:'check_status',confidence:1},'I’m here and listening.'],
+      [{route:'continue_agent',confidence:.6},'Osmosis moves water across a membrane.'],[{route:'suppress_note',confidence:1},'I won’t keep a note of that. The transcript is retained.']];
+    for(const [decision,reply] of replies)
+      assert.deepEqual(await heard('Uh huh.',decision),{spoken:[reply],shown:['Uh huh.',reply]},`Routed ${decision.route}, it shows above the reply`);
+    assert.deepEqual(await heard('Uh huh.',{route:'end_agent',confidence:1}),{spoken:['Conversation closed. Your transcript is saved.'],shown:['Uh huh.']},
+      'It is the last line of the conversation it closes');
+    const asked=await heard('Um.',{route:'unclear',confidence:.3},true);
+    assert.deepEqual(asked.shown,['Um.',asked.spoken[0]],'With “which note?” pending it shows above the question asked again');
+    assert.equal(asked.spoken.length,1);
+  });
+
   // Code review, 24 Oct: Ultra's recent-speech block keeps the five newest turns outside the conversation, so sounds kept out
   // of it would push out the dictation that block is for.
   test(`${kind}: sounds hidden during a reading are not sent with the next request, and dictation said before the conversation still is`,async()=>{
