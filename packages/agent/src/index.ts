@@ -1372,8 +1372,8 @@ export class Agent {
           await this.p.brain.setState(`work-status:${conversationId}`, `Unresolved: ${errorText(e)}`);
           await this.persist();
           const spoken = (e as {spoken?: string})?.spoken;
-          // Why a screenshot could not be used is in the chat too (23-24 Oct: an accepted offer's timed-out read showed nothing).
-          if (spoken && conversationId === this.state.conversationId) await this.appendAssistant(spoken, conversationId, undefined, false).catch(() => {});
+          // Why a screenshot could not be used is in the chat too (23-24 Oct: an accepted offer's timed-out read showed nothing), unless a newer request has started.
+          if (spoken && conversationId === this.state.conversationId) await this.appendAssistant(spoken, conversationId, undefined, false, async () => this.assertCurrent(controller.signal, epoch)).catch(() => {});
           // Voice users hear that the answer did not finish (MOO-060), or why a screenshot could not be taken, after any line Moo is saying; speech never starts over the user.
           try { await this.speechPermit(controller.signal, epoch); } catch { return; }
           if (!this.attention) await this.speak(spoken ?? ANSWER_FAILED).catch(() => {});

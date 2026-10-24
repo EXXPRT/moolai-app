@@ -315,6 +315,15 @@ for (const kind of ["memory", "sqlite"] as const) {
     assert.match(ledger, /Main display is unavailable/, "The model is told the capture failed");
   });
 
+  run("a capture that times out before there is a screenshot is explained by the model, not said to be taken", async t => {
+    t.hooks.captureError = "Native capture timed out";
+    await t.agent.submitText("Moo, take a screenshot and read the table."); await t.agent.drain();
+    assert.equal(t.calls.captures, 1);
+    assert.equal(t.calls.tools.length, 2, "The model is asked again with the failed capture");
+    assert.ok(!t.calls.spoken.some(text => text.startsWith("I took the screenshot")), t.calls.spoken.join("\n"));
+    assert.ok(!t.calls.notices.includes(READING), "Nothing was read");
+  });
+
   run("a screenshot macOS refuses is said with its fix, and the model is not asked again without the screen tool (21 Oct test B)", async t => {
     t.hooks.captureError = DENIED;
     // What Ultra said on 21 Oct once the refused capture had taken the screen tool away.
@@ -396,6 +405,23 @@ for (const kind of ["memory", "sqlite"] as const) {
     assert.equal(t.calls.captures, 2);
     assert.equal(t.calls.vision.length, 2, "The new screenshot is read");
     assert.equal(await t.answers(), 1, "and answered");
+  });
+
+  run("an accepted offer's timed-out reading is not written after a newer request's answer", async t => {
+    t.hooks.doubt = doubtful; t.hooks.visionError = TIMED_OUT;
+    await t.agent.submitText(TEST_B); await t.agent.drain();
+    // The failed run is held before its line while a new request starts and is answered.
+    const reached = deferred(), resume = deferred(); let block = true;
+    const set = t.brain.setState.bind(t.brain);
+    t.brain.setState = async (k, v) => { if (block && k.startsWith("work-status:") && String(v).startsWith("Unresolved:")) { block = false; reached.release(); await resume.promise; } return set(k, v); };
+    const yes = t.agent.submitText("Yes please.");
+    await reached.promise;
+    const next = t.agent.submitText("Moo, what is osmosis?");
+    while (!await t.answers()) await new Promise(r => setTimeout(r, 2));
+    resume.release(); await yes; await next; await t.agent.drain();
+    const record = (await t.brain.getRecord(t.agent.getState().conversationId!))!;
+    assert.ok(!record.segments.some(s => s.text === READING_TIMED_OUT), record.segments.map(s => s.text).join("\n"));
+    assert.ok(!t.calls.spoken.includes(READING_TIMED_OUT));
   });
 
   run("\"say that again\" after a refused screenshot repeats the refusal, not the answer before it", async t => {
