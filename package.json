@@ -8,6 +8,7 @@
   },
   "scripts": {
     "moo": "bash scripts/start-moo.sh",
+    "restart": "bash scripts/start-moo.sh",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test --test-timeout=120000 packages/agent/test/*.test.ts packages/brain/test/*.test.ts apps/runtime/test/*.test.ts scripts/*.test.mjs scripts/*.test.ts",
     "dev:runtime": "node --env-file-if-exists=runtime.env --import tsx apps/runtime/src/main.ts",
