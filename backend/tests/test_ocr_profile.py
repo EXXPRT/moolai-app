@@ -1,10 +1,12 @@
 """OCR profile changes cannot silently change scene or Agent reasoning settings."""
+import asyncio
 import json
 from dataclasses import replace
 
 import httpx
 import pytest
 
+from moolai_backend import providers
 from moolai_backend.providers import Gateway, NebiusProvider, ServiceError
 from moolai_backend.schemas import VisionInput
 from moolai_backend.settings import Settings
@@ -57,3 +59,40 @@ async def test_missing_ocr_model_does_not_fall_back_to_available_scene_model():
             await NebiusProvider(Gateway(settings, client)).vision(VisionInput(
                 question='Read a serial.', image={'mimeType': 'image/png', 'dataBase64': 'YWJj'}))
     assert calls == ['GET']
+
+
+def screen_reading(settings, payloads=None, stalled=None):
+    async def respond(request):
+        if request.method == stalled:
+            await asyncio.sleep(1)
+        if request.method == 'GET':
+            return httpx.Response(200, json={'data': [{'id': settings.ocr_model}, {'id': settings.vision_model}]})
+        if payloads is not None:
+            payloads.append(request)
+        return httpx.Response(200, json={'model': json.loads(request.content)['model'], 'choices': [{
+            'finish_reason': 'stop', 'message': {'content': '{"observations":[],"interpretation":""}'}}]})
+    return respond
+
+
+@pytest.mark.parametrize('mode', ['ocr', 'visual'])
+async def test_screen_reading_has_its_own_timeout(mode):
+    # 23-24 Oct: every screen read ran into the host's 90 s limit, which this backend's own 90 s could never beat.
+    settings = Settings(nebius_api_key='fixture')
+    posted = []
+    async with httpx.AsyncClient(transport=httpx.MockTransport(screen_reading(settings, posted))) as client:
+        await NebiusProvider(Gateway(settings, client)).vision(VisionInput(
+            mode=mode, question='Read the name.', image={'mimeType': 'image/png', 'dataBase64': 'YWJj'}))
+    assert [request.extensions['timeout']['read'] for request in posted] == [60]
+
+
+@pytest.mark.parametrize('stalled', ['GET', 'POST'])
+@pytest.mark.parametrize('mode', ['ocr', 'visual'])
+async def test_a_screen_reading_that_does_not_answer_in_time_stops_with_a_readable_timeout(mode, stalled, monkeypatch):
+    # One deadline for the whole read, including a stale model list (GET) or a wait for a pooled connection.
+    monkeypatch.setattr(providers, 'VISION_TIMEOUT_SECONDS', 0.05)
+    settings = Settings(nebius_api_key='fixture')
+    async with httpx.AsyncClient(transport=httpx.MockTransport(screen_reading(settings, stalled=stalled))) as client:
+        with pytest.raises(ServiceError, match='^Nebius timed out; no automatic retry$') as caught:
+            await NebiusProvider(Gateway(settings, client)).vision(VisionInput(
+                mode=mode, question='Read the name.', image={'mimeType': 'image/png', 'dataBase64': 'YWJj'}))
+    assert caught.value.status == 504

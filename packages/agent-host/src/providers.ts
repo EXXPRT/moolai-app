@@ -23,6 +23,8 @@ export interface ProcessingAvailability {
 /** Transport only: the Agent owns routing policy, tool execution and retries. */
 /** A 16,384-token organizer generation takes about 80 s; the backend allows 150 s. */
 export const ORGANIZATION_TIMEOUT_MS = 160_000;
+/** A screen read gives up before the 90 s other calls get; the backend's 60 s deadline answers first with a readable 504. */
+export const VISION_TIMEOUT_MS = 75_000;
 export class BackendProviders
   implements
     DecisionProvider,
@@ -186,7 +188,7 @@ export class BackendProviders
   ) {
     const result = await this.post<
       import("../../contracts/src/index.js").VisionEvidence | { text: string }
-    >("/v1/vision", { image, question, mode: options?.mode ?? "ocr" }, signal);
+    >("/v1/vision", { image, question, mode: options?.mode ?? "ocr" }, signal, VISION_TIMEOUT_MS);
     return "text" in result ? result.text : result;
   }
   accept(record: BrainRecord, operationId: string) {

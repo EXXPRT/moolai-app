@@ -17,6 +17,10 @@ const TEST_B = "Sample A kept a lower minimum pressure than sample B. I'm not su
 /** The companion's refusal when macOS has not given Screen Recording permission to the app that started Moo. */
 const DENIED = "Screen Recording permission is required for the requested screenshot. macOS checks the app that started Moo (the terminal that ran npm run moo, such as Warp), not Moolai Native. Turn it on for that app in System Settings > Privacy & Security > Screen & System Audio Recording, quit and reopen that app, then start Moo again.";
 const ANSWER_FAILED = "I couldn't finish that answer.";
+const READING = "Reading your screen. This can take up to a minute.";
+const READING_TIMED_OUT = "I took the screenshot, but reading it took too long, so I stopped. Say “Moo, take a screenshot” to try again, or tell me what's on the screen.";
+/** 23-24 Oct: the host's 90 s limit stopped every screen read; the backend's own limit now answers first. */
+const TIMED_OUT = new DOMException("The operation was aborted due to timeout", "TimeoutError");
 const now = () => "2026-10-19T10:00:00Z";
 const deferred = () => { let release!: () => void; const promise = new Promise<void>(r => release = r); return { promise, release }; };
 
@@ -36,6 +40,8 @@ for (const kind of ["memory", "sqlite"] as const) {
       answerHold: undefined as Promise<void> | undefined,
       captureHold: undefined as Promise<void> | undefined,
       captureError: undefined as string | undefined,
+      /** A failure reading a screenshot that was taken. */
+      visionError: undefined as Error | undefined,
       /** A reply in place of the fixture's, given the tools offered. */
       reply: undefined as undefined | ((tools: string[]) => AgentReply | undefined),
       /** Speech that the voice fails to play. */
@@ -64,7 +70,7 @@ for (const kind of ["memory", "sqlite"] as const) {
     }) as typeof p.respond;
     const make = () => new Agent({ brain, decisions: p, generation: p, search: p, id: () => `${kind}-${++n}`, now,
       onEvent: e => { if (e.type === "notice" && e.message) calls.notices.push(e.message); },
-      vision: { interpret: async (_image, question, _signal, options) => { calls.vision.push({ question, mode: options?.mode }); return "Sample A minimum 12 kPa."; } },
+      vision: { interpret: async (_image, question, _signal, options) => { calls.vision.push({ question, mode: options?.mode }); if (hooks.visionError) throw hooks.visionError; return "Sample A minimum 12 kPa."; } },
       capture: { async capture() { calls.captures++; if (hooks.captureHold) await hooks.captureHold; if (hooks.captureError) throw Error(hooks.captureError); return { mimeType: "image/png", bytes: new Uint8Array([1, 2, 3]) }; } },
       speech: { async speak(text) { calls.spoken.push(text); if (hooks.speakFails?.test(text)) throw Error("Local speech worker closed; full text remains on screen."); }, async stop() {} } });
     let agent = make(); await agent.initialize(); await agent.startSession();
@@ -336,6 +342,60 @@ for (const kind of ["memory", "sqlite"] as const) {
     assert.ok(t.calls.spoken.some(text => text.startsWith("I couldn't take the screenshot. Screen Recording permission")), t.calls.spoken.join("\n"));
     assert.ok(!t.calls.spoken.some(text => text.startsWith(ANSWER_FAILED)));
     assert.match(t.agent.getState().lastError ?? "", /Screen help failed.*Screen Recording permission/, "The failure stays on screen");
+    assert.ok((await t.brain.getRecord(t.agent.getState().conversationId!))!.segments.some(s => s.speaker === "assistant" &&
+      s.text.startsWith("I couldn't take the screenshot. Screen Recording permission")), "It is in the conversation");
+  });
+
+  // 23-24 Oct: each screenshot was taken and saved, but reading it ran into the host's 90 s limit. Asked again without
+  // its screen tool, Ultra said it could not take a screenshot.
+  for (const error of [TIMED_OUT, Error("Backend 504: Nebius timed out; no automatic retry")])
+    run(`a screenshot whose reading takes too long is said as such, with no second model call (23-24 Oct): ${error.message}`, async t => {
+      t.hooks.visionError = error;
+      t.hooks.reply = tools => tools.includes("capture_screen") ? undefined
+        : { text: "I cannot take a screenshot of your screen — the screen analysis tool is unavailable for this request.", toolCalls: [] };
+      await t.agent.submitText("Moo, take a screenshot of my screen and tell me why sample A's minimum is lower."); await t.agent.drain();
+      assert.equal(t.calls.captures, 1);
+      assert.equal(t.calls.tools.length, 1, "No model call after the timeout");
+      assert.ok(t.calls.notices.includes(READING), t.calls.notices.join("\n"));
+      assert.equal(t.calls.spoken.at(-1), READING_TIMED_OUT, t.calls.spoken.join("\n"));
+      const id = t.agent.getState().conversationId!;
+      const record = (await t.brain.getRecord(id))!;
+      const assistant = record.segments.filter(s => s.speaker === "assistant");
+      const line = assistant.find(s => s.text === READING_TIMED_OUT);
+      assert.ok(line, "It is in the conversation");
+      assert.notEqual(await t.brain.getState(`thought-eligible:${line.id}`), true, "The line is not note content");
+      assert.equal(record.attachmentIds.length, 1, "The screenshot is saved with the conversation");
+      assert.ok(![...t.calls.spoken, ...assistant.map(s => s.text)].some(text => /cannot take a screenshot|tool is unavailable/i.test(text)), "Nothing says Moo cannot take screenshots");
+      assert.equal(t.agent.getState().lastError, undefined);
+      assert.ok(JSON.stringify(await t.brain.getState(`tool-ledger:${id}`)).includes(error.message), "The timed-out read stays on record");
+    });
+
+  run("an accepted offer whose reading takes too long says so aloud and in the conversation, not that the answer failed (23-24 Oct)", async t => {
+    t.hooks.doubt = doubtful; t.hooks.visionError = TIMED_OUT;
+    await t.agent.submitText(TEST_B); await t.agent.drain();
+    assert.equal(t.calls.spoken.at(-1), OFFER);
+    await t.agent.submitText("Yes please."); await t.agent.drain();
+    assert.equal(t.calls.captures, 1);
+    assert.equal(t.calls.spoken.at(-1), READING_TIMED_OUT, t.calls.spoken.join("\n"));
+    assert.ok(!t.calls.spoken.some(text => text.startsWith(ANSWER_FAILED)));
+    const line = (await t.brain.getRecord(t.agent.getState().conversationId!))!.segments.find(s => s.speaker === "assistant" && s.text === READING_TIMED_OUT);
+    assert.ok(line, "It is in the conversation");
+    assert.notEqual(await t.brain.getState(`thought-eligible:${line.id}`), true, "The line is not note content");
+    assert.match(t.agent.getState().lastError ?? "", /Screen help failed.*aborted due to timeout/, "The failure stays on screen");
+    assert.ok(t.calls.notices.includes(READING), t.calls.notices.join("\n"));
+  });
+
+  run("after an accepted offer's reading takes too long, the retry Moo names takes one new screenshot", async t => {
+    t.hooks.doubt = doubtful; t.hooks.visionError = TIMED_OUT;
+    await t.agent.submitText(TEST_B); await t.agent.drain();
+    await t.agent.submitText("Yes please."); await t.agent.drain();
+    const retry = /Say “([^”]+)”/.exec(t.calls.spoken.at(-1) ?? "")?.[1];
+    assert.ok(retry, `Moo says how to try again: ${t.calls.spoken.at(-1)}`);
+    t.hooks.visionError = undefined;
+    await t.agent.submitText(`${retry}.`); await t.agent.drain();
+    assert.equal(t.calls.captures, 2);
+    assert.equal(t.calls.vision.length, 2, "The new screenshot is read");
+    assert.equal(await t.answers(), 1, "and answered");
   });
 
   run("\"say that again\" after a refused screenshot repeats the refusal, not the answer before it", async t => {

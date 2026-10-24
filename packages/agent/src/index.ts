@@ -1371,9 +1371,12 @@ export class Agent {
           this.state.lastError = errorText(e);
           await this.p.brain.setState(`work-status:${conversationId}`, `Unresolved: ${errorText(e)}`);
           await this.persist();
+          const spoken = (e as {spoken?: string})?.spoken;
+          // Why a screenshot could not be used is in the chat too (23-24 Oct: an accepted offer's timed-out read showed nothing).
+          if (spoken && conversationId === this.state.conversationId) await this.appendAssistant(spoken, conversationId, undefined, false).catch(() => {});
           // Voice users hear that the answer did not finish (MOO-060), or why a screenshot could not be taken, after any line Moo is saying; speech never starts over the user.
           try { await this.speechPermit(controller.signal, epoch); } catch { return; }
-          if (!this.attention) await this.speak((e as {spoken?: string})?.spoken ?? ANSWER_FAILED).catch(() => {});
+          if (!this.attention) await this.speak(spoken ?? ANSWER_FAILED).catch(() => {});
         })
         .finally(async () => {
           if (epoch !== this.taskEpoch) return;
@@ -2148,6 +2151,8 @@ export class Agent {
       await this.patch(id, {
         attachmentIds: [...r.attachmentIds, attachment.id],
       });
+    // A notice, not speech: a spoken line would cut the one Moo is saying, such as "I'm listening…".
+    this.notice("Reading your screen. This can take up to a minute.");
     let binary = "";
     for (const byte of image.bytes) binary += String.fromCharCode(byte);
     await ensureCurrent?.();
@@ -2786,8 +2791,11 @@ function requestPhrased(text: string) {
     starts(/[.!…]\s+/).some((part) => /^(?:why|how come|(?:what|how|where|when|who)(?:['’]s|\s+(?:is|are|was|were|do|does|did|can|could|would|will|should))|(?:is|are|was|were|do|does|did|can|could|would|will|should)\s+(?:you|I|we|it|this|that|these|those|there|they|he|she|the|a))\b/i.test(part));
 }
 const ANSWER_FAILED = "I couldn't finish that answer. Your request is saved; ask again when you're ready.";
-/** What Moo says when macOS refuses a screenshot: the companion's message names the app to turn on. */
+/** The host's and the backend's time limits fire only once the screenshot is saved; the retry it names passes allowsScreenCapture. */
+const SCREEN_READING_TIMED_OUT = "I took the screenshot, but reading it took too long, so I stopped. Say “Moo, take a screenshot” to try again, or tell me what's on the screen.";
+/** What Moo says when macOS refuses a screenshot (the companion's message names the app to turn on), or reading it takes too long. */
 function screenshotRefused(error: string) {
+  if (/operation was aborted due to timeout|^Backend 504: /i.test(error)) return SCREEN_READING_TIMED_OUT;
   return /Screen Recording permission/i.test(error) ? `I couldn't take the screenshot. ${error}` : undefined;
 }
 /** The backend rejects a J1 state whose JSON is over 180,000 characters (providers.py bounded_state). An oversized
