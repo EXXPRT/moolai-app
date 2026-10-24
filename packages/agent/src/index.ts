@@ -619,7 +619,7 @@ export class Agent {
     // filler in an open conversation with nothing asked, is not an interruption or a reply: the reading resumes, nothing
     // is routed or cancelled, and the words stay in the transcript. An idle "mm-hm" may answer something, so J1 still
     // hears it. A bare call while Moo waits, or works with nothing playing, is answered below, but not twice running.
-    const affirmative = /\b(?:mm+[-\s]?hm+|mhm+|uh[-\s,]?huh)\b/i.test(text);
+    const affirmative = /\b(?:mm+[-\s]?hm+|mhm+|uh[-,]?\s*huh)\b/i.test(text);
     const wake = wakeOnly(text), noise = wake || fillerOnly(text);
     const statusCall = wake && this.state.busy && !this.speakingNow() && !!this.state.conversationId && !this.state.pendingOffer && !this.recentAck();
     if (noise && !statusCall && (this.agentActive() || (this.state.conversationId && !this.state.pendingOffer && !affirmative && (!wake || this.recentAck())))) {
@@ -1035,7 +1035,8 @@ export class Agent {
         const request = {sessionId:session.id,conversationId:record.id,turnId,revisionKey,text};
         // A saved doubt is read as text with GLM OCR; a "what is this" offer keeps the visual model.
         this.startSavedDoubtHelp(record.id, pending.recordId, request, pending.kind === "help" ? "ocr" : "visual");
-      } else if (!wakeOnly(text)) {
+      } else if (sourceId || !wakeOnly(text)) {
+        // A bare call only opens the conversation; one that accepted Moo's question or offer ("Okay Moo.") has the request answered.
         this.startResponse(record.id, undefined, {sessionId:session.id,conversationId:record.id,turnId,revisionKey,text});
       }
       return;

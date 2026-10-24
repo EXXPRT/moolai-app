@@ -209,13 +209,13 @@ for(const kind of ['memory','sqlite']) {
     }finally{await r.close();}
   });
 
-  test(`${kind}: in an open conversation with Moo idle, "Uh huh." still reaches J1 and "Phew." is not routed`,async()=>{
+  test(`${kind}: in an open conversation with Moo idle, "Uh huh." and "Uh, huh." still reach J1 and "Phew." is not routed`,async()=>{
     const r=await rig();try{
       await r.turn('ask','Moo, explain osmosis.');await r.agent.drain();
       const routed=r.routes.length,said=r.speech.spoken.length;
-      r.overrides['Uh huh.']={route:'no_action',confidence:.9};
-      await r.turn('agree','Uh huh.');await r.turn('phew','Phew.');await r.agent.drain();
-      assert.deepEqual(r.routes.slice(routed).map(x=>x.text),['Uh huh.'],'Like "mm-hm", an "uh huh" may answer something');
+      r.overrides['Uh huh.']=r.overrides['Uh, huh.']={route:'no_action',confidence:.9};
+      await r.turn('agree','Uh huh.');await r.turn('comma','Uh, huh.');await r.turn('phew','Phew.');await r.agent.drain();
+      assert.deepEqual(r.routes.slice(routed).map(x=>x.text),['Uh huh.','Uh, huh.'],'Like "mm-hm", an "uh huh" may answer something');
       assert.deepEqual(r.speech.spoken.slice(said),[],'Nothing is said');
     }finally{await r.close();}
   });
@@ -308,8 +308,24 @@ for(const kind of ['memory','sqlite']) {
       assert.ok(r.agent.getState().conversationId,'The conversation opens');
       assert.deepEqual(r.speech.spoken,["I'm listening. Say ‘Moo, finish conversation’ when you're done."]);
       assert.equal(r.responses,0,'The call itself is not answered');
+      assert.notEqual(await r.brain.getState('thought-eligible:call'),true,'Nor added to the growing notes');
     }finally{await r.close();}
   });
+
+  // Code review, 24 Oct: "Okay Moo." in reply to Moo's question is a bare call too, and opened the conversation
+  // without answering the request it accepted.
+  const accepted:[string,RouteDecision,string][]=[['I explain how the conveyor belt works in detail.',{route:'start_agent',confidence:.45},'Would you like Moo to answer that?'],
+    ['This whole chapter is confusing.',{route:'offer_help',confidence:.9},"Would you like help with that? I'll wait for your answer."]];
+  for(const [text,decision,asked] of accepted)
+    test(`${kind}: “Okay Moo.” accepting “${asked}” is answered once`,async()=>{
+      const r=await rig();try{
+        r.overrides[text]=decision;await r.turn('ask',text);await r.agent.drain();
+        assert.deepEqual(r.speech.spoken,[asked]);
+        await r.turn('yes','Okay Moo.');await r.agent.drain();
+        assert.equal(r.responses,1,'The accepted request is answered');
+        assert.equal(r.speech.spoken.at(-1),'Osmosis moves water across a membrane.');
+      }finally{await r.close();}
+    });
 
   // Ian, 23 Oct: "Moo, explain how the global conveyor belt works in detail.", heard as "Moo. I explain…" (J1 start_agent
   // 0.7), was asked "Would you like Moo to answer that?". On 24 Oct he asked that a request starting with "Moo" be answered.
@@ -509,6 +525,21 @@ for(const kind of ['memory','sqlite']) {
       assert.equal(r.speech.stops,stops,'It does not stop it');
       assert.equal(r.routes.length,routed,'J1 is never asked about the filler');
       assert.equal(r.agent.getState().pendingOffer?.kind,'help','The offer stays open');
+    }finally{await r.close();}
+  });
+
+  // Code review, 24 Oct: a call too quiet to pause Moo still reaches the recognizer, and a reply would cut off the line
+  // Moo is saying, as any new line does (LocalSpeech.speak).
+  test(`${kind}: a bare call heard over a line Moo says unpaused in an idle conversation gets nothing and stops nothing`,async()=>{
+    const r=await rig();try{
+      await r.turn('ask','Moo, explain osmosis.');await r.agent.drain();
+      const {routed,stops,end}=await line(r,'status','Are you there?',/^I’m here and listening/);
+      const said=r.speech.spoken.length;
+      await r.turn('call','Moo.');
+      assert.deepEqual(r.speech.spoken.slice(said),[],'Nothing is said over the line');
+      assert.equal(r.speech.stops,stops,'The line plays on');
+      assert.equal(r.routes.length,routed,'J1 is not asked');
+      end();await r.agent.drain();
     }finally{await r.close();}
   });
 

@@ -224,15 +224,17 @@ for (const kind of ["memory", "sqlite"] as const) {
     assert.doesNotMatch(t.calls.routes.find(r => r.text === TEST_B)!.recentContext, /Moo\./);
   });
 
-  run("Moo's reply to a stray \"Moo.\" stays out of J1's context with it, so the doubt after it still gets the screen offer", async t => {
+  run("stray calls and Moo's reply to them stay out of J1's context, so the doubt after them still gets the screen offer", async t => {
     // One extra line moved test B to start_agent 0.84 (21 Oct check); extra context took J1's doubt from 0.95 to 0.68-0.79 (20 Oct).
     t.hooks.route = async input => input.text === "Moo." ? { route: "no_action", confidence: 0.76 }
       : { route: "start_agent", confidence: input.recentContext ? 0.84 : 0.55 };
     t.hooks.doubt = input => /not sure why/i.test(input.text) ? (input.recentContext ? 0.7 : 0.95) : 0.05;
     await t.agent.submitText("Moo."); await t.agent.drain();
+    // "Hey, Moo." is a bare call but not a filler; as a repeat, it gets nothing.
+    await t.agent.submitText("Hey, Moo."); await t.agent.drain();
     assert.deepEqual(t.calls.spoken, ["I’m here and listening."]);
     await t.agent.submitText(TEST_B); await t.agent.drain();
-    assert.equal(t.calls.routes.find(r => r.text === TEST_B)!.recentContext, "", "Neither the call nor Moo's reply");
+    assert.equal(t.calls.routes.find(r => r.text === TEST_B)!.recentContext, "", "Neither the calls nor Moo's reply");
     assert.equal(t.calls.spoken.at(-1), OFFER);
     assert.equal(t.agent.getState().pendingOffer?.kind, "help");
   });
