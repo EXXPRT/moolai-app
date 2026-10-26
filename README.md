@@ -6,6 +6,53 @@ A second-brain workspace for talking through ideas with **Moo**, retaining their
 
 This is a development build. Fixture mode labels simulated responses; model output can still be wrong or incomplete. Review saved evidence and unresolved work before relying on an answer.
 
+## For hackathon judges
+
+Moolai is a macOS desktop app, entered in the **Best Apps and Agents** track. You talk through what you're studying; Moo keeps every word, organizes your thoughts into connected notes in the background, and answers out loud from your notes, your screen (only when you ask or say yes) or the web.
+
+### How it uses NVIDIA Nemotron on Nebius Token Factory
+
+**Nemotron 3 Ultra** answers every request: it plans the tool calls (search, read, create and connect notes, conversation history, screen reading, web research) and writes the cited answer and its spoken summary in the same call. **Nemotron 3.5 Lightning** handles the frequent background work: organizing dictation into topic notes, titles and summaries, and writing a spoken summary when an answer arrives without one. All four hosted models go through Token Factory's OpenAI-compatible API with one key, and the model is chosen per request. The backend checks the account's model list and fails visibly if a configured model is missing; it never substitutes another.
+
+| Model | Maker | Job in Moolai | Where it runs | Override |
+| --- | --- | --- | --- | --- |
+| Nemotron 3 Ultra (`nvidia/Nemotron-3-Ultra-550b-a55b`) | NVIDIA | Answers, tool use, spoken summaries | Nebius Token Factory | `NEBIUS_AGENT_MODEL` |
+| Nemotron 3.5 Lightning (`nvidia/Nemotron-3_5-Lightning`) | NVIDIA | Topic notes, titles, summaries | Nebius Token Factory | `NEBIUS_SUMMARY_MODEL` |
+| GLM 5.3 Flash (`zai-org/GLM-5.3-Flash`) | Z.ai | Exact text and table values on screen | Nebius Token Factory | `NEBIUS_OCR_MODEL` |
+| MiniCPM-V 4.5 (`openbmb/MiniCPM-V-4_5`) | OpenBMB | Describing a visual scene | Nebius Token Factory | `NEBIUS_VISION_MODEL` |
+| Jev 1.13 (`jev-1.13.0`) | TypeSafe | J1 routing of each turn, J7 tags and summary review, J6 connections | TypeSafe API | `JEV_MODEL` |
+| Whisper large-v3-turbo | OpenAI | Speech recognition (default) | Your Mac, whisper.cpp | `asr-config.json` |
+| Qwen3-ASR 1.7B | Qwen (Alibaba) | Optional speech recognition with live captions | Your Mac, MLX | [Qwen option](docs/whisper-integration.md#optional-local-qwen-trial) |
+| Kokoro (`af_heart`) | hexgrad | Moo's voice | Your Mac, MLX | `tts-config.json` |
+
+[Tavily](https://tavily.com) supplies web search and page extraction. Model IDs are pinned in `backend/moolai_backend/settings.py`; set the override variables in `backend/.env` if an ID changes.
+
+### Try it
+
+- **Without keys:** [Quick start](#quick-start-without-provider-accounts) runs fixture mode. Responses are simulated and labelled, and nothing is sent to a model.
+- **With your own keys:** [Enable real providers](#enable-real-providers) and [Enable local voice](#enable-local-voice). You need Docker Desktop and Nebius Token Factory, TypeSafe and Tavily keys.
+- **The demo video's live captions** use the optional local Qwen recognizer: `MOOLAI_ASR_CONFIG=scripts/qwen-asr/trial-config.json npm run asr` after its [one-time setup](docs/whisper-integration.md#optional-local-qwen-trial).
+
+### Known limitations
+
+- If you pause for about a second and start again, Moo may treat it as one turn.
+- The spoken summary can leave out a qualification. The full answer is always on screen, and "read it in full" reads all of it.
+- On dense tables, screen reading may leave out a value; it does not invent one, and Moo says when it could not read a value. Reading a screenshot can take up to a minute; after 60 seconds Moo stops and says so.
+- Long or dense dictation may need **Retry organization**. The transcript is always saved.
+- Search returns the top matching notes; it is not an inventory of the whole Brain.
+- When notes disagree, Moo can misjudge which dated statement is current. Check the cited notes.
+- Screen help captures the whole main display, leaving out Moolai's own window. A screenshot is attached to every note from the conversation it was taken in.
+- In the desktop app, save title or summary edits before switching notes.
+- If storage or a provider fails, Moo says so; repeat the request or press **Retry**. Moo never repeats a failed provider call by itself. It makes extra calls only to finish an answer: one shorter retry when an answer runs out of room, a spoken summary when the answer has none, and the screenshot you asked for when the answer skipped it.
+- A very long single session uses more storage than it needs. Start a new session for each sitting.
+- There is no sync yet. Use one device per data folder and backend.
+- Local-folder search is off in this build.
+- Live use needs an Apple Silicon Mac with local speech set up, plus your own provider keys. Fixture mode needs neither.
+
+### Roadmap
+
+The Agent reaches storage only through one Brain port, and the same acceptance suite runs it against two adapters, SQLite and in-memory. An Obsidian adapter behind the same port and two-way sync between people's Brains are later work; neither is part of this submission.
+
 ## Quick start without provider accounts
 
 Requirements: Apple Silicon Mac, macOS 14+, Apple command-line tools, Node 22.13 or newer, and npm. Dependencies are pinned in `package-lock.json`.
@@ -43,13 +90,13 @@ docker compose up --build -d
 npm run desktop
 ```
 
-The configured exact models are Jev 1.13, Nemotron 3.5 Lightning (`nvidia/Nemotron-3_5-Lightning`) for summaries, Nemotron 3 Ultra (`nvidia/Nemotron-3-Ultra-550b-a55b`) for answers/tools, GLM 5.3 Flash (`zai-org/GLM-5.3-Flash`, low reasoning) for exact OCR fields, and MiniCPM-V 4.5 (`openbmb/MiniCPM-V-4_5`) for visual scenes. The backend checks Nebius account inventory and fails visibly if a model is missing. It never chooses another model silently. Tavily supplies web research. See [backend setup and API](backend/README.md). Existing installations should set `NEBIUS_SUMMARY_MODEL=nvidia/Nemotron-3_5-Lightning` in their ignored `backend/.env` and restart/recreate the backend to apply it. Nano remains an explicit configuration option; models are never substituted automatically. Standalone summaries disable thinking; topic organization retains provider-default reasoning with a 16,384-token reasoning-inclusive allowance (`NEBIUS_ORGANIZATION_MAX_TOKENS`).
+The configured exact models are Jev 1.13, Nemotron 3.5 Lightning (`nvidia/Nemotron-3_5-Lightning`) for summaries, Nemotron 3 Ultra (`nvidia/Nemotron-3-Ultra-550b-a55b`) for answers/tools, GLM 5.3 Flash (`zai-org/GLM-5.3-Flash`, low reasoning) for exact OCR fields, and MiniCPM-V 4.5 (`openbmb/MiniCPM-V-4_5`) for visual scenes. The backend checks Nebius account inventory and fails visibly if a model is missing. It never chooses another model silently. Tavily supplies web research. See [backend setup and API](backend/README.md). Nano remains an explicit configuration option; models are never substituted automatically. Standalone summaries disable thinking; topic organization retains provider-default reasoning with a 16,384-token reasoning-inclusive allowance (`NEBIUS_ORGANIZATION_MAX_TOKENS`).
 
 Moo keeps the complete current request and a bounded recent dialogue window (six exchanges, 8 KB and 30 minutes). Omitted exchanges remain saved and are explicitly marked as unavailable context; date-based recall uses the history tool. Earlier task-specific instructions are historical context, not permanent settings. Controller constraints such as notes-only remain enforced.
 
 A corrected request can show a separate **Moo understood** line generated with the answer; original captions remain unchanged. It disappears on a new response or corrected source. Speech renders unambiguous dates, process arrows and unit rates naturally while preserving the written answer. Ambiguous symbols rely on the generated spoken explanation.
 
-Provider calls use bounded context/output. The only automatic paid retry is one retry of an Agent answer that exhausts its output allowance. This build is not an account-wide spending limiter. After local saving succeeds, provider failure leaves the original text available. Backend connectivity is shown separately from a note’s processing state; reconnecting does not replay failed work. An affected note offers **Retry summary**, which retries only its processing and does not replay earlier agent requests or tools. Technical diagnostics stay outside the note reader.
+Provider calls use bounded context/output. A failed provider call is never repeated automatically. Three automatic extra calls only complete an answer: one shorter retry of an Agent answer that exhausts its output allowance, a Lightning spoken summary for a long or structured answer that arrives without one, and the screenshot the user asked for when the answer was written without it. This build is not an account-wide spending limiter. After local saving succeeds, provider failure leaves the original text available. Backend connectivity is shown separately from a note’s processing state; reconnecting does not replay failed work. An affected note offers **Retry summary**, which retries only its processing and does not replay earlier agent requests or tools. Technical diagnostics stay outside the note reader.
 
 ## Everyday startup after setup
 
@@ -79,7 +126,7 @@ npm run asr
 
 In a second terminal, launch the desktop, choose **Start session**, then enable the microphone toggle. The installer verifies exact hashes from [whisper-artifacts.json](docs/whisper-artifacts.json): Whisper **large-v3-turbo F16** (1.51 GiB), Silero VAD 6.2.0 and whisper.cpp 1.9.4 on Apple Silicon Metal. It requires Python 3.12+, Apple command-line tools and ffmpeg. Audio stays local.
 
-Select `large-v3-turbo` or `large-v3` through the `model` field in [asr-config.json](asr-config.json). Then rerun setup and restart ASR; there is no automatic model substitution. The same file configures the Moo vocabulary hint and bounded pause detection. See [speech configuration and behavior](docs/whisper-integration.md).
+Select `large-v3-turbo` or `large-v3` through the `model` field in [asr-config.json](asr-config.json). Then rerun setup and restart ASR; there is no automatic model substitution. The same file configures the Moo vocabulary hint and bounded pause detection. See [speech configuration and behavior](docs/whisper-integration.md), which also covers the optional local Qwen recognizer with live captions.
 
 The first microphone request may show a macOS permission prompt. Screen permission is requested only for an authorized capture. macOS checks it for the app that ran `npm run moo`, such as Warp or Terminal, not for Moolai Native; `npm run moo` warns at startup when that app does not have it. Direct requests open a conversation with or without **Moo**; subsequent speech stays in it across ASR chunks and pauses. J1 assesses assembled turns, including natural endings. Say **“Moo, finish conversation”** or use **Finish conversation**. If work is running, choose finish, cancel or continue. Voice turns complete through local endpoint detection; **Send** submits typed text.
 
@@ -87,17 +134,17 @@ The microphone waits up to 90 seconds for the local recognition service to repor
 
 Select the microphone in System Settings → Sound → Input before enabling the microphone. The adapter emits complete utterances, preserves line breaks inside them, and saves rejected repetitive output for review without routing it. Test microphone accuracy, final-word retention and speech-output echo handling on the device you intend to use.
 
-Local Kokoro Heart (`af_heart`) is the default voice. `npm run setup:tts` installs the pinned runtime/model; Python 3.12+ is required. The worker warms when voice is enabled and stays loaded in the Agent host. Configure `tts-config.json`; `provider: "apple"` explicitly selects Apple speech instead. Kokoro streams in-memory PCM through the same native voice-processing engine as active capture. Output-only playback uses a separate engine that never opens microphone input. Detected user speech stops playback and holds further tool dispatch and publication while J1 interprets the utterance. Attention checks preserve the original task; substantive new requests supersede it. Interrupted playback never resumes automatically. **Stop speech** ends playback only; the answer, the conversation and any walkthrough offer stay. **Stop response** appears while an answer is being prepared and nothing is playing, and cancels that answer. Turning the microphone on never cancels an answer. Each answer requests a concise spoken summary paragraph in the same generation call. If a short plain-prose answer omits it, the complete answer can be spoken without another model call; long or structured responses still require a generated summary. Optional detailed walkthroughs cannot block that summary. Ask “read it in full,” “repeat that,” or “walk me through it” to replay the saved answer without restarting research; walkthroughs continue in batches of five. Missing narration is reported separately from a saved written answer. Full detail remains onscreen in Markdown. Acoustic interruption and echo rejection must be validated on the intended headset and speakers; a build alone does not establish them. Microphone PCM stays in memory; the app retains transcripts and requested screen evidence, not microphone recordings. See [native protocol and permissions](native/README.md).
+Local Kokoro Heart (`af_heart`) is the default voice. `npm run setup:tts` installs the pinned runtime/model; Python 3.12+ is required. The worker warms when voice is enabled and stays loaded in the Agent host. Configure `tts-config.json`; `provider: "apple"` explicitly selects Apple speech instead. Kokoro streams in-memory PCM through the same native voice-processing engine as active capture. Output-only playback uses a separate engine that never opens microphone input. Detected user speech pauses playback and holds further tool dispatch and publication. A sound with no words, or only a filler such as “uh huh” or a bare “Moo” while Moo is speaking or working, resumes playback: nothing is routed, and the sound is hidden from the chat but kept in the session record. Real words stop playback and go to J1; a pause still unresolved after 8 seconds also stops it. A bare “Moo” while Moo waits gets “I'm here and listening.”, and while it works silently, a short status line; a repeat within about 10 seconds is ignored as echo. Attention checks preserve the original task; substantive new requests supersede it. An answer stopped by real words is not restarted automatically. **Stop speech** ends playback only; the answer, the conversation and any walkthrough offer stay. **Stop response** appears while an answer is being prepared and nothing is playing, and cancels that answer. Turning the microphone on never cancels an answer. Each answer requests a concise spoken summary paragraph in the same generation call. If a short plain-prose answer omits it, the complete answer can be spoken without another model call; for a long or structured answer, Lightning writes the summary in a second call. Optional detailed walkthroughs cannot block that summary. Ask “read it in full,” “repeat that,” or “walk me through it” to replay the saved answer without restarting research; walkthroughs continue in batches of five. Missing narration is reported separately from a saved written answer. Full detail remains onscreen in Markdown. Acoustic interruption and echo rejection must be validated on the intended headset and speakers; a build alone does not establish them. Microphone PCM stays in memory; the app retains transcripts and requested screen evidence, not microphone recordings. See [native protocol and permissions](native/README.md).
 
 ## Use and boundaries
 
 - Set a study subject when useful. Off-topic is relative to that subject; it does not rate the thought's value.
 - J7 assigns Question, Reference, Idea or Action and assesses fidelity/context independently. Lightning proposes up to three topic/subcategory suggestions; existing manual tags are preserved.
-- Ready, Needs review and Pending describe summary fidelity/context, with provisional 0.8 decision thresholds. Missing assessment never implies Ready.
-- J1 can offer contextual screen help for a visual question. The controller keeps the original request/revision through the offer and “yes,” then captures once and sends the original question plus added constraints to MiniCPM. Ordinary general-help offers capture nothing. Declining, unrelated replies or revoked capture do not trigger the offered screenshot; corrected requests require fresh acceptance.
-- Ultra receives structured evidence from GLM for OCR or MiniCPM for visual scenes, not raw image bytes. A requested screen analysis is attempted once; failed extraction does not trigger another capture or a change of mode without a new user request. Visual features and tentative identifications are separate from OCR text fields. Unsupported or contradictory OCR values are withheld; uncertain/absent visual targets need clarification. Image instructions are source data.
+- Ready, Needs review and Pending describe summary fidelity/context. A summary needs review when J7 rates source fidelity below 0.4 or understandability below 0.6. Missing assessment never implies Ready.
+- J1 can offer contextual screen help for a visual question, and Moo offers it after saving a doubt you state (“I saved your thought. Would you like me to look at your screen to help with it?”). The controller keeps the original request/revision through the offer and “yes,” then captures once and sends the original question plus added constraints to MiniCPM for a visual question, or to GLM OCR for a saved doubt. Ordinary general-help offers capture nothing. Declining, unrelated replies or revoked capture do not trigger the offered screenshot; corrected requests require fresh acceptance.
+- Ultra receives structured evidence from GLM for OCR or MiniCPM for visual scenes, not raw image bytes. A requested screen analysis is attempted once; failed extraction does not trigger another capture or a change of mode without a new user request. A reading that takes more than 60 seconds is stopped, and Moo says so. Visual features and tentative identifications are separate from OCR text fields. Unsupported or contradictory OCR values are withheld; uncertain/absent visual targets need clarification. Image instructions are source data.
 - Moo can search/read Brain notes, create notes, interpret requested screenshots and research the web. “Use only my notes” disables web tools for the conversation. Web pages and screen readings reach the model once, in the request that fetched them; later requests see only short receipts, and a follow-up may open a page an earlier search returned.
-- J6 compares at most five content-related candidates using retained source, and automatically accepts associations scoring at least 0.8. Generated provenance and confidence remain stored; removing an association is persistent. Summary review status does not by itself block connections. It never merges or deletes notes.
+- J6 compares at most five candidates using retained source, up to two of them conversation neighbours and the rest content matches, and automatically accepts associations scoring at least 0.8. Generated provenance and confidence remain stored; removing an association is persistent. Summary review status does not by itself block connections. It never merges or deletes notes.
 - Transcripts save immediately. Roughly once a minute, Lightning organizes new dictation and Moo dialogue into consecutive topic episodes. A pause is not a note boundary; the latest topic remains available for continuation even after a complete summary. Session stop finalizes remaining content. Full conversations remain source records, while graph notes retain attributed source spans, original requests and execution context. Failed/interrupted provider calls require explicit retry; oversized source is never silently clipped. Existing historical notes are not automatically reorganized.
 - Each note opens on its summary. Recorded text and connections are separate tabs, with speaker attribution and linked original conversations preserved. Title and summary edits are protected from later processing.
 
@@ -118,11 +165,13 @@ npm run check
 npm run test:desktop
 sh native/test.sh
 npm run build:native
-python3 -m venv backend/.venv
+python3.13 -m venv backend/.venv
 backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt -c backend/constraints.txt
 cd backend
 .venv/bin/python -m pytest -q
 ```
+
+The application tests call ripgrep and FFmpeg from your PATH (`brew install ripgrep ffmpeg`); without ripgrep, the local-file tests fail. CI installs both. The backend needs Python 3.13.
 
 With the ASR server running, `npm run test:asr` performs real local streaming inference on temporary synthetic speech, writes transcript/timing results under ignored `.data/validation/`, and deletes the audio. It requires macOS `say` and FFmpeg. It does not validate microphone accuracy or a user's accent. The [native guide](native/README.md) also covers the multi-block synthetic speech check.
 
@@ -142,7 +191,7 @@ The inspector always opens on **Summary**, with exactly three tabs:
 - **Recorded text:** original dictation, Moo conversation or written content, with You/Moo attribution, attachments and links to original conversation sources. A note can contain more than one source type.
 - **Connections:** related titles and previews; click to explore or remove an unwanted association.
 
-Search, topic and category filters are available in the collapsed **Search & filters** control. Internal IDs, raw provider errors, revision numbers and confidence scores are excluded from the reader. Titles are clickable references to stable internal records. The graph shows up to 100 recent notes plus a selected note and up to 30 neighbours, with its visible scope indicated. Zoom and selection remain stable as notes arrive.
+Search, topic and category filters are available in the collapsed **Search & filters** control. Internal IDs, raw provider errors, revision numbers and confidence scores are excluded from the reader. Titles are clickable references to stable internal records. The graph shows up to 100 recent notes plus a selected note and up to 30 linked or same-session neighbours, with its visible scope indicated. A study session with two or more visible notes is drawn as a hub linked to them. Zoom and selection remain stable as notes arrive.
 
 The first schema upgrade creates `brain.before-v2.sqlite` beside the local database before enabling revision history. History begins at the upgrade; earlier versions are not reconstructed. Source records, attachment references, archived records and manual edits remain stored even when their management controls are absent from the desktop. This focused interface has no manual note-creation, reply/correction, archive, snapshot-transfer or export controls. Moo can still create a note when requested through its guarded tools. Two-way synchronization remains future work.
 
@@ -152,7 +201,7 @@ Use `npm run check` for deterministic application checks and `npm run test:deskt
 
 ### Recall and connections
 
-Moo uses `conversation_history` for calendar-day recall, based on actual transcript timestamps in the host timezone (Asia/Singapore on this installation). A successful empty result can include the latest earlier discussion; failed retrieval does not establish absence. `connect_notes` links existing notes on explicit request, with exact-title/ID resolution and ambiguity checks; it does not create a combined note. Automatic J6 associations remain source-grounded, using up to two conversation neighbours among at most five candidates. Removed associations remain dismissed.
+Moo uses `conversation_history` for calendar-day recall, based on actual transcript timestamps in the host timezone. A successful empty result can include the latest earlier discussion; failed retrieval does not establish absence. `connect_notes` links existing notes on explicit request, with exact-title/ID resolution and ambiguity checks; it does not create a combined note. Automatic J6 associations remain source-grounded, using up to two conversation neighbours among at most five candidates. Removed associations remain dismissed.
 
 Related enumerated reviews stay together during topic consolidation. Failed batches remain saved for explicit retry; corrections invalidate stale results, while later unrelated work does not. Technical routing/connection traces stay in local Brain state.
 

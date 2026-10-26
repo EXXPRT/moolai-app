@@ -70,7 +70,7 @@ Each utterance is bounded by `maxUtteranceSeconds` (60 by default). Reading alou
 
 Stop/Send drains already-captured PCM, completes pending transcriptions, emits all final text, and only then acknowledges commit. Native Stop waits up to 35 seconds; the host allows 40 seconds for Stop and 60 seconds for Flush plus reconnection. Concurrent Stop/Flush/TTS calls share a drain. Failed Stop still drains diagnostic storage before closing the Brain. Disconnected requests cannot deliver stale text into a new capture.
 
-Audio buffers are released after completion, cancellation or failure. The server runs without `--convert`, so it reads uploaded WAV bytes in memory. Microphone recordings are not written to disk. Recognition stays active through voice-processed synthesis. Local speech onset stops playback and redirects the current exchange; acoustic echo rejection remains device-dependent and requires acceptance testing.
+Audio buffers are released after completion, cancellation or failure. The server runs without `--convert`, so it reads uploaded WAV bytes in memory. Microphone recordings are not written to disk. Recognition stays active through voice-processed synthesis. Local speech onset pauses playback; real words stop it and redirect the current exchange, while a sound with no words or a lone filler resumes it; acoustic echo rejection remains device-dependent and requires acceptance testing.
 
 ## Conversation controls and validation
 
