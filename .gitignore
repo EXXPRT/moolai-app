@@ -15,14 +15,14 @@ native/.swiftpm/
 native/*.app/
 .data/
 artifacts/
-# Local historical planning snapshots; authoritative notes stay in Obsidian.
+# Local historical planning snapshots.
 *-2026-09-19/
 *-2026-09-20/
 *-note-update/
 obsidian-notes/
 
-# Public documentation is intentionally allowlisted. Keep internal development
-# notes in Obsidian and generated traces/results in .data/, never in the PR.
+# Public documentation is intentionally allowlisted. Keep development notes and
+# generated traces or results out of the repository; use ignored .data/.
 /docs/*
 !/docs/architecture.md
 !/docs/whisper-integration.md
@@ -32,12 +32,6 @@ obsidian-notes/
 # stays local until it has been reviewed and added here.
 /experiments/*
 !/experiments/agent-closeout/
-!/experiments/agent-final-regression/
-!/experiments/brain-verification/
-!/experiments/canary-comparison/
-!/experiments/contextual-help/
 !/experiments/evaluation/
 !/experiments/fixtures/
-!/experiments/harness-comparison/
 !/experiments/j1-closing/
-!/experiments/router-harness/

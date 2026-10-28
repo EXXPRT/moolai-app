@@ -40,13 +40,6 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run check
-      - name: Install isolated harness experiment dependencies
-        run: npm ci --prefix experiments/harness-comparison --ignore-scripts --no-audit --no-fund
-      - name: Verify harness integrations without providers
-        run: |
-          npm run typecheck --prefix experiments/harness-comparison
-          npm test --prefix experiments/harness-comparison
-          ./node_modules/.bin/tsc --ignoreConfig --noEmit --strict --noUncheckedIndexedAccess --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck scripts/validate-agent-harness.ts
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13.5"

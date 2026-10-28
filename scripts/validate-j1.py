@@ -1,8 +1,8 @@
 """Bounded J1 baseline using production adapter and synthetic, predeclared cases.
 
-Prepare controller inputs with scripts/replay-j1.ts first. Default is a dry run;
---live sends only those synthetic inputs to TypeSafe. Never retries or changes
-production prompts. The shared US$5 ledger is locked for the whole run.
+Default is a dry run; --live sends only those synthetic inputs to TypeSafe.
+Never retries or changes production prompts. A local spending ledger is locked
+for the whole run.
 """
 import argparse
 import asyncio
