@@ -111,7 +111,7 @@ export async function brainConformance(brain: BrainPort) {
   assert.ok(await brain.getRecord(r.id));
 }
 
-/** Data-repair regressions shared by Memory, SQLite and the private vault adapter. */
+/** Data-repair regressions shared by every BrainPort adapter (Memory and SQLite here). */
 export async function brainReviewConformance(brain: BrainPort) {
   const createdAt = "2026-10-07T00:00:00.000Z";
   const imported = await brain.createRecord({id: "review-import-template", kind: "note", createdAt});

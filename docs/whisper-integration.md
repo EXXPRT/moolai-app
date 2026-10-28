@@ -7,7 +7,7 @@ The selected ASR is **Whisper large-v3-turbo F16 with Silero 6.2.0 speech detect
 Install Node dependencies, Python 3.12+, Apple command-line tools and ffmpeg. Then run:
 
 ```sh
-npm install
+npm ci
 npm run setup:asr
 npm run asr
 ```
@@ -32,7 +32,7 @@ The same file controls the English language, short `Moo.` vocabulary hint, local
 
 ## Optional local Qwen trial
 
-Qwen3-ASR-1.7B BF16 is an explicit trial option, separate from the hosted Qwen-Audio-3.1 service. It runs through pinned MLX Audio on Apple Silicon. It does not automatically replace the default Whisper configuration.
+Qwen3-ASR-1.7B BF16 is an explicit trial option. It runs through pinned MLX Audio on Apple Silicon. It does not automatically replace the default Whisper configuration.
 
 With Python 3.13+, set up the isolated environment and verified artifacts:
 
@@ -46,7 +46,7 @@ Turn the microphone off and stop the running ASR service before starting the tri
 MOOLAI_ASR_CONFIG=scripts/qwen-asr/trial-config.json npm run asr
 ```
 
-Wait for `Local Qwen trial ready`, then use the app's microphone control. To return to Whisper, stop the trial and run `npm run asr` without the override. Changing the model on the same port does not require restarting the Agent or replaying saved work. Never replace an ASR process while capture is active.
+Wait for `Local Qwen trial ready`, then use the app's microphone control. To return to Whisper, stop the trial and run `npm run asr` without the override. `npm run moo` restarts the recognizer it manages with the default configuration, so to use Qwen through the everyday launcher, pass the override to it instead: `MOOLAI_ASR_CONFIG=scripts/qwen-asr/trial-config.json npm run moo`. Changing the model on the same port does not require restarting the Agent or replaying saved work. Never replace an ASR process while capture is active.
 
 Repeating the startup command for the same running model reports `Local ASR already running` and exits without loading another copy or changing microphone state. The running service keeps its existing configuration; apply configuration changes by explicitly stopping and restarting it with the microphone off. A different model or unrecognized occupied port is reported without stopping that service.
 

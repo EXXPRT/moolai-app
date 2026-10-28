@@ -1,14 +1,16 @@
 # Moolai
 
-A second-brain workspace for talking through ideas with **Moo**, retaining their source and exploring connections between them. The app combines a continuous conversation with a graph of your notes, backed by an independent TypeScript Agent, SQLite/files storage, a Swift voice/screen companion and one FastAPI provider backend.
+**Talk through what you're studying with Moo.** Moo keeps every word, organizes your thoughts into connected notes in the background, and answers out loud from your notes, your screen (only when you ask or say yes) or the web.
 
-**Save transcript → J1 / continuous Moo → Lightning topic episodes → J7 tags/summary quality → J6 connections.** Every route retains source text. Uncertain and off-topic thoughts remain accessible. Local saving and backend acceptance are separate statuses.
+Moolai is a macOS desktop study partner. Questions, half-formed ideas and points of doubt usually get lost between a lecture, a worksheet and a search tab. Moolai saves them word for word as you speak, groups them into growing topic notes, connects related notes in a graph, and answers when you say “Moo, …”, citing the notes it used. When you say you're stuck, it saves the doubt and offers to look at your screen.
 
-This is a development build. Fixture mode labels simulated responses; model output can still be wrong or incomplete. Review saved evidence and unresolved work before relying on an answer.
+**How a thought flows:** you speak → it is saved word for word → Nemotron 3.5 Lightning organizes it into a growing topic note → Jev tags the note, checks its summary against what you said and connects it to related notes. Uncertain and off-topic thoughts are kept too. Saving on your Mac and the backend accepting a record are shown as separate statuses.
+
+The app combines a continuous conversation with a graph of your notes, backed by an independent TypeScript Agent, SQLite storage, a Swift voice and screen companion and one FastAPI provider backend.
 
 ## For hackathon judges
 
-Moolai is a macOS desktop app, entered in the **Best Apps and Agents** track. You talk through what you're studying; Moo keeps every word, organizes your thoughts into connected notes in the background, and answers out loud from your notes, your screen (only when you ask or say yes) or the web.
+Moolai is entered in the **Best Apps and Agents** track.
 
 ### How it uses NVIDIA Nemotron on Nebius Token Factory
 
@@ -31,10 +33,11 @@ Moolai is a macOS desktop app, entered in the **Best Apps and Agents** track. Yo
 
 - **Without keys:** [Quick start](#quick-start-without-provider-accounts) runs fixture mode. Responses are simulated and labelled, and nothing is sent to a model.
 - **With your own keys:** [Enable real providers](#enable-real-providers) and [Enable local voice](#enable-local-voice). You need Docker Desktop and Nebius Token Factory, TypeSafe and Tavily keys.
-- **The demo video's live captions** use the optional local Qwen recognizer: `MOOLAI_ASR_CONFIG=scripts/qwen-asr/trial-config.json npm run asr` after its [one-time setup](docs/whisper-integration.md#optional-local-qwen-trial).
+- **The demo video's live captions** use the optional local Qwen recognizer, which needs Python 3.13 or newer. After its [one-time setup](docs/whisper-integration.md#optional-local-qwen-trial), start Moo with `MOOLAI_ASR_CONFIG=scripts/qwen-asr/trial-config.json npm run moo`. The default Whisper setup shows your words after each pause, not live captions.
 
 ### Known limitations
 
+- Model output can be wrong or incomplete. Check the cited notes and the saved source before relying on an answer.
 - If you pause for about a second and start again, Moo may treat it as one turn.
 - The spoken summary can leave out a qualification. The full answer is always on screen, and "read it in full" reads all of it.
 - On dense tables, screen reading may leave out a value; it does not invent one, and Moo says when it could not read a value. Reading a screenshot can take up to a minute; after 60 seconds Moo stops and says so.
@@ -43,7 +46,7 @@ Moolai is a macOS desktop app, entered in the **Best Apps and Agents** track. Yo
 - When notes disagree, Moo can misjudge which dated statement is current. Check the cited notes.
 - Screen help captures the whole main display, leaving out Moolai's own window. A screenshot is attached to every note from the conversation it was taken in.
 - In the desktop app, save title or summary edits before switching notes.
-- If storage or a provider fails, Moo says so; repeat the request or press **Retry**. Moo never repeats a failed provider call by itself. It makes extra calls only to finish an answer: one shorter retry when an answer runs out of room, a spoken summary when the answer has none, and the screenshot you asked for when the answer skipped it.
+- If storage or a provider fails, Moo says so; repeat the request, or press **Retry summary** or **Retry organization** on the note. Moo never repeats a failed provider call by itself. It makes extra calls only to finish an answer: one shorter retry when an answer runs out of room, a spoken summary when the answer has none, and the screenshot you asked for when the answer skipped it.
 - A very long single session uses more storage than it needs. Start a new session for each sitting.
 - There is no sync yet. Use one device per data folder and backend.
 - Local-folder search is off in this build.
@@ -61,18 +64,18 @@ Requirements: Apple Silicon Mac, macOS 14+, Apple command-line tools, Node 22.13
 npm ci
 npm run build:desktop
 npm run build:native
-MOOLAI_MODE=fixture npm run desktop
+MOOLAI_MODE=fixture MOOLAI_DATA_DIR="$(mktemp -d)" npm run desktop
 ```
 
-The desktop starts the independent Agent runtime when needed. Type a thought and press **Send**. Try “Moo, help me understand this note,” followed by more turns, then **Finish conversation**. Fixture mode exercises saving, routing and UI behavior with clearly marked simulated generation; it is not a model-quality test. Screen help in fixture mode uses a simulated image and never takes a real screenshot.
+The desktop starts the independent Agent runtime when needed. The temporary `MOOLAI_DATA_DIR` keeps fixture notes out of your real Brain; if another Moolai runtime is already running, stop it first or also set a free `MOOLAI_PORT` (default 4317). Press **Start session** (top right): the text box stays disabled until a session is running. Type a thought and press **Send ↗**. Fixture replies begin with “[Fixture response — no AI inference]”. Try “Moo, help me understand this note,” followed by more turns, then **Finish conversation**. Fixture mode exercises saving, routing and UI behavior with clearly marked simulated generation; it is not a model-quality test. Screen help in fixture mode uses a simulated image and never takes a real screenshot.
 
-The runtime can run without Electron:
+For API testing, the fixture runtime also runs headless, without the desktop window:
 
 ```sh
 npm run demo
 ```
 
-Local data is stored in `~/Library/Application Support/Moolai`: SQLite records, pending operations, immutable attachments and an authenticated runtime connection file. Set `MOOLAI_DATA_DIR` to use an isolated test directory. Only one runtime should use a data directory/port. Closing the window stops microphone capture and playback while retaining the conversation. Use **Mic off** to stop capture or **Stop session** to end the study session. Both return at once; organization of the remaining speech continues in the background ("Organizing your thoughts…"). Each **Start session** begins a new session transcript, and quitting or restarting also ends the current one. Start also closes a conversation left open by an earlier session, quietly and keeping its transcript, unless its answer is still being prepared. An answer still being prepared when you stop lands in the next session's transcript. Start a new study session for each sitting. Stop a terminal-hosted runtime with Ctrl-C. To change fixture/live mode, stop the existing runtime first; the interface shows its actual mode.
+Local data is stored in `~/Library/Application Support/Moolai`: SQLite records, pending operations, immutable attachments and an authenticated runtime connection file. Set `MOOLAI_DATA_DIR` to use an isolated test directory. Only one runtime should use a data directory/port. Closing the window stops microphone capture and playback while retaining the conversation. Click the microphone button (it reads **Mic on** while listening) to stop capture, or **Stop session** to end the study session. Both return at once; organization of the remaining speech continues in the background ("Organizing your thoughts…"). Each **Start session** begins a new session transcript, and quitting or restarting also ends the current one. Start also closes a conversation left open by an earlier session, quietly and keeping its transcript, unless its answer is still being prepared. An answer still being prepared when you stop lands in the next session's transcript. Start a new study session for each sitting. Stop a terminal-hosted runtime with Ctrl-C. To change fixture/live mode, stop the existing runtime first; the interface shows its actual mode.
 
 ## Enable real providers
 
@@ -90,29 +93,13 @@ docker compose up --build -d
 npm run desktop
 ```
 
-The configured exact models are Jev 1.13, Nemotron 3.5 Lightning (`nvidia/Nemotron-3_5-Lightning`) for summaries, Nemotron 3 Ultra (`nvidia/Nemotron-3-Ultra-550b-a55b`) for answers/tools, GLM 5.3 Flash (`zai-org/GLM-5.3-Flash`, low reasoning) for exact OCR fields, and MiniCPM-V 4.5 (`openbmb/MiniCPM-V-4_5`) for visual scenes. The backend checks Nebius account inventory and fails visibly if a model is missing. It never chooses another model silently. Tavily supplies web research. See [backend setup and API](backend/README.md). Nano remains an explicit configuration option; models are never substituted automatically. Standalone summaries disable thinking; topic organization retains provider-default reasoning with a 16,384-token reasoning-inclusive allowance (`NEBIUS_ORGANIZATION_MAX_TOKENS`).
+The configured exact models are Jev 1.13, Nemotron 3.5 Lightning (`nvidia/Nemotron-3_5-Lightning`) for summaries, Nemotron 3 Ultra (`nvidia/Nemotron-3-Ultra-550b-a55b`) for answers/tools, GLM 5.3 Flash (`zai-org/GLM-5.3-Flash`, low reasoning) for exact OCR fields, and MiniCPM-V 4.5 (`openbmb/MiniCPM-V-4_5`) for visual scenes. The backend checks Nebius account inventory and fails visibly if a model is missing. It never chooses another model silently. Tavily supplies web research. See [backend setup and API](backend/README.md). Standalone summaries disable thinking; topic organization retains provider-default reasoning with a 16,384-token reasoning-inclusive allowance (`NEBIUS_ORGANIZATION_MAX_TOKENS`).
 
 Moo keeps the complete current request and a bounded recent dialogue window (six exchanges, 8 KB and 30 minutes). Omitted exchanges remain saved and are explicitly marked as unavailable context; date-based recall uses the history tool. Earlier task-specific instructions are historical context, not permanent settings. Controller constraints such as notes-only remain enforced.
 
 A corrected request can show a separate **Moo understood** line generated with the answer; original captions remain unchanged. It disappears on a new response or corrected source. Speech renders unambiguous dates, process arrows and unit rates naturally while preserving the written answer. Ambiguous symbols rely on the generated spoken explanation.
 
 Provider calls use bounded context/output. A failed provider call is never repeated automatically. Three automatic extra calls only complete an answer: one shorter retry of an Agent answer that exhausts its output allowance, a Lightning spoken summary for a long or structured answer that arrives without one, and the screenshot the user asked for when the answer was written without it. This build is not an account-wide spending limiter. After local saving succeeds, provider failure leaves the original text available. Backend connectivity is shown separately from a note’s processing state; reconnecting does not replay failed work. An affected note offers **Retry summary**, which retries only its processing and does not replay earlier agent requests or tools. Technical diagnostics stay outside the note reader.
-
-## Everyday startup after setup
-
-Run `npm run moo`, or double-click **Moo.command** in the project folder. This rebuilds the desktop/native companion/backend, starts Docker Desktop if needed, refreshes Moolai's backend container, restarts the owned ASR and Agent runtime, then opens the app with the microphone off. Existing database volumes remain in place and SQLite is backed up before reopening. Unrecognized port owners are left alone; startup reports the conflict instead.
-
-To restart a running Moo from the command line, for example to free memory, run `npm run restart`: it is the same full rebuild and restart. Stop the session first and wait until organizing finishes; notes still being organized when Moo closes need **Retry organization**.
-
-Install dependencies and voice assets once using the setup commands below. Run this launcher again after code or configuration changes; a simple `npm run desktop` can otherwise reuse an older runtime. Startup logs and backups are stored in the selected data directory. A machine-specific entry may live in ignored `.data/start-moo.local.mjs`; the repository launcher works without it.
-
-New speech immediately appears as a **Growing note** with a source-based title and attributed preview, clearly distinguished from an AI summary. The first background organization pass is scheduled after about six seconds; subsequent new content is coalesced at roughly one-minute intervals. Lightning can extend the same note or start another topic episode, followed by classification and connections. The previous accepted summary remains visible during updates. Pauses and timer boundaries do not split notes. A complete summary remains eligible for same-topic continuation. Ending the study session settles the current note without duplicating it; stopping the microphone or closing a Moo conversation only checkpoints it. Your manual edits survive processing; failed work requires **Retry organization** and is never automatically resubmitted. Successful batches with more saved source can continue in the background even when the microphone is off. Closing processes at most four batches; **Continue organization** makes remaining work explicit while keeping the accepted summary visible. Existing historical notes are not reorganized.
-
-**Live note generation** follows the current growing note and shows revisable speech separately from its accepted summary. It is on initially; switching it off stops automatic navigation, not background saving. Selecting another note, editing, or closing the inspector pauses following until **Resume live note**. Provisional speech is a temporary preview, not a permanent knowledge note.
-
-Say **“Don’t save that”** to suppress the current derived note while retaining the original transcript/conversation and history. Moo asks for clarification if the active episode and pending speech are ambiguous. Suppressed source cannot recreate the note after processing or restart; later speech can start a fresh note. This is not transcript deletion.
-
-Enable **Auto-follow latest** above the conversation to follow incoming messages. Scrolling up pauses following so you can read earlier messages; **Jump to latest** returns to the newest message.
 
 ## Enable local voice
 
@@ -136,50 +123,33 @@ Select the microphone in System Settings → Sound → Input before enabling the
 
 Local Kokoro Heart (`af_heart`) is the default voice. `npm run setup:tts` installs the pinned runtime/model; Python 3.12+ is required. The worker warms when voice is enabled and stays loaded in the Agent host. Configure `tts-config.json`; `provider: "apple"` explicitly selects Apple speech instead. Kokoro streams in-memory PCM through the same native voice-processing engine as active capture. Output-only playback uses a separate engine that never opens microphone input. Detected user speech pauses playback and holds further tool dispatch and publication. A sound with no words, or only a filler such as “uh huh” or a bare “Moo” while Moo is speaking or working, resumes playback: nothing is routed, and the sound is hidden from the chat but kept in the session record. Real words stop playback and go to J1; a pause still unresolved after 8 seconds also stops it. A bare “Moo” while Moo waits gets “I'm here and listening.”, and while it works silently, a short status line; a repeat within about 10 seconds is ignored as echo. Attention checks preserve the original task; substantive new requests supersede it. An answer stopped by real words is not restarted automatically. **Stop speech** ends playback only; the answer, the conversation and any walkthrough offer stay. **Stop response** appears while an answer is being prepared and nothing is playing, and cancels that answer. Turning the microphone on never cancels an answer. Each answer requests a concise spoken summary paragraph in the same generation call. If a short plain-prose answer omits it, the complete answer can be spoken without another model call; for a long or structured answer, Lightning writes the summary in a second call. Optional detailed walkthroughs cannot block that summary. Ask “read it in full,” “repeat that,” or “walk me through it” to replay the saved answer without restarting research; walkthroughs continue in batches of five. Missing narration is reported separately from a saved written answer. Full detail remains onscreen in Markdown. Acoustic interruption and echo rejection must be validated on the intended headset and speakers; a build alone does not establish them. Microphone PCM stays in memory; the app retains transcripts and requested screen evidence, not microphone recordings. See [native protocol and permissions](native/README.md).
 
+## Everyday startup after setup
+
+Run `npm run moo`, or double-click **Moo.command** in the project folder. This rebuilds the desktop/native companion/backend, starts Docker Desktop if needed, refreshes Moolai's backend container, restarts the owned ASR and Agent runtime, then opens the app with the microphone off. Existing database volumes remain in place and SQLite is backed up before reopening. Unrecognized port owners are left alone; startup reports the conflict instead.
+
+To restart a running Moo from the command line, for example to free memory, run `npm run restart`: it is the same full rebuild and restart. Stop the session first and wait until organizing finishes; notes still being organized when Moo closes need **Retry organization**.
+
+Install dependencies and voice assets once using the setup commands below. Run this launcher again after code or configuration changes; a simple `npm run desktop` can otherwise reuse an older runtime. Startup logs and backups are stored in the selected data directory.
+
+New speech immediately appears as a **Growing note** with a source-based title and attributed preview, clearly distinguished from an AI summary. The first background organization pass is scheduled after about six seconds; subsequent new content is coalesced at roughly one-minute intervals. Lightning can extend the same note or start another topic episode, followed by classification and connections. The previous accepted summary remains visible during updates. Pauses and timer boundaries do not split notes. A complete summary remains eligible for same-topic continuation. Ending the study session settles the current note without duplicating it; stopping the microphone or closing a Moo conversation only checkpoints it. Your manual edits survive processing; failed work requires **Retry organization** and is never automatically resubmitted. Successful batches with more saved source can continue in the background even when the microphone is off. Closing processes at most four batches; **Continue organization** makes remaining work explicit while keeping the accepted summary visible. Existing historical notes are not reorganized.
+
+**Live note generation** follows the current growing note and shows revisable speech separately from its accepted summary. It is on initially; switching it off stops automatic navigation, not background saving. Selecting another note, editing, or closing the inspector pauses following until **Resume live note**. Provisional speech is a temporary preview, not a permanent knowledge note.
+
+Say **“Don’t save that”** to suppress the current derived note while retaining the original transcript/conversation and history. Moo asks for clarification if the active episode and pending speech are ambiguous. Suppressed source cannot recreate the note after processing or restart; later speech can start a fresh note. This is not transcript deletion.
+
+Enable **Auto-follow latest** above the conversation to follow incoming messages. Scrolling up pauses following so you can read earlier messages; **Jump to latest** returns to the newest message.
+
 ## Use and boundaries
 
 - Set a study subject when useful. Off-topic is relative to that subject; it does not rate the thought's value.
 - J7 assigns Question, Reference, Idea or Action and assesses fidelity/context independently. Lightning proposes up to three topic/subcategory suggestions; existing manual tags are preserved.
-- Ready, Needs review and Pending describe summary fidelity/context. A summary needs review when J7 rates source fidelity below 0.4 or understandability below 0.6. Missing assessment never implies Ready.
+- Summary review describes fidelity and context, not the thought's value. A summary shows **Needs review** when J7 rates source fidelity below 0.4 or understandability below 0.6, and **Unchecked summary** until it has been assessed. A missing assessment never counts as ready.
 - J1 can offer contextual screen help for a visual question, and Moo offers it after saving a doubt you state (“I saved your thought. Would you like me to look at your screen to help with it?”). The controller keeps the original request/revision through the offer and “yes,” then captures once and sends the original question plus added constraints to MiniCPM for a visual question, or to GLM OCR for a saved doubt. Ordinary general-help offers capture nothing. Declining, unrelated replies or revoked capture do not trigger the offered screenshot; corrected requests require fresh acceptance.
 - Ultra receives structured evidence from GLM for OCR or MiniCPM for visual scenes, not raw image bytes. A requested screen analysis is attempted once; failed extraction does not trigger another capture or a change of mode without a new user request. A reading that takes more than 60 seconds is stopped, and Moo says so. Visual features and tentative identifications are separate from OCR text fields. Unsupported or contradictory OCR values are withheld; uncertain/absent visual targets need clarification. Image instructions are source data.
 - Moo can search/read Brain notes, create notes, interpret requested screenshots and research the web. “Use only my notes” disables web tools for the conversation. Web pages and screen readings reach the model once, in the request that fetched them; later requests see only short receipts, and a follow-up may open a page an earlier search returned.
 - J6 compares at most five candidates using retained source, up to two of them conversation neighbours and the rest content matches, and automatically accepts associations scoring at least 0.8. Generated provenance and confidence remain stored; removing an association is persistent. Summary review status does not by itself block connections. It never merges or deletes notes.
 - Transcripts save immediately. Roughly once a minute, Lightning organizes new dictation and Moo dialogue into consecutive topic episodes. A pause is not a note boundary; the latest topic remains available for continuation even after a complete summary. Session stop finalizes remaining content. Full conversations remain source records, while graph notes retain attributed source spans, original requests and execution context. Failed/interrupted provider calls require explicit retry; oversized source is never silently clipped. Existing historical notes are not automatically reorganized.
 - Each note opens on its summary. Recorded text and connections are separate tabs, with speaker attribution and linked original conversations preserved. Title and summary edits are protected from later processing.
-
-### Read-only local folders (off in this build)
-
-Local-folder search is switched off in the submitted build: the desktop hides the folder control and the runtime refuses grants. It is development-only and needs `MOOLAI_LOCAL_FOLDERS=on` in `runtime.env`. The rest of this section applies only then.
-
-Install [ripgrep](https://github.com/BurntSushi/ripgrep#installation) (`brew install ripgrep` on macOS), or set `MOOLAI_RG_PATH` in `runtime.env` to an installed `rg` executable. The desktop inherits the runtime environment; a missing executable is reported explicitly. Open **Local folder access → Choose folder** to grant access. No folders are selected initially. Remove a folder from this list to revoke future reads. Grants are kept in `local-folders.json` in the app data directory.
-
-Retrieved excerpts may be sent to the configured model provider. Search is literal by default, with explicit regex and filename modes; results contain relative paths, lines and content fingerprints. Limits are 50 matches, five seconds per operation, 200 lines/16,000 characters per read and 4 MiB per UTF-8 file. Ignored, hidden, credential, log, database and binary files are excluded; symlinks are not followed. Large folders can exceed the bounded file listing; select a narrower folder. These are read-only tools, not terminal access or an Obsidian adapter.
-
-The Agent imports only [shared contracts](packages/contracts/src/index.ts), with capabilities injected through `BrainPort` and narrow provider ports. It runs against SQLite and an independent in-memory adapter in the same acceptance suite. The Brain workspace exposes a focused note reader and graph through these same contracts. The shared records retain revision history and storage compatibility independently of the desktop surface. Two-way collaboration remains later-phase work. See [architecture](docs/architecture.md).
-
-## Verify
-
-```sh
-npm run check
-npm run test:desktop
-sh native/test.sh
-npm run build:native
-python3.13 -m venv backend/.venv
-backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt -c backend/constraints.txt
-cd backend
-.venv/bin/python -m pytest -q
-```
-
-The application tests call ripgrep and FFmpeg from your PATH (`brew install ripgrep ffmpeg`); without ripgrep, the local-file tests fail. CI installs both. The backend needs Python 3.13.
-
-With the ASR server running, `npm run test:asr` performs real local streaming inference on temporary synthetic speech, writes transcript/timing results under ignored `.data/validation/`, and deletes the audio. It requires macOS `say` and FFmpeg. It does not validate microphone accuracy or a user's accent. The [native guide](native/README.md) also covers the multi-block synthetic speech check.
-
-GitHub Actions runs TypeScript/build and Python checks on Linux, real Postgres acceptance/replay tests, and a backend container smoke. The desktop smoke runs locally on macOS in isolated fixture storage and stops its own runtime. Automated checks do not call paid providers.
-
-Optional harness and model experiments live under `experiments/`, with separate setup instructions. Their synthetic inputs are versioned; generated outputs and provider traces are local artifacts. They do not select production defaults automatically.
-
-Keep internal development notes, session logs, provider reports, speech transcripts, screenshots and source snapshots out of Git. Use Obsidian for project records and ignored `.data/` for local test artifacts. Only setup, architecture, API documentation and reusable synthetic fixtures belong in the repository. See [contribution guidance](CONTRIBUTING.md).
 
 ## Chat, graph and notes
 
@@ -208,3 +178,38 @@ Related enumerated reviews stay together during topic consolidation. Failed batc
 Runtime ownership is exclusive per workspace. A slow health response does not start a second Agent; use `npm run moo` to perform a managed restart. The desktop registers its process as the voice owner, so a detached runtime stops capture if that app process exits. A failed graceful shutdown closes the owned native companion rather than leaving hidden capture running. These controls are covered by synthetic tests; microphone/device and acoustic acceptance remain separate.
 
 `npm run test:desktop:regressions` checks pending note saves, citation links and event/poll ordering in an isolated Electron renderer. It does not open your workspace or microphone.
+
+## Read-only local folders (off in this build)
+
+Local-folder search is switched off in the submitted build: the desktop hides the folder control and the runtime refuses grants. It is development-only and needs `MOOLAI_LOCAL_FOLDERS=on` in `runtime.env`. The rest of this section applies only then.
+
+Install [ripgrep](https://github.com/BurntSushi/ripgrep#installation) (`brew install ripgrep` on macOS), or set `MOOLAI_RG_PATH` in `runtime.env` to an installed `rg` executable. The desktop inherits the runtime environment; a missing executable is reported explicitly. Open **Local folder access → Choose folder** to grant access. No folders are selected initially. Remove a folder from this list to revoke future reads. Grants are kept in `local-folders.json` in the app data directory.
+
+Retrieved excerpts may be sent to the configured model provider. Search is literal by default, with explicit regex and filename modes; results contain relative paths, lines and content fingerprints. Limits are 50 matches, five seconds per operation, 200 lines/16,000 characters per read and 4 MiB per UTF-8 file. Ignored, hidden, credential, log, database and binary files are excluded; symlinks are not followed. Large folders can exceed the bounded file listing; select a narrower folder. These are read-only tools, not terminal access or an Obsidian adapter.
+
+## Architecture
+
+The Agent imports only [shared contracts](packages/contracts/src/index.ts), with capabilities injected through `BrainPort` and narrow provider ports. It runs against SQLite and an independent in-memory adapter in the same acceptance suite. The Brain workspace exposes a focused note reader and graph through these same contracts. The shared records retain revision history and storage compatibility independently of the desktop surface. Two-way collaboration remains later-phase work. See [architecture](docs/architecture.md).
+
+## Verify
+
+```sh
+npm run check
+npm run test:desktop
+sh native/test.sh
+npm run build:native
+python3.13 -m venv backend/.venv
+backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt -c backend/constraints.txt
+cd backend
+.venv/bin/python -m pytest -q
+```
+
+The application tests call ripgrep and FFmpeg from your PATH (`brew install ripgrep ffmpeg`); without ripgrep, the local-file tests fail. CI installs both. The backend needs Python 3.13.
+
+With the ASR server running, `npm run test:asr` performs real local streaming inference on temporary synthetic speech, writes transcript/timing results under ignored `.data/validation/`, and deletes the audio. It requires macOS `say` and FFmpeg. It does not validate microphone accuracy or a user's accent. The [native guide](native/README.md) also covers the multi-block synthetic speech check.
+
+GitHub Actions runs TypeScript/build and Python checks on Linux, real Postgres acceptance/replay tests, and a backend container smoke. The desktop smoke runs locally on macOS in isolated fixture storage and stops its own runtime. Automated checks do not call paid providers.
+
+`experiments/` holds the synthetic fixtures, scoring corpora and shared test scenarios that the offline suites use. Paid model evaluations were run separately with bounded budgets and are not part of the automated checks.
+
+Keep development notes, session logs, provider reports, speech transcripts, screenshots and source snapshots out of Git; use ignored `.data/` for local test artifacts. Only setup, architecture, API documentation and reusable synthetic fixtures belong in the repository. See [contribution guidance](CONTRIBUTING.md).

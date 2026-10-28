@@ -1,6 +1,8 @@
 {
   "name": "moolai",
   "version": "0.1.0",
+  "description": "A voice study partner that organizes what you say into connected notes and answers with NVIDIA Nemotron on Nebius Token Factory.",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "engines": {
