@@ -2,9 +2,9 @@
 
 **Talk through what you're studying with Moo.** Moo keeps every word, organizes your thoughts into connected notes in the background, and answers out loud from your notes, your screen (only when you ask or say yes) or the web.
 
-Moolai is a macOS desktop study partner. Questions, half-formed ideas and points of doubt usually get lost between a lecture, a worksheet and a search tab. Moolai saves them word for word as you speak, groups them into growing topic notes, connects related notes in a graph, and answers when you say “Moo, …”, citing the notes it used. When you say you're stuck, it saves the doubt and offers to look at your screen.
+Moolai is a macOS desktop study partner. Questions, half-formed ideas and points of doubt usually get lost between a lecture, a worksheet and a search tab. Moolai saves them word for word as you speak, groups them into growing topic notes, connects related notes in a graph, and answers when you say “Moo, …”, citing the notes it used. When you say what you don't understand, it saves the doubt and offers to look at your screen.
 
-**How a thought flows:** you speak → it is saved word for word → Nemotron 3.5 Lightning organizes it into a growing topic note → Jev tags the note, checks its summary against what you said and connects it to related notes. Uncertain and off-topic thoughts are kept too. Saving on your Mac and the backend accepting a record are shown as separate statuses.
+**How a thought flows:** you speak → it is saved word for word → Nemotron 3.5 Lightning organizes it into a growing topic note → Jev tags the note, checks its summary against what you said and connects it to related notes. Uncertain and off-topic thoughts are kept too. Saving on your Mac and the backend accepting a record are tracked as separate statuses.
 
 The app combines a continuous conversation with a graph of your notes, backed by an independent TypeScript Agent, SQLite storage, a Swift voice and screen companion and one FastAPI provider backend.
 
@@ -33,7 +33,7 @@ Moolai is entered in the **Best Apps and Agents** track.
 
 - **Without keys:** [Quick start](#quick-start-without-provider-accounts) runs fixture mode. Responses are simulated and labelled, and nothing is sent to a model.
 - **With your own keys:** [Enable real providers](#enable-real-providers) and [Enable local voice](#enable-local-voice). You need Docker Desktop and Nebius Token Factory, TypeSafe and Tavily keys.
-- **The demo video's live captions** use the optional local Qwen recognizer, which needs Python 3.13 or newer. After its [one-time setup](docs/whisper-integration.md#optional-local-qwen-trial), start Moo with `MOOLAI_ASR_CONFIG=scripts/qwen-asr/trial-config.json npm run moo`. The default Whisper setup shows your words after each pause, not live captions.
+- **The demo video's live captions** use the optional local Qwen recognizer, which needs Python 3.13 or newer. After its [one-time setup](docs/whisper-integration.md#optional-local-qwen-trial), and with [real providers](#enable-real-providers) set up, start Moo with `MOOLAI_ASR_CONFIG=scripts/qwen-asr/trial-config.json npm run moo`. Without keys, run `MOOLAI_ASR_CONFIG=scripts/qwen-asr/trial-config.json npm run asr` and, in a second terminal, the fixture desktop command from [Quick start](#quick-start-without-provider-accounts). The default Whisper setup shows your words after each pause, not live captions.
 
 ### Known limitations
 
@@ -72,8 +72,11 @@ The desktop starts the independent Agent runtime when needed. The temporary `MOO
 For API testing, the fixture runtime also runs headless, without the desktop window:
 
 ```sh
+export MOOLAI_DATA_DIR="$(mktemp -d)"
 npm run demo
 ```
+
+Its port and API token are written to `$MOOLAI_DATA_DIR/runtime.json`.
 
 Local data is stored in `~/Library/Application Support/Moolai`: SQLite records, pending operations, immutable attachments and an authenticated runtime connection file. Set `MOOLAI_DATA_DIR` to use an isolated test directory. Only one runtime should use a data directory/port. Closing the window stops microphone capture and playback while retaining the conversation. Click the microphone button (it reads **Mic on** while listening) to stop capture, or **Stop session** to end the study session. Both return at once; organization of the remaining speech continues in the background ("Organizing your thoughts…"). Each **Start session** begins a new session transcript, and quitting or restarting also ends the current one. Start also closes a conversation left open by an earlier session, quietly and keeping its transcript, unless its answer is still being prepared. An answer still being prepared when you stop lands in the next session's transcript. Start a new study session for each sitting. Stop a terminal-hosted runtime with Ctrl-C. To change fixture/live mode, stop the existing runtime first; the interface shows its actual mode.
 
@@ -129,7 +132,7 @@ Run `npm run moo`, or double-click **Moo.command** in the project folder. This r
 
 To restart a running Moo from the command line, for example to free memory, run `npm run restart`: it is the same full rebuild and restart. Stop the session first and wait until organizing finishes; notes still being organized when Moo closes need **Retry organization**.
 
-Install dependencies and voice assets once using the setup commands below. Run this launcher again after code or configuration changes; a simple `npm run desktop` can otherwise reuse an older runtime. Startup logs and backups are stored in the selected data directory.
+Install dependencies and voice assets once with the setup commands above ([Quick start](#quick-start-without-provider-accounts) and [Enable local voice](#enable-local-voice)). Run this launcher again after code or configuration changes; a simple `npm run desktop` can otherwise reuse an older runtime. Startup logs and backups are stored in the selected data directory.
 
 New speech immediately appears as a **Growing note** with a source-based title and attributed preview, clearly distinguished from an AI summary. The first background organization pass is scheduled after about six seconds; subsequent new content is coalesced at roughly one-minute intervals. Lightning can extend the same note or start another topic episode, followed by classification and connections. The previous accepted summary remains visible during updates. Pauses and timer boundaries do not split notes. A complete summary remains eligible for same-topic continuation. Ending the study session settles the current note without duplicating it; stopping the microphone or closing a Moo conversation only checkpoints it. Your manual edits survive processing; failed work requires **Retry organization** and is never automatically resubmitted. Successful batches with more saved source can continue in the background even when the microphone is off. Closing processes at most four batches; **Continue organization** makes remaining work explicit while keeping the accepted summary visible. Existing historical notes are not reorganized.
 

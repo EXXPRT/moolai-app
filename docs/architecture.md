@@ -11,7 +11,7 @@ The Agent saves source text before deciding what to do with it. A Brain implemen
 | `packages/brain` | SQLite/file persistence and a separate in-memory adapter. Neither is required by the Agent class; the host injects a `BrainPort`. |
 | `packages/agent-host` | Host wiring shared by the runtime: provider adapters (including fixture mode), the native companion bridge, local speech and the organization schedule. |
 | `packages/local-files` | Read-only local-folder search and reads for granted folders (off in the submitted build). |
-| `apps/runtime` | Independently runnable Node host, authenticated loopback HTTP/SSE API, backend transport and native process bridge. It wires implementations together. |
+| `apps/runtime` | Independently runnable Node host and authenticated loopback HTTP/SSE API. It wires the implementations together through `createAgentHost` in `packages/agent-host`. |
 | `apps/desktop` | Electron/React chat, persistent graph and a three-tab note reader. It communicates with the runtime rather than owning the Agent. |
 | `native` | Swift microphone capture, the local ASR protocol, PCM playback, explicit Apple speech fallback and requested screen capture. A host-owned pinned Kokoro worker supplies default speech. |
 | `scripts` speech adapter | Pinned resident whisper.cpp runtime and a bounded local PCM/utterance bridge; model choice comes from `asr-config.json`. |
