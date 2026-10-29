@@ -121,7 +121,10 @@ export default function BrainGraph({ record, records, onSelect, overview = false
     });
     if (before && incoming.length) {
       const incomingIds = new Set(incoming.map(node => node.id()));
-      const occupied = cy.nodes().filter(node => !incomingIds.has(node.id())).map(node => node.boundingBox());
+      // Measured afresh (useCache, which Cytoscape's types omit): a cached read would keep the old size of a label changed
+      // in this update, and draw it squashed.
+      const occupied = cy.nodes().filter(node => !incomingIds.has(node.id()))
+        .map(node => node.boundingBox({ includeLabels: true, useCache: false } as cytoscape.BoundingBoxOptions));
       for (const node of incoming) {
         // Search outward for a free label-sized space; never move existing notes.
         for (let attempt = 0; attempt <= occupied.length * 16 + 32; attempt++) {
