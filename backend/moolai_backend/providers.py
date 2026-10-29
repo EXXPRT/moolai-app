@@ -235,36 +235,56 @@ def _checked_summary(summary: Any, text: str) -> str:
     return summary.strip()
 
 
-# 29 Oct check: 2 of 5 plain Ultra answers ended with their own '**Spoken summary:**' paragraph, shown and spoken.
-_INLINE_SUMMARY = re.compile(r'''
-    \n[ \t]*\n[ \t]*                                     # a blank line, so the label starts a paragraph
-    (?:\#{1,6}[ \t]+)?(?P<em>\*{1,3}|_{1,3})?            # it may be a heading, bold or italic
-    spoken[ \t]+summary[ \t]*
-    (?(em)(?::[ \t]*(?P=em)|(?P=em)[ \t]*:?)|(?::|(?=[ \t]*\n)))  # then a colon, or the end of its line
-    [ \t]*(?:\n[ \t]*){0,2}
-    (?P<summary>\S[^\n]*(?:\n[ \t]*\S[^\n]*)*)\s*\Z      # one paragraph, the answer's last
-''', re.I | re.X)
+# 29 Oct check: 2 of 5 plain Ultra answers ended with their own '**Spoken summary:**' paragraph, then spoken after the
+# answer. Taking it off screen could hide what was asked for or leave only a heading, so it stays shown.
+_SUMMARY_LABEL = re.compile(r'''
+    [ \t]{0,3}(?:\#{1,6}[ \t]++)?(?P<em>\*{1,3}+|_{1,3}+)?                # a heading, bold or italic label,
+    spoken[ \t]++summary
+    (?(em)(?::[ \t]*+(?P=em)|(?P=em)[ \t]*+:?+)|[ \t]*+(?P<colon>:)?+)    # closed by its emphasis or a colon
+    [ \t]*+''', re.I | re.X)
+_RULE = re.compile(r'[ \t]{0,3}([-*_])(?:[ \t]*+\1){2,}[ \t]*+\n')
+_WORD = re.compile(r'[^\W\d_]{4,}')
 
 
-def _inline_spoken_summary(text: str) -> tuple[str, str] | None:
-    """A plain answer split from the spoken summary it ends with, when that summary passes Lightning's checks.
+def _restates(summary: str, written: str) -> bool:
+    """At least half of a summary's words, compared by their first five letters, come from the answer above it."""
+    stems = {word[:5] for word in _WORD.findall(summary.lower())}
+    return len(stems & {word[:5] for word in _WORD.findall(written.lower())}) * 2 >= len(stems)
 
-    Otherwise the answer stays whole, so a summary that adds a number is still shown rather than dropped.
+
+def _closing_summary(text: str) -> str | None:
+    """The one-line spoken summary a plain answer ends with, when it passes Lightning's checks against the rest.
+
+    The written answer is never changed: the paragraph stays on screen, and Moo speaks it instead of the whole answer.
     """
-    match = _INLINE_SUMMARY.search(text)
-    if not match:
+    paragraphs = re.split(r'\n[ \t]*+\n', text.strip())
+    if len(paragraphs) < 2:
         return None
-    # A rule that set the summary apart goes with it.
-    written = re.sub(r'(?:\A|\n)[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*\Z', '', text[:match.start()].rstrip()).rstrip()
-    if not written.strip():
+    last = paragraphs[-1]
+    if rule := _RULE.match(last):
+        last = last[rule.end():]
+    label = _SUMMARY_LABEL.match(last)
+    if label and (label['em'] or label['colon'] or last[label.end():].startswith('\n')):
+        summary, written = last[label.end():].strip(), paragraphs[:-1]
+    elif len(paragraphs) > 2 and _SUMMARY_LABEL.fullmatch(paragraphs[-2]):
+        summary, written = last.strip(), paragraphs[:-2]
+    else:
         return None
+    # A question or a source on the next line is not part of the summary.
+    if not summary or '\n' in summary or len(summary) > 1200:
+        return None
+    if (emphasis := re.fullmatch(r'(\*{1,3}|_{1,3})(\S.*\S)\1', summary)) and emphasis[1] not in emphasis[2]:
+        summary = emphasis[2]
+    written = '\n\n'.join(written)
     try:
-        summary = _checked_summary(match['summary'], written)
+        summary = _checked_summary(summary, written)
+        if not _restates(summary, written):
+            raise UnrelatedSummaryError('the closing paragraph does not restate the answer')
     except ValueError as error:
-        logger.warning('Agent narration: status=inline_summary_rejected reason=%s', type(error).__name__)
+        logger.warning('Agent narration: status=closing_summary_rejected reason=%s', type(error).__name__)
         return None
-    logger.info('Agent narration: status=inline_spoken_summary')
-    return written, summary
+    logger.info('Agent narration: status=closing_spoken_summary')
+    return summary
 
 
 def _answer_text(content: str) -> str:
@@ -328,6 +348,10 @@ class UngroundedNumberError(ValueError):
 
 class UnfinishedSummaryError(ValueError):
     """A generated spoken summary stopped mid-sentence, as when its length limit cut it."""
+
+
+class UnrelatedSummaryError(ValueError):
+    """A closing 'Spoken summary' paragraph that does not restate the answer above it, such as a definition of the term."""
 
 
 def source(record: BrainRecord) -> dict:
@@ -1419,11 +1443,7 @@ class NebiusProvider:
         if reply.text.strip() and not calls and control is None and reply.spokenText is None:
             # Keep older responses usable while making absent narration visible
             # without logging source text, model output or credentials.
-            inline = _inline_spoken_summary(reply.text)
-            if inline:
-                reply.text, reply.spokenText = inline
-            else:
-                reply.spokenText = _complete_prose_narration(reply.text)
+            reply.spokenText = _closing_summary(reply.text) or _complete_prose_narration(reply.text)
             if reply.spokenText is None:
                 # Too long or structured to speak whole: Lightning writes it, ending inside the host's 90 s request timeout.
                 budget = min(20.0, 80.0 - (time.monotonic() - started))
