@@ -42,7 +42,8 @@ body.voice-off .mic-toggle { display: none; }
   background: var(--sage); border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.4;
 }
 .demo-mode { white-space: nowrap; }
-.demo-models { flex: 1 1 200px; min-width: 0; display: flex; gap: 6px; margin: 0; padding: 0; list-style: none; overflow-x: auto; scrollbar-width: none; }
+/* The chips wrap rather than scroll, so the AI-voice disclosure is never cut off. */
+.demo-models { flex: 1 1 200px; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 0; padding: 0; list-style: none; }
 .demo-models li { flex: none; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 11px; white-space: nowrap; }
 .demo-links { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: none; }
 .demo-links > button, .demo-links > a {

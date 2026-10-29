@@ -15,11 +15,12 @@ const BROWSER_SILENT = "Best in Chrome or Edge on a laptop. Moo's voice is unava
 const FIXTURE = "You can still explore Moolai in fixture mode: the same app with simulated replies, typing only. Nothing you type leaves this page.";
 const MODELS = ["Intent & connections · Jev 1.13 (TypeSafe)", "Notes · Nemotron 3.5 Lightning", "Answers · Nemotron 3 Ultra", "Worksheet · GLM 5.3 Flash"];
 const VOICE_MODEL = "Voice · OpenAI (AI-generated)";
-/** Lines that match the seeded sessions (dilution, then osmosis) and the sample worksheet. */
+/** Lines that match the seeded sessions (dilution, then osmosis) and the sample worksheet. The doubt comes before the
+ * first "Moo, …": Moo offers help only outside a conversation, and "Yes, please." opens the one the later lines use. */
 const TRY: { say: string[]; shows: string }[] = [
   { say: ["Osmosis is water moving across a membrane toward the side with more solute."], shows: "A thought: saved, then organized into a note" },
-  { say: ["Moo, how does dilution connect to osmosis?"], shows: "A question: Moo answers from the sample notes" },
   { say: ["I'm stuck on trial B on this worksheet. I don't get how to use c1, V1 and c2 to find the final volume.", "Yes, please."], shows: "A doubt: Moo offers to help, then reads the sample worksheet" },
+  { say: ["Moo, what do my notes say about how dilution and osmosis are connected?"], shows: "A question: Moo answers from the sample notes and links the ones it used" },
   { say: ["Moo, search the web for why red blood cells burst in pure water."], shows: "A web search" },
   { say: ["Moo, finish conversation."], shows: "Ends the conversation" },
 ];

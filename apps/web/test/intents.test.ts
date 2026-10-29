@@ -50,6 +50,20 @@ test("a dictated turn with a doubt of 0.8 or more shows Moo's offer; a weaker do
   assert.equal(intents.request?.label, "Request for Moo");
 });
 
+test("a turn whose saved thought got Moo's offer shows the offer, whatever J1 routed it as", () => {
+  const intents = intentsFromTrace([
+    routed("request-doubt", "start_agent", 0.87, { doubt: 0.96 }),
+    routed("unclear-doubt", "unclear", 0.4, { doubt: 0.9 }),
+    routed("request", "start_agent", 0.87, { doubt: 0.96 }),
+    { at, action: "filler_ignored", turnId: "filler", text: "mm" },
+  ], new Set(["request-doubt", "unclear-doubt", "filler", "never-routed"]));
+  assert.deepEqual(intents["request-doubt"], { label: "Doubt: Moo offers help", route: "start_agent", confidence: 0.87 });
+  assert.deepEqual(intents["unclear-doubt"], { label: "Doubt: Moo offers help · unsure", route: "unclear", confidence: 0.4 });
+  assert.equal(intents.request?.label, "Request for Moo", "no offer, so J1's route stands");
+  assert.deepEqual(intents.filler, { label: "Ignored sound" });
+  assert.equal(intents["never-routed"], undefined);
+});
+
 test("the last decision for a turn wins, including an ignored sound and a bare call Moo answered", () => {
   const intents = intentsFromTrace([
     routed("corrected", "unclear", 0.4),

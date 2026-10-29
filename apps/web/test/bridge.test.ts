@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { Agent } from "../../../packages/agent/src/index.js";
 import { FixtureProviders } from "../../../packages/agent-host/src/providers.js";
 import { MemoryBrain } from "../../../packages/brain/src/memory.js";
-import type { AgentEvent, AgentState, RecordPatch } from "../../../packages/contracts/src/index.js";
+import type { AgentEvent, AgentState, RecordPatch, RouteInput } from "../../../packages/contracts/src/index.js";
 import { actionMessage, readableNotice } from "../../desktop/src/feedback.js";
 import { readerError } from "../../desktop/src/note-reader.js";
 import { reconcileSnapshot, type Snapshot, type SnapshotEvent } from "../../desktop/src/snapshot.js";
@@ -21,10 +21,9 @@ const WORKSHEET = "Moo is reading the sample worksheet (this web demo can't see 
 const failure = (promise: Promise<unknown>) => promise.then(() => "resolved", (error: unknown) => error instanceof Error ? error.message : `non-Error ${String(error)}`);
 
 /** The real Agent on a MemoryBrain with fixture providers, as the web host builds it, without voice. */
-async function live(t: TestContext) {
+async function live(t: TestContext, providers = new FixtureProviders()) {
   t.mock.method(globalThis, "fetch", async () => { throw new Error("Unexpected network access"); });
   const brain = new MemoryBrain();
-  const providers = new FixtureProviders();
   const voice: string[] = [];
   let emit = (_event: AgentEvent) => {};
   const agent = new Agent({
@@ -138,6 +137,26 @@ test("a request to Moo opens a conversation and gets its chip", async t => {
     const conversation = snapshot.records.find(record => record.id === snapshot.state.conversationId);
     assert.ok(conversation?.segments.some(segment => segment.speaker === "assistant"), "the fixture answer is in the conversation");
     assert.deepEqual(snapshot.intents?.[await h.userTurn(text)], { label: "Request for Moo", route: "start_agent", confidence: 1 });
+  } finally { await h.agent.drain(); }
+});
+
+/** J1 as it routed the seed's doubt live on 29 Oct: a confident request that is also a stated doubt. */
+class RequestDoubt extends FixtureProviders {
+  override async route(input: RouteInput) {
+    return /^I['’]m stuck on\b/i.test(input.text) ? { route: "start_agent" as const, confidence: 0.87, doubt: 0.96 } : super.route(input);
+  }
+}
+
+test("a stated doubt J1 routes as a request still gets Moo's offer, and its chip says so", async t => {
+  const h = await live(t, new RequestDoubt());
+  try {
+    await h.post("/api/session", { action: "start" });
+    const doubt = "I'm stuck on trial B on this worksheet. I don't get how to use c1, V1 and c2 to find the final volume.";
+    await h.post("/api/input", { text: doubt });
+    await h.agent.drain();
+    const snapshot = await h.snapshot();
+    assert.equal(snapshot.state.pendingOffer?.kind, "help");
+    assert.deepEqual(snapshot.intents?.[await h.userTurn(doubt)], { label: "Doubt: Moo offers help", route: "start_agent", confidence: 0.87 });
   } finally { await h.agent.drain(); }
 });
 

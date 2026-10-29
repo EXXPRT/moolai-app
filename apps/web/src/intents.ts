@@ -17,25 +17,26 @@ const SURE = 0.8;
 const DECISIONS = ["route", "filler_ignored", "wake_acknowledged"];
 
 /** How each user turn was handled, keyed by `Segment.turnId`. The Agent keeps this only in its interaction trace,
- * where a later entry for a turn (a corrected transcript routed again) replaces the earlier one. */
-export function intentsFromTrace(trace: unknown): Record<string, IntentChip> {
+ * where a later entry for a turn (a corrected transcript routed again) replaces the earlier one. `offered` names the
+ * turns whose saved thought got Moo's help offer: Moo also makes it when J1 routes a stated doubt as a request. */
+export function intentsFromTrace(trace: unknown, offered: ReadonlySet<string> = new Set()): Record<string, IntentChip> {
   const latest = new Map<string, Record<string, unknown>>();
   for (const entry of Array.isArray(trace) ? trace : [])
     if (entry && typeof entry === "object" && typeof entry.turnId === "string" && DECISIONS.includes(entry.action))
       latest.set(entry.turnId, entry);
   return Object.fromEntries([...latest].flatMap(([turnId, entry]) => {
-    const chip = intentChip(entry);
+    const chip = intentChip(entry, offered.has(turnId));
     return chip ? [[turnId, chip]] : [];
   }));
 }
 
-function intentChip(entry: Record<string, unknown>): IntentChip | undefined {
+function intentChip(entry: Record<string, unknown>, offered: boolean): IntentChip | undefined {
   const route = typeof entry.route === "string" ? entry.route : undefined;
   if (entry.action === "filler_ignored") return { label: "Ignored sound" };
   if (entry.action === "wake_acknowledged") return { label: "Moo heard its name", ...(route ? { route } : {}) };
   if (!route || !Object.hasOwn(LABELS, route)) return undefined;
   const confidence = typeof entry.confidence === "number" && Number.isFinite(entry.confidence) ? entry.confidence : undefined;
-  const doubt = route === "dictate" && typeof entry.doubt === "number" && entry.doubt >= SURE;
+  const doubt = offered || (route === "dictate" && typeof entry.doubt === "number" && entry.doubt >= SURE);
   const label = LABELS[doubt ? "offer_help" : route as Route];
   return {
     label: confidence !== undefined && confidence < SURE ? `${label} · unsure` : label,

@@ -1,7 +1,7 @@
 // window.moolai in the page: apps/runtime/src/server.ts ported route for route behind the desktop's request allowlist
 // (apps/desktop/local-content.cjs), so the renderer's error matching and snapshot replay work unchanged.
 import type { Agent } from "../../../packages/agent/src/index.js";
-import type { AgentEvent, BrainPort, RecordPatch } from "../../../packages/contracts/src/index.js";
+import type { AgentEvent, BrainPort, BrainRecord, RecordPatch } from "../../../packages/contracts/src/index.js";
 import { validateEdit } from "../../../packages/contracts/src/workspace.js";
 import type { HostTextKey, Snapshot } from "../../desktop/src/snapshot.js";
 import { intentsFromTrace } from "./intents.js";
@@ -24,6 +24,15 @@ export interface BridgeOptions {
 
 const SCREEN_NOTICE = "Reading your screen. This can take up to a minute.";
 const WORKSHEET_NOTICE = "Moo is reading the sample worksheet (this web demo can't see your screen).";
+
+/** The user turns in each saved thought Moo offered help with: the Agent marks one `offered:<record id>` once it asks. */
+async function offeredTurns(brain: BrainPort, records: readonly BrainRecord[]) {
+  const turns = new Set<string>();
+  for (const record of records)
+    if (await brain.getState(`offered:${record.id}`))
+      for (const segment of record.segments) if (segment.speaker === "user") turns.add(segment.turnId);
+  return turns;
+}
 
 export function createBridge(options: BridgeOptions): { api: MoolaiApi; emit: Emit } {
   const { agent, brain } = options;
@@ -51,6 +60,7 @@ export function createBridge(options: BridgeOptions): { api: MoolaiApi; emit: Em
       const snapshotSequence = sequence;
       const state = agent.getState();
       const native = options.nativeSnapshot();
+      const records = await brain.listRecords();
       const snapshot: Snapshot = {
         sequence: snapshotSequence,
         state,
@@ -58,13 +68,13 @@ export function createBridge(options: BridgeOptions): { api: MoolaiApi; emit: Em
         thoughtProcessing: await brain.getState<{status?: string; error?: string; spans: unknown[]; continuationRequired?: boolean; activeId?: string; draftId?: string}>(`thought-buffer:${agent.getState().sessionId}`)
           .then(value => value ? {status: value.status ?? "collecting", error: value.error, pending: !!value.spans.length,
             continuationRequired: value.continuationRequired === true, recordId: value.activeId ?? value.draftId} : undefined),
-        records: await brain.listRecords(),
+        records,
         mode: options.mode,
         processing: options.processing(),
         localFolders: [],
         localFoldersAvailable: false,
         native: { ...native },
-        intents: intentsFromTrace(await brain.getState("interaction-trace")),
+        intents: intentsFromTrace(await brain.getState("interaction-trace"), await offeredTurns(brain, records)),
       };
       return snapshot;
     }
