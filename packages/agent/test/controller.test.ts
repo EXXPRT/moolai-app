@@ -16,6 +16,7 @@ import type {
   TagInput,
 } from "../../contracts/src/index.js";
 import { transcriptText } from "../../contracts/src/index.js";
+import { newRecord } from "../../contracts/src/records.js";
 import { MemoryBrain, SQLiteBrain } from "../../brain/src/index.js";
 import { Agent, type AgentOptions } from "../src/index.js";
 
@@ -1168,6 +1169,82 @@ for (const adapter of ["memory", "sqlite"] as const) {
           (op) => op.status !== "running" && op.status !== "pending",
         ),
       );
+    },
+  );
+
+  run(
+    "a rename is assessed again but not summarized again, while a body edit is",
+    async ({ agent, hooks }, brain) => {
+      let summaries = 0, assessments = 0;
+      hooks.summarize = async (record) => ({ title: "Orchids", summary: `Summary ${++summaries}: ${transcriptText(record)}`, topicSuggestion: `Topic ${summaries}` });
+      hooks.tag = async () => { assessments++; return { ...tags }; };
+      await agent.submitText("Grow orchids indoors.");
+      await agent.drain();
+      let note = (await brain.listRecords()).find((r) => r.kind === "dictation")!;
+      await agent.editRecord(note.id, note.revision, { title: "Indoor orchids" });
+      await agent.drain();
+      note = (await brain.getRecord(note.id))!;
+      assert.equal(note.title, "Indoor orchids");
+      assert.match(note.summary, /^Summary 1:/);
+      assert.deepEqual(note.topics, ["Topic 1"]);
+      assert.equal(summaries, 1);
+      assert.equal(assessments, 2);
+      assert.equal(note.quality, "ready");
+      await agent.editRecord(note.id, note.revision, { body: "Mist the leaves weekly." });
+      await agent.drain();
+      note = (await brain.getRecord(note.id))!;
+      assert.match(note.summary, /^Summary 2:.*Mist the leaves weekly/s);
+      assert.equal(note.title, "Indoor orchids");
+    },
+  );
+
+  run(
+    "a note imported with its summary, as the web demo loads its seed, keeps it through a rename",
+    async ({ agent, hooks }, brain) => {
+      let summaries = 0;
+      hooks.summarize = async (record) => ({ title: "Orchids", summary: `Summary ${++summaries}: ${transcriptText(record)}`, topicSuggestion: "Gardening" });
+      const seeded: BrainRecord = { ...newRecord({ id: "seeded-orchids", kind: "dictation", createdAt: timestamp }), revision: 3, sourceRevision: 1,
+        summarySourceRevision: 1, segments: [segment("seeded-source", "Orchids want bright, indirect light.")], title: "Orchid light",
+        summary: "Orchids grow best in bright, indirect light.", topics: ["Orchid care"], quality: "ready", thoughtStatus: "settled", connectionStatus: "no_match" };
+      await brain.importRecord(seeded, []);
+      await agent.editRecord(seeded.id, seeded.revision, { title: "Light for orchids" });
+      await agent.drain();
+      let note = (await brain.getRecord(seeded.id))!;
+      assert.equal(note.title, "Light for orchids");
+      assert.equal(note.summary, seeded.summary);
+      assert.deepEqual(note.topics, seeded.topics);
+      assert.equal(summaries, 0);
+      assert.equal(note.quality, "ready");
+      // Stamped by that enrichment, so later changes to its summary context are compared as for any other note.
+      assert.notEqual(await brain.getState(`summarized-input:${seeded.id}`), undefined);
+      await agent.editRecord(note.id, note.revision, { body: "Water them weekly." });
+      await agent.drain();
+      note = (await brain.getRecord(seeded.id))!;
+      assert.match(note.summary, /^Summary 1:.*Water them weekly/s);
+      assert.equal(note.title, "Light for orchids");
+    },
+  );
+
+  run(
+    "a note renamed before titles left the summary stamp keeps its summary through its next rename",
+    async ({ agent, hooks }, brain) => {
+      let summaries = 0;
+      hooks.summarize = async (record) => ({ title: "Orchids", summary: `Summary ${++summaries}: ${transcriptText(record)}`, topicSuggestion: `Topic ${summaries}` });
+      await agent.submitText("Grow orchids indoors.");
+      await agent.drain();
+      let note = (await brain.listRecords()).find((r) => r.kind === "dictation")!;
+      await agent.editRecord(note.id, note.revision, { title: "Indoor orchids" });
+      await agent.drain();
+      // Earlier versions stored the full stamp, manual title included.
+      await brain.setState(`summarized-input:${note.id}`, await brain.getState(`enriched-input:${note.id}`));
+      note = (await brain.getRecord(note.id))!;
+      await agent.editRecord(note.id, note.revision, { title: "Orchids at home" });
+      await agent.drain();
+      note = (await brain.getRecord(note.id))!;
+      assert.equal(note.title, "Orchids at home");
+      assert.match(note.summary, /^Summary 1:/);
+      assert.deepEqual(note.topics, ["Topic 1"]);
+      assert.equal(summaries, 1);
     },
   );
 

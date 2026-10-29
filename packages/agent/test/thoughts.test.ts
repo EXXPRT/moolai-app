@@ -213,6 +213,17 @@ test('a failed Nano summary does not block a source-grounded connection',async()
  const saved=(await brain.getRecord(record.id))!;assert.equal(saved.quality,'pending');assert.equal(saved.connectionStatus,'connected');assert.match(saved.error!,/summary unavailable/);await brain.close();
 });
 
+test('a renamed organized note keeps its summary and topics and is assessed without another summary',async()=>{
+ const brain=new MemoryBrain(),p=new FixtureProviders();let n=0;
+ p.consolidate=async i=>finish(i);p.summarize=async()=>{throw Error('A rename must not summarize the note again');};
+ const agent=new Agent({brain,generation:p,decisions:p,search:p,vision:p,capture:{async capture(){throw Error('unused')}},speech:{async speak(){},async stop(){}},id:()=>`rename-${++n}`,now});
+ await agent.initialize();await agent.submitText('Hamstring muscles flex the knee.');await agent.stopSession();await agent.drain();
+ let note=(await brain.listRecords()).find(r=>r.kind==='dictation'&&!r.sourceOnly)!;const {summary,topics}=note;assert.deepEqual(topics,['Anatomy']);
+ await agent.editRecord(note.id,note.revision,{title:'Knee flexors'});await agent.drain();note=(await brain.getRecord(note.id))!;
+ assert.equal(note.title,'Knee flexors');assert.equal(note.summary,summary);assert.deepEqual(note.topics,topics);
+ assert.equal(note.quality,'ready');assert.equal(note.error,undefined);await brain.close();
+});
+
 test('staged publication rechecks work context and preserves conversation attachments',async()=>{
  const brain=new MemoryBrain();await brain.createRecord({id:'study',kind:'session',createdAt:now()});
  const source=seg('a','The image shows a hamstring.');await brain.upsertSegment('study',source);

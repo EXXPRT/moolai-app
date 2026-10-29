@@ -250,7 +250,7 @@ export class Agent {
       answering:()=>this.answeringTurns(),
       previewChanged:()=>{this.track(this.emitThoughtPreview());},
       enrich:async r=>{
-        await p.brain.setState(`summarized-input:${r.id}`, (await this.summarySource(r)).stamp);
+        await p.brain.setState(`summarized-input:${r.id}`, (await this.summarySource(r)).summaryStamp);
         await p.brain.setState(`suggested-topics:${r.id}`,r.topics);
         await this.queueEnrichment(r.id);
       },
@@ -2287,8 +2287,11 @@ export class Agent {
     context.push(status, checkpoint);
     if (status) append(status);
     if (checkpoint) append(`Conversation status: ${checkpoint}. A checkpoint does not establish task completion.`);
-    const stamp = JSON.stringify([record.sourceRevision, record.suppressed, context, record.manualFields.filter(k=>k!=="links").map(k => [k, (record as any)[k]])]);
-    return {source, stamp, projectionStale};
+    const manual = record.manualFields.filter(k=>k!=="links").map(k => [k, (record as any)[k]]);
+    const stamp = JSON.stringify([record.sourceRevision, record.suppressed, context, manual]);
+    // A rename is assessed again but is not new summary input; a summary made for another reason still sees a manual title.
+    const summaryStamp = JSON.stringify([record.sourceRevision, record.suppressed, context, manual.filter(([k]) => k !== "title")]);
+    return {source, stamp, summaryStamp, projectionStale};
   }
   private async retainStaleProjection(record:BrainRecord) {
     const error="Original source was corrected or is unavailable. Review the note’s source projection before processing it again.";
@@ -2358,9 +2361,11 @@ export class Agent {
         throw new Error(
           "Source exceeds the initial enrichment limit; full transcript retained.",
         );
+      const summarized = withoutTitle(await this.p.brain.getState<string>(`summarized-input:${record.id}`));
+      // A note imported with its summary, as the web demo's seed is, has no stamp; that summary is for this source revision.
       if (
         !record.manualFields.includes("summary") &&
-        (!record.summary || record.summarySourceRevision !== sourceRevision || (await this.p.brain.getState(`summarized-input:${record.id}`)) !== snapshot.stamp)
+        (!record.summary || record.summarySourceRevision !== sourceRevision || (summarized !== undefined && summarized !== snapshot.summaryStamp))
       ) {
         const summary = await this.p.generation.summarize(snapshot.source);
         const current = await this.p.brain.getRecord(record.id);
@@ -2392,8 +2397,11 @@ export class Agent {
         }
         const suggestions = [...new Set((summary.topicSuggestions ?? (summary.topicSuggestion ? [summary.topicSuggestion] : [])).map(t => t.trim()).filter(Boolean))].slice(0, 3);
         await this.p.brain.setState(`suggested-topics:${record.id}`, suggestions);
-        await this.p.brain.setState(`summarized-input:${record.id}`, snapshot.stamp);
+        await this.p.brain.setState(`summarized-input:${record.id}`, snapshot.summaryStamp);
         if (!record.manualFields.includes("topics")) record = (await this.p.brain.updateRecord(record.id, record.revision, {topics: suggestions})) ?? record;
+      } else if (summarized === undefined && record.summary && record.summarySourceRevision === sourceRevision) {
+        // Stamped now, so later changes to its summary context are compared as for any other note.
+        await this.p.brain.setState(`summarized-input:${record.id}`, snapshot.summaryStamp);
       }
       const topics: string[] = [];
       const decision = await this.p.decisions.tag({
@@ -2901,4 +2909,10 @@ function errorText(e: unknown) {
 function explicitConnectionRequest(text:string) {
   const direct=text.replace(/[“"‘][\s\S]*?[”"’]/g,'[title]');
   return !/\b(?:don't|do not|never|avoid)\b/i.test(direct) && /(?:^|[.!?]\s*|\b(?:please|can you|could you|would you|want you to|like you to))\s*(?:moo[, ]+)?(?:connect|link|relate)\b/i.test(direct);
+}
+/** A summary stamp stored before titles were left out of it still holds the manual title; compare it without one. */
+function withoutTitle(stamp: string | undefined) {
+  if (stamp === undefined) return stamp;
+  try { const [revision, suppressed, context, manual] = JSON.parse(stamp); return Array.isArray(manual) ? JSON.stringify([revision, suppressed, context, manual.filter(([k]: [string]) => k !== "title")]) : stamp; }
+  catch { return stamp; }
 }

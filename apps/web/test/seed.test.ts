@@ -195,7 +195,7 @@ async function startOn(seed: SeedFile) {
   await agent.initialize();
   await agent.startSession();
   await agent.drain();
-  return { brain, calls };
+  return { agent, brain, calls };
 }
 
 const COMMITTED = new URL("../public/seed.json", import.meta.url);
@@ -214,6 +214,21 @@ test("the committed seed loads, passes checkSeed, and a fresh Agent on it makes 
     const { brain, calls } = await startOn(shifted);
     assert.deepEqual([...calls], [], "loading the seed makes no provider call");
     assert.equal((await brain.listRecords()).length, shifted.records.length + 1, "the seed plus the visitor's new session");
+  });
+
+test("renaming a committed seed note keeps its summary and topics, with no summary call",
+  { skip: !existsSync(COMMITTED) && "apps/web/public/seed.json is not generated yet" }, async () => {
+    const loaded = parseSeed(JSON.parse(await readFile(COMMITTED, "utf8")));
+    const { agent, brain, calls } = await startOn(shiftIsoTimestamps(loaded, seedOffsetMs(loaded, new Date(), "Europe/London")));
+    const notes = (await brain.listRecords()).filter(item => item.thoughtStatus === "settled");
+    assert.ok(notes.length > 0);
+    for (const note of notes) {
+      await agent.editRecord(note.id, note.revision, { title: `${note.title} (renamed)` });
+      await agent.drain();
+      const renamed = (await brain.getRecord(note.id))!;
+      assert.deepEqual([renamed.title, renamed.summary, renamed.topics], [`${note.title} (renamed)`, note.summary, note.topics]);
+    }
+    assert.equal(calls.get("summarize"), undefined);
   });
 
 /** The stock fixtures count only "don't understand why" as a stated doubt; Jev also reads the seed's "I'm stuck on trial B…" as one. */
