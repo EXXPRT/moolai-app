@@ -400,7 +400,8 @@ await delay(100);
     assert.equal(await run(`!!document.querySelector('.folder-access')`),false,'The local folder panel is hidden');
     await run(`document.querySelector('.study-settings').open=true`);
     assert.equal(await run(`document.querySelector('.transcript').clientHeight`),chatHeight,'Expanded settings cannot collapse chat');
-    assert.ok(await run(`document.querySelector('.study-settings-panel').scrollHeight>document.querySelector('.study-settings-panel').clientHeight`),'Long settings scroll in their own panel');
+    // Without the folder panel the settings fit, so a stand-in makes them long, as the folder list can.
+    assert.ok(await run(`(()=>{const panel=document.querySelector('.study-settings-panel'),filler=document.createElement('div');filler.style.height='900px';panel.append(filler);const scrolls=panel.scrollHeight>panel.clientHeight&&document.querySelector('.transcript').clientHeight===${chatHeight};filler.remove();return scrolls;})()`),'Long settings scroll in their own panel');
     await run(`document.querySelector('.study-settings').open=false`);
     await verifyChatInput();
     fs.writeFileSync(path.join(evidenceDir,'focused-compact-inspector.png'),(await window.webContents.capturePage()).toPNG());
