@@ -224,9 +224,8 @@
       "resolution": "open",
       "archived": false,
       "topics": [
-        "Mole-volume calculations",
-        "Dilution and concentration adjustments",
-        "Practice problems with varied solutes and volumes"
+        "Concentration",
+        "Molarity"
       ],
       "quality": "ready",
       "qualityReasons": [],
@@ -307,9 +306,8 @@
       "resolution": "open",
       "archived": false,
       "topics": [
-        "Molarity and dilution",
-        "Calculating final volume",
-        "Common dilution errors"
+        "Dilution",
+        "Molarity"
       ],
       "quality": "ready",
       "qualityReasons": [],
@@ -395,9 +393,8 @@
       "resolution": "open",
       "archived": false,
       "topics": [
-        "Volume additivity in solution preparation",
-        "Proper use of volumetric flasks",
-        "Impact of mixing on final volume"
+        "Lab technique",
+        "Dilution"
       ],
       "quality": "ready",
       "qualityReasons": [],
@@ -477,9 +474,8 @@
       "resolution": "open",
       "archived": false,
       "topics": [
-        "Dilution factor multiplication",
-        "Concentration changes in serial dilutions",
-        "Tenfold dilution steps"
+        "Dilution",
+        "Serial dilution"
       ],
       "quality": "ready",
       "qualityReasons": [],
@@ -593,12 +589,11 @@
       "title": "Trial B Dilution Problem",
       "summary": "User states they are stuck on trial B of a worksheet and does not understand how to use c1, V1, and c2 to find the final volume. Assistant provides the given values: c1 = 1.20 mol/L (stock concentration), V1 = 25.0 mL (volume pipetted into the flask), c2 = 0.50 mol/L (target concentration). Assistant applies the dilution formula c1V1 = c2V2 and solves for final volume V2 = (1.20 × 25.0) / 0.50 = 60.0 mL. Explains the procedure: pipette 25.0 mL of stock solution into a 60.0 mL volumetric flask, then add distilled water up to the 60.0 mL calibration mark. Clarifies that one should not measure and add 35.0 mL of water separately because solution volumes are not strictly additive when mixed. User later asks how much water needs to be added; assistant reiterates the procedure and the reason for filling to the calibration mark rather than measuring a water volume.",
       "body": "",
-      "resolution": "open",
+      "resolution": "resolved",
       "archived": false,
       "topics": [
-        "Using the dilution formula c1V1 = c2V2 to calculate unknown final volumes",
-        "Correct technique for preparing solutions in a volumetric flask (filling to the校",
-        "Why solution volumes are not strictly additive and how to account for it in dil"
+        "Dilution",
+        "Worked problem"
       ],
       "quality": "needs_review",
       "qualityReasons": [
@@ -680,7 +675,8 @@
       ],
       "sourceContext": "[{\"conversationId\":\"9d7620ef-f04d-4875-b374-23b57b3bcffc\",\"requests\":[{\"id\":\"993d5f7c-5a7e-4263-a8b6-a5cba86ec3b1\",\"sourceRevision\":1,\"source\":\"user: I'm stuck on trial B on this worksheet. I don't get how to use c1, V1 and c2 to find the final volume.\"}],\"outcomes\":[{\"tool\":\"capture_screen\",\"callId\":\"help:9d7620ef-f04d-4875-b374-23b57b3bcffc\",\"status\":\"success\",\"executed\":true,\"references\":[{\"attachmentId\":\"460c9889-b1fa-4689-ab00-72adb424e0c3\"}],\"rawResultRetained\":true,\"scope\":\"Tool outcomes establish execution only. Retrieval matches do not establish the entire Brain inventory.\"}],\"scope\":\"Only confirmed outcomes establish completed work. Requests without outcomes remain unresolved.\"}]",
       "summarySourceRevision": 5,
-      "connectionStatus": "connected"
+      "connectionStatus": "connected",
+      "purpose": "Question"
     },
     {
       "id": "993d5f7c-5a7e-4263-a8b6-a5cba86ec3b1",
@@ -991,9 +987,8 @@
       "resolution": "open",
       "archived": false,
       "topics": [
-        "Cell membrane transport",
-        "Solution chemistry",
-        "Diffusion and osmosis"
+        "Osmosis",
+        "Concentration"
       ],
       "quality": "ready",
       "qualityReasons": [],
@@ -1065,9 +1060,8 @@
       "resolution": "open",
       "archived": false,
       "topics": [
-        "Osmotic pressure",
-        "Cell volume regulation",
-        "Medical implications of tonicity"
+        "Osmosis",
+        "Tonicity"
       ],
       "quality": "ready",
       "qualityReasons": [],
@@ -1138,9 +1132,8 @@
       "resolution": "open",
       "archived": false,
       "topics": [
-        "osmotic swelling",
-        "haemolysis",
-        "cell membrane limitation"
+        "Osmosis",
+        "Cell biology"
       ],
       "quality": "ready",
       "qualityReasons": [],
@@ -1230,9 +1223,8 @@
       "resolution": "open",
       "archived": false,
       "topics": [
-        "cell wall function",
-        "turgor pressure",
-        "plasmolysis"
+        "Osmosis",
+        "Cell biology"
       ],
       "quality": "ready",
       "qualityReasons": [],
@@ -1328,9 +1320,8 @@
       "resolution": "open",
       "archived": false,
       "topics": [
-        "Water potential and solute concentration",
-        "Osmosis in biological systems",
-        "Quantitative water movement"
+        "Osmosis",
+        "Water potential"
       ],
       "quality": "ready",
       "qualityReasons": [],
@@ -1419,9 +1410,9 @@
       "resolution": "open",
       "archived": false,
       "topics": [
-        "Osmotic pressure and cell integrity",
-        "Turgor pressure and plasmolysis in plant cells",
-        "Water potential gradients and solute effects"
+        "Osmosis",
+        "Cell biology",
+        "Tonicity"
       ],
       "quality": "ready",
       "qualityReasons": [],
