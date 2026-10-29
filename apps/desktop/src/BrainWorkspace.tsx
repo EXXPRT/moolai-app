@@ -14,6 +14,7 @@ const tabs: { id: Tab; label: string }[] = [
   { id: "summary", label: "Summary" }, { id: "recorded", label: "Recorded text" }, { id: "connections", label: "Connections" },
 ];
 const defaultFilters: BrainQuery = { kinds: ["note", "dictation", "conversation"] };
+const purposes = ["Question", "Reference", "Idea", "Action"] as const;
 
 function SummaryReview({ record }: { record: BrainRecord }) {
   const sourcePreview = record.thoughtStatus === "draft" && record.summarySourceRevision === undefined && !record.manualFields.includes("summary");
@@ -58,7 +59,11 @@ export function BrainWorkspace({ records, api, refresh, requestedNote, processin
   });
   const continuation = !!record && processing?.recordId === record.id && processing.continuationRequired === true;
   const organizationPending = !!record && processing?.recordId === record.id && processing.pending;
-  const topics = [...new Set(records.filter(item => !item.archived && !item.suppressed && !item.sourceOnly && item.kind !== "session").flatMap(item => item.topics))].sort();
+  // Filters offer only what the notes carry, and keep the one chosen even when no note has it any more.
+  const shown = records.filter(item => !item.archived && !item.suppressed && !item.sourceOnly && item.kind !== "session");
+  const topics = [...new Set([...shown.flatMap(item => item.topics), ...(filters.topic ? [filters.topic] : [])])]
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  const categories = purposes.filter(purpose => purpose === filters.purpose || shown.some(item => item.purpose === purpose));
 
   function select(id: string) {
     follow.pause(); focusSelection.current = true; setTemporaryPreview(false);
@@ -104,9 +109,9 @@ export function BrainWorkspace({ records, api, refresh, requestedNote, processin
             <option value="">All topics</option>{topics.map(topic => <option key={topic}>{topic}</option>)}
           </select></label>
           <label>Category<select value={filters.purpose ?? ""} onChange={event => setFilters({ ...filters, purpose: (event.target.value || undefined) as BrainQuery["purpose"] })}>
-            <option value="">All categories</option>{["Question", "Reference", "Idea", "Action"].map(purpose => <option key={purpose}>{purpose}</option>)}
+            <option value="">All categories</option>{categories.map(purpose => <option key={purpose}>{purpose}</option>)}
           </select></label>
-          <div className="filter-footer"><span role="status">{notes.length} matching notes</span><button className="text-button" onClick={() => setFilters(defaultFilters)} disabled={!activeFilters}>Clear</button></div>
+          <div className="filter-footer"><span role="status">{notes.length} matching {notes.length === 1 ? "note" : "notes"}</span><button className="text-button" onClick={() => setFilters(defaultFilters)} disabled={!activeFilters}>Clear</button></div>
         </div>
       </details>
     </div>
