@@ -379,3 +379,48 @@ async def test_lightning_is_only_for_a_plain_answer_too_long_or_structured_to_sp
         assert [call.name for call in result.toolCalls] == ['search_notes']
     else:
         assert result.text == LONG and result.spokenText is None and result.narrationError == UNSPOKEN
+
+
+# 29 Oct check: 2 of 5 plain Ultra answers ended with their own spoken summary, which was shown under the answer and,
+# for a short answer, spoken after it.
+INLINE = 'Both notes give the corrected dose as 12 milligrams, not 16, and one 3-day test does not establish safety.'
+
+
+@pytest.mark.parametrize('written', [LONG, SHORT], ids=['long', 'short'])
+@pytest.mark.parametrize('ending', [
+    '**Spoken summary:** {}', '**Spoken summary**: {}', 'Spoken summary: {}', '*Spoken Summary:* {}',
+    '### Spoken summary\n\n{}', '**Spoken summary:**\n{}', '---\n\n**Spoken summary:** {}',
+])
+async def test_a_plain_answers_own_closing_summary_is_spoken_instead_of_shown(written, ending, caplog):
+    caplog.set_level('INFO', logger='moolai_backend.providers')
+    result, requests = await run({'content': f'{written}\n\n{ending.format(INLINE)}\n'})
+    assert posted_models(requests) == [SETTINGS.agent_model]
+    assert result.text == written and result.spokenText == INLINE and result.narrationError is None
+    assert 'status=inline_spoken_summary' in caplog.text and 'complete_short_prose' not in caplog.text
+    assert 'milligrams' not in caplog.text
+
+
+@pytest.mark.parametrize('summary,reason', [
+    ('Both notes give the corrected dose as 12 milligrams, measured at 0.8 megapascals.', 'UngroundedNumberError'),
+    ('Both notes give the corrected dose as 12 milligrams, measured over', 'UnfinishedSummaryError'),
+    ('The dose notes are at https://example.test/dose.', 'ValueError'),
+])
+async def test_a_closing_summary_that_fails_lightnings_checks_leaves_the_answer_whole(summary, reason, caplog):
+    text = f'{LONG}\n\n**Spoken summary:** {summary}'
+    result, requests = await run({'content': text})
+    assert posted_models(requests) == [SETTINGS.agent_model, SETTINGS.summary_model]
+    assert result.text == text and result.spokenText == SPOKEN and result.narrationError is None
+    assert f'status=inline_summary_rejected reason={reason}' in caplog.text
+    assert all(part not in caplog.text for part in ('megapascals', 'measured over', 'example.test'))
+
+
+@pytest.mark.parametrize('text', [
+    f'{SHORT} Spoken summary: the corrected dose is 12 mg.',
+    f'{SHORT}\n\nSpoken summary practice helps you remember 12 mg.',
+    f'**Spoken summary:** {SHORT}',
+    f'{SHORT}\n\n**Spoken summary:** The corrected dose is 12 mg.\n\nShould I check the 16 mg note too?',
+])
+async def test_only_a_labelled_last_paragraph_after_the_answer_is_split_off(text, caplog):
+    caplog.set_level('INFO', logger='moolai_backend.providers')
+    result, _ = await run({'content': text})
+    assert result.text == text and 'inline_spoken_summary' not in caplog.text

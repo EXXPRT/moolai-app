@@ -221,6 +221,52 @@ def _grounded_numbers(summary: str, text: str) -> bool:
     return all(grounded(values, scale) for values, scale, digits in _numbers(summary) if digits)
 
 
+def _checked_summary(summary: Any, text: str) -> str:
+    """A spoken summary fit to speak for its written answer, or the error that rules it out."""
+    if (not isinstance(summary, str) or not summary.strip() or len(summary) > 1200
+            or not any(char.isalpha() for char in summary) or re.search(r'https?://|\bwww\.', summary, re.I)):
+        raise ValueError('unspeakable spoken summary')
+    if not re.search(r'[.!?…]["\'”’)\]]*$', summary.strip()):
+        # 22 Oct check: summaries that copied their answers were cut mid-word at 1,200 characters.
+        raise UnfinishedSummaryError('spoken summary does not end on a full sentence')
+    if not _grounded_numbers(summary, text):
+        # 22 Oct check: given an answer that only asked what two samples were, Lightning invented them and their pressures.
+        raise UngroundedNumberError('spoken summary states a number the written answer does not')
+    return summary.strip()
+
+
+# 29 Oct check: 2 of 5 plain Ultra answers ended with their own '**Spoken summary:**' paragraph, shown and spoken.
+_INLINE_SUMMARY = re.compile(r'''
+    \n[ \t]*\n[ \t]*                                     # a blank line, so the label starts a paragraph
+    (?:\#{1,6}[ \t]+)?(?P<em>\*{1,3}|_{1,3})?            # it may be a heading, bold or italic
+    spoken[ \t]+summary[ \t]*
+    (?(em)(?::[ \t]*(?P=em)|(?P=em)[ \t]*:?)|(?::|(?=[ \t]*\n)))  # then a colon, or the end of its line
+    [ \t]*(?:\n[ \t]*){0,2}
+    (?P<summary>\S[^\n]*(?:\n[ \t]*\S[^\n]*)*)\s*\Z      # one paragraph, the answer's last
+''', re.I | re.X)
+
+
+def _inline_spoken_summary(text: str) -> tuple[str, str] | None:
+    """A plain answer split from the spoken summary it ends with, when that summary passes Lightning's checks.
+
+    Otherwise the answer stays whole, so a summary that adds a number is still shown rather than dropped.
+    """
+    match = _INLINE_SUMMARY.search(text)
+    if not match:
+        return None
+    # A rule that set the summary apart goes with it.
+    written = re.sub(r'(?:\A|\n)[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*\Z', '', text[:match.start()].rstrip()).rstrip()
+    if not written.strip():
+        return None
+    try:
+        summary = _checked_summary(match['summary'], written)
+    except ValueError as error:
+        logger.warning('Agent narration: status=inline_summary_rejected reason=%s', type(error).__name__)
+        return None
+    logger.info('Agent narration: status=inline_spoken_summary')
+    return written, summary
+
+
 def _answer_text(content: str) -> str:
     """Reject leaked model protocols; ordinary content never becomes a tool call.
 
@@ -1198,22 +1244,13 @@ class NebiusProvider:
             value = _unambiguous_json(message['content'])
             if not isinstance(value, dict) or set(value) != {'spokenText'}:
                 raise ValueError('unexpected spoken summary fields')
-            summary = value['spokenText']
-            if (not isinstance(summary, str) or not summary.strip() or len(summary) > 1200
-                    or not any(char.isalpha() for char in summary) or re.search(r'https?://|\bwww\.', summary, re.I)):
-                raise ValueError('unspeakable spoken summary')
-            if not re.search(r'[.!?…]["\'”’)\]]*$', summary.strip()):
-                # 22 Oct check: summaries that copied their answers were cut mid-word at 1,200 characters.
-                raise UnfinishedSummaryError('spoken summary does not end on a full sentence')
-            if not _grounded_numbers(summary, text):
-                # 22 Oct check: given an answer that only asked what two samples were, Lightning invented them and their pressures.
-                raise UngroundedNumberError('spoken summary states a number the written answer does not')
+            summary = _checked_summary(value['spokenText'], text)
         except Exception as error:
             # A status code or class name only, never answer text, summary text or credentials.
             logger.warning('Agent narration: status=lightning_summary_failed reason=%s',
                            error.status if isinstance(error, ServiceError) else type(error).__name__)
             return None
-        return summary.strip()
+        return summary
 
     async def respond(self, item: RespondInput) -> AgentReply:
         started = time.monotonic()
@@ -1382,7 +1419,11 @@ class NebiusProvider:
         if reply.text.strip() and not calls and control is None and reply.spokenText is None:
             # Keep older responses usable while making absent narration visible
             # without logging source text, model output or credentials.
-            reply.spokenText = _complete_prose_narration(reply.text)
+            inline = _inline_spoken_summary(reply.text)
+            if inline:
+                reply.text, reply.spokenText = inline
+            else:
+                reply.spokenText = _complete_prose_narration(reply.text)
             if reply.spokenText is None:
                 # Too long or structured to speak whole: Lightning writes it, ending inside the host's 90 s request timeout.
                 budget = min(20.0, 80.0 - (time.monotonic() - started))
