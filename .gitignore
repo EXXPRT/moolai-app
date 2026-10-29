@@ -27,6 +27,7 @@ obsidian-notes/
 !/docs/architecture.md
 !/docs/whisper-integration.md
 !/docs/whisper-artifacts.json
+!/docs/web-demo.md
 
 # Experiments follow the same allowlist rule as docs/. A new experiment folder
 # stays local until it has been reviewed and added here.
@@ -35,3 +36,8 @@ obsidian-notes/
 !/experiments/evaluation/
 !/experiments/fixtures/
 !/experiments/j1-closing/
+
+# Deploy tooling state; never committed.
+.vercel/
+.wrangler/
+.dev.vars

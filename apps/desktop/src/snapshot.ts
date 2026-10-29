@@ -12,7 +12,12 @@ export type Snapshot = {
   localFolders: LocalFolder[];
   /** False when the runtime runs without local-folder search (the submitted build). */
   localFoldersAvailable?: boolean;
+  /** J1's decision per user turn, keyed by `Segment.turnId`. Only the web demo's host sets this. */
+  intents?: Record<string,IntentChip>;
 };
+/** Wording a host can supply in place of the desktop's own (the web demo does; the desktop sets none). */
+export type HostTextKey = 'fixtureBanner'|'connecting'|'reconnecting'|'speaking'|'screenOffer'|'footerSaved'|'footerEmpty';
+export type IntentChip = {label:string;route?:string;confidence?:number};
 export type SnapshotEvent = AgentEvent & {sequence?:number};
 export function applySnapshotEvent(current: Snapshot, event: SnapshotEvent): Snapshot {
   if (event.sequence !== undefined && current.sequence !== undefined && event.sequence < current.sequence) return current;
