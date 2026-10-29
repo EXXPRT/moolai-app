@@ -13,7 +13,7 @@ import type {
 } from "../../../packages/contracts/src/index.js";
 import "./style.css";
 
-import { applySnapshotEvent, reconcileSnapshot, type Snapshot, type SnapshotEvent } from "./snapshot.js";
+import { applySnapshotEvent, reconcileSnapshot, type HostTextKey, type Snapshot, type SnapshotEvent } from "./snapshot.js";
 declare global {
   interface Window {
     moolai?: {
@@ -25,9 +25,11 @@ declare global {
       subscribe(callback: (event: AgentEvent) => void): () => void;
       chooseFolder(): Promise<LocalFolder | null>;
       openExternal?(url: string): Promise<void>;
+      text?: Partial<Record<HostTextKey,string>>;
     };
   }
 }
+const hostText = (key: HostTextKey, fallback: string) => window.moolai?.text?.[key] ?? fallback;
 
 function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>();
@@ -179,11 +181,11 @@ function App() {
       {snapshot?.mode !== "live" && (
         <div className="mode">
           {snapshot
-            ? "Fixture mode — responses are demonstrations, not live model answers."
-            : "Connecting to your local Agent…"}
+            ? hostText("fixtureBanner", "Fixture mode — responses are demonstrations, not live model answers.")
+            : hostText("connecting", "Connecting to your local Agent…")}
         </div>
       )}
-      {connection === "disconnected" && <div className="connection-status" role="status">Connecting to your local workspace… Your draft stays here.</div>}
+      {connection === "disconnected" && <div className="connection-status" role="status">{hostText("reconnecting", "Connecting to your local workspace… Your draft stays here.")}</div>}
       {offlineMessage && connection !== "disconnected" && <div className="connection-status" role="status">{offlineMessage}</div>}
       {error && <div role="alert" className="alert">{error}<button className="text-button" aria-label="Dismiss action message" onClick={() => setError("")}>Dismiss</button></div>}
       {notice && (
@@ -215,7 +217,7 @@ function App() {
                 : snapshot?.native?.phase === "connecting_asr"
                 ? "Preparing speech recognition…"
                 : snapshot?.native?.speaking
-                ? "Moo is speaking · speak to interrupt"
+                ? hostText("speaking", "Moo is speaking · speak to interrupt")
                 : state?.busy
                 ? state.activity === "listening" ? "Listening to your update…" : state.activity === "searching" ? "Searching…" : "Preparing answer…"
                 : state?.activity === "interrupted"
@@ -306,6 +308,8 @@ function App() {
                     : segment.speaker === "assistant"
                       ? "Moo"
                       : "Session"}
+                  {segment.speaker === "user" && snapshot?.intents?.[segment.turnId] &&
+                    <em className="intent-chip" title="How Jev routed this turn">{snapshot.intents[segment.turnId]!.label}</em>}
                 </span>
                 <div>
                   <MarkdownContent text={segment.text} />
@@ -323,7 +327,7 @@ function App() {
             <div className="offer">
               <p>
                 {state.pendingOffer.kind === "help"
-                  ? "Would you like help with your saved doubt? Accepting captures your main display for context."
+                  ? hostText("screenOffer", "Would you like help with your saved doubt? Accepting captures your main display for context.")
                   : "Would you like help with that? Your thought is saved. Moo will wait for your answer."}
               </p>
               <button disabled={working} onClick={() => void act("/api/input", { text: "Yes" })}>
@@ -402,7 +406,7 @@ function App() {
             </div>
           </div>
           <div className="conversation-footer">
-            <small>{session?.segments.length ? "Saved locally · audio isn’t stored" : "Your words stay yours"}</small>
+            <small>{session?.segments.length ? hostText("footerSaved", "Saved locally · audio isn’t stored") : hostText("footerEmpty", "Your words stay yours")}</small>
             {state?.conversationId && (
               <button className="text-button" disabled={working} onClick={() => void act("/api/end")}>
                 Finish conversation
