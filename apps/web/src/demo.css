@@ -20,8 +20,8 @@ body.web-demo .utterance .intent-chip {
 }
 body.voice-off .mic-toggle { display: none; }
 
-/* Intro, and the whole-page messages. */
-.demo-intro { min-height: 100%; display: grid; place-items: center; padding: 32px 16px; }
+/* Intro, and the whole-page messages. The wrapper only: <body> has the class too until the visitor starts. */
+div.demo-intro { min-height: 100%; display: grid; place-items: center; padding: 32px 16px; }
 .demo-card {
   width: min(620px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: 18px;
   padding: 28px 30px; box-shadow: 0 8px 30px #35462c12;
@@ -68,7 +68,8 @@ body.voice-off .mic-toggle { display: none; }
 .demo-panel > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .demo-panel > header strong { font-size: 14px; font-weight: 600; }
 .demo-panel p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
-.demo-drawer { position: fixed; z-index: 20; top: 12px; right: 12px; bottom: 12px; width: min(560px, calc(100vw - 24px)); }
+/* Below the demo bar and its banners, so the bar's own buttons stay usable: 100% is the height of #demo, which holds them. */
+.demo-drawer { position: absolute; z-index: 20; top: calc(100% + 8px); right: 12px; height: calc(100dvh - 100% - 20px); width: min(560px, calc(100vw - 24px)); }
 .demo-drawer img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 10px; }
 .demo-try { position: absolute; z-index: 19; top: calc(100% + 8px); right: 16px; width: min(390px, calc(100vw - 32px)); max-height: calc(100dvh - 90px); }
 .demo-try ol { margin: 0; padding-left: 20px; display: grid; gap: 10px; font-size: 13px; line-height: 1.5; }
@@ -77,6 +78,7 @@ body.voice-off .mic-toggle { display: none; }
 @media (min-width: 1260px) {
   .demo-try { width: 320px; }
   body.web-demo.demo-try-open #root { margin-right: 352px; }
+  .demo-try-undocked { display: none; }
 }
 
 /* Under 900 px the renderer's two panes don't fit; the notice says so once. */

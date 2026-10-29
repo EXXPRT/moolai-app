@@ -182,6 +182,78 @@ test("a stated doubt gets Moo's offer, and accepting it reads the sample workshe
   } finally { await h.agent.drain(); }
 });
 
+test("a declined clarification keeps its turns' own chips, while a declined help offer keeps the doubt's", async t => {
+  const h = await live(t, new RequestDoubt());
+  try {
+    await h.post("/api/session", { action: "start" });
+    // No snapshot until it is answered: the bridge sees the question in the Agent's events.
+    await h.post("/api/input", { text: "Maybe." });
+    await h.agent.drain();
+    const asked = h.agent.getState().pendingOffer;
+    assert.ok(asked?.kind === "clarification");
+    await h.post("/api/input", { text: "No." });
+    await h.agent.drain();
+    // The Agent marks a declined clarification's thought as it marks a declined offer's; the bridge tells them apart.
+    assert.equal(await h.brain.getState(`offered:${asked.recordId}`), true);
+    let snapshot = await h.snapshot();
+    assert.deepEqual(snapshot.intents?.[await h.userTurn("Maybe.")], { label: "Unclear: Moo asks", route: "unclear", confidence: 1 });
+    assert.deepEqual(snapshot.intents?.[await h.userTurn("No.")], { label: "No action", route: "no_action", confidence: 1 });
+    const doubt = "I'm stuck on trial B on this worksheet. I don't get how to use c1, V1 and c2 to find the final volume.";
+    await h.post("/api/input", { text: doubt });
+    await h.agent.drain();
+    assert.equal(h.agent.getState().pendingOffer?.kind, "help");
+    await h.post("/api/input", { text: "No thanks." });
+    await h.agent.drain();
+    snapshot = await h.snapshot();
+    assert.equal(snapshot.state.pendingOffer, undefined);
+    assert.deepEqual(snapshot.intents?.[await h.userTurn(doubt)], { label: "Doubt: Moo offers help", route: "start_agent", confidence: 0.87 });
+    assert.equal(snapshot.intents?.[await h.userTurn("No thanks.")]?.label, "No action");
+  } finally { await h.agent.drain(); }
+});
+
+test("a thought Moo asked about and then offered help with keeps the offer's chip", async t => {
+  const h = await live(t);
+  try {
+    await h.post("/api/session", { action: "start" });
+    await h.post("/api/input", { text: "Maybe." });
+    await h.agent.drain();
+    const asked = h.agent.getState().pendingOffer;
+    assert.ok(asked?.kind === "clarification");
+    await h.post("/api/input", { text: "I'm confused." });
+    await h.agent.drain();
+    const snapshot = await h.snapshot();
+    const offer = snapshot.state.pendingOffer;
+    assert.ok(offer?.kind === "general_help" && offer.recordId === asked.recordId, JSON.stringify(offer));
+    assert.equal(snapshot.intents?.[await h.userTurn("Maybe.")]?.label, "Doubt: Moo offers help");
+    assert.equal(snapshot.intents?.[await h.userTurn("I'm confused.")]?.label, "Doubt: Moo offers help");
+  } finally { await h.agent.drain(); }
+});
+
+test("a thought Moo only asked about gets no offer chip, whether the bridge saw the question in a snapshot or an event", async () => {
+  const h = stub();
+  const at = "2026-10-29T00:00:00Z", ids = ["polled", "emitted", "helped"];
+  for (const id of ids) {
+    await h.brain.createRecord({ id, kind: "dictation", createdAt: at });
+    await h.brain.upsertSegment(id, { id: `${id}-segment`, turnId: id, revision: 1, speaker: "user", text: "Maybe.", final: true, createdAt: at });
+    await h.brain.setState(`offered:${id}`, true);
+  }
+  await h.brain.setState("interaction-trace", ids.map(turnId => ({ at, action: "route", turnId, route: "unclear", confidence: 1 })));
+  h.state.pendingOffer = { kind: "clarification", recordId: "polled" };
+  await h.get("/api/state");
+  h.state.pendingOffer = { kind: "clarification", recordId: "emitted" };
+  h.emit({ type: "state", state: { ...h.state } });
+  h.state.pendingOffer = { kind: "clarification", recordId: "helped" };
+  h.emit({ type: "state", state: { ...h.state } });
+  h.state.pendingOffer = { kind: "general_help", recordId: "helped", sourceRevision: 1 };
+  h.emit({ type: "state", state: { ...h.state } });
+  h.state.pendingOffer = undefined;
+  assert.deepEqual((await h.get<Snapshot>("/api/state")).intents, {
+    polled: { label: "Unclear: Moo asks", route: "unclear", confidence: 1 },
+    emitted: { label: "Unclear: Moo asks", route: "unclear", confidence: 1 },
+    helped: { label: "Doubt: Moo offers help", route: "unclear", confidence: 1 },
+  });
+});
+
 test("only the desktop renderer's allowlisted requests exist; everything else is Not found", async () => {
   const h = stub();
   const requests: [string, string][] = [
@@ -215,7 +287,8 @@ test("malformed bodies are refused with the runtime's messages before the Agent 
     ["/api/session", { action: "restart" }, "Invalid session action"],
     ["/api/session", undefined, "Invalid session action"],
     ["/api/input", { text: 123 }, "Invalid text"],
-    ["/api/input", { text: "x".repeat(60001) }, "Invalid text"],
+    ["/api/input", { text: "x".repeat(60001) }, "Too long for this demo: send up to 2,000 characters at a time."],
+    ["/api/input", { text: "x".repeat(2001) }, "Too long for this demo: send up to 2,000 characters at a time."],
     ["/api/end/resolve", { action: "discard-everything" }, "Invalid end action"],
     ["/api/subject", { subject: [] }, "Invalid subject"],
     ["/api/subject", { subject: "x".repeat(201) }, "Invalid subject"],
@@ -259,6 +332,7 @@ test("each action reaches the Agent with its validated value and returns the run
   const calls: [string, unknown, { name: string; value?: unknown }][] = [
     ["/api/session", { action: "start" }, { name: "session-start" }],
     ["/api/input", { text: "A thought." }, { name: "input", value: "A thought." }],
+    ["/api/input", { text: "x".repeat(2000) }, { name: "input", value: "x".repeat(2000) }],
     ["/api/end", {}, { name: "end" }],
     ["/api/end/resolve", { action: "finish" }, { name: "resolve", value: "finish" }],
     ["/api/subject", { subject: "Chemistry" }, { name: "subject", value: "Chemistry" }],
@@ -300,6 +374,14 @@ test("Agent and host errors reach the renderer unchanged, so its messages still 
   await h.brain.createRecord({ id: "note", kind: "note", createdAt: "2026-10-28T00:00:00Z" });
   await assert.rejects(h.post("/api/input", { text: "A thought." }), error => error === saved);
   assert.equal(actionMessage(saved, "/api/input"), "Your message is saved, but Moo couldn't act on it. Send it again to retry.");
+  // The bridge's own typing limit is shown as it is; the renderer's other input errors keep their wording.
+  const tooLong = await h.post("/api/input", { text: "x".repeat(2001) }).catch((error: unknown) => error);
+  assert.equal(actionMessage(tooLong, "/api/input"), "Too long for this demo: send up to 2,000 characters at a time.");
+  assert.equal(actionMessage("Too long for this demo: send up to 2,000 characters at a time.", "/api/input"), "Too long for this demo: send up to 2,000 characters at a time.");
+  for (const other of [new Error("Invalid text"), new Error("Backend 504: Too long for this demo: send up to 2,000 characters at a time. Retry"),
+    new Error("Too long for this demo: send up to 2,000 characters at a time. Provider said: secret")])
+    assert.equal(actionMessage(other, "/api/input"), "Your message could not be confirmed as saved. It is still in the input box.", String(other));
+  assert.equal(actionMessage(tooLong, "/api/retry"), "Processing could not finish. The original text is still available.");
   await assert.rejects(h.post("/api/record/note", { revision: 0, patch: { title: "New" } }), error => error === changed);
   assert.equal(readerError(changed), "This note changed while you were editing. Reopen it to use the latest version.");
   await assert.rejects(h.post("/api/voice", { action: "start" }), error => error === microphone);

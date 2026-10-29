@@ -15,14 +15,27 @@ const BROWSER_SILENT = "Best in Chrome or Edge on a laptop. Moo's voice is unava
 const FIXTURE = "You can still explore Moolai in fixture mode: the same app with simulated replies, typing only. Nothing you type leaves this page.";
 const MODELS = ["Intent & connections · Jev 1.13 (TypeSafe)", "Notes · Nemotron 3.5 Lightning", "Answers · Nemotron 3 Ultra", "Worksheet · GLM 5.3 Flash"];
 const VOICE_MODEL = "Voice · OpenAI (AI-generated)";
+/** Lines to say or type, or (`press`) one of the app's own controls. */
+type TryItem = { say: string[]; shows: string } | { press: string; shows: string };
 /** Lines that match the seeded sessions (dilution, then osmosis) and the sample worksheet. The doubt comes before the
  * first "Moo, …": Moo offers help only outside a conversation, and "Yes, please." opens the one the later lines use. */
-const TRY: { say: string[]; shows: string }[] = [
+const TRY: TryItem[] = [
   { say: ["Osmosis is water moving across a membrane toward the side with more solute."], shows: "A thought: saved, then organized into a note" },
   { say: ["I'm stuck on trial B on this worksheet. I don't get how to use c1, V1 and c2 to find the final volume.", "Yes, please."], shows: "A doubt: Moo offers to help, then reads the sample worksheet" },
   { say: ["Moo, what do my notes say about how dilution and osmosis are connected?"], shows: "A question: Moo answers from the sample notes and links the ones it used" },
   { say: ["Moo, search the web for why red blood cells burst in pure water."], shows: "A web search" },
   { say: ["Moo, finish conversation."], shows: "Ends the conversation" },
+];
+/** Only what fixture mode's stand-ins do (FixtureProviders, packages/agent-host/src/providers.ts): they offer help for a
+ * few fixed wordings such as "I don't understand why…", reply by repeating the request, never search the web, and keep
+ * a thought's words in a growing note rather than organizing them. */
+const TRY_FIXTURE: TryItem[] = [
+  { say: ["Osmosis is water moving across a membrane toward the side with more solute."], shows: "A thought: saved into a growing note" },
+  { say: ["I don't understand why trial B needs 35 mL of water.", "Yes, please."], shows: "A doubt: Moo offers to help, then opens the sample worksheet; its reply is simulated" },
+  { say: ["Moo, what do my notes say about how dilution and osmosis are connected?"], shows: "A question: the simulated reply only repeats it" },
+  { say: ["Moo, finish conversation."], shows: "Ends the conversation" },
+  { press: "Stop session", shows: "Files the growing note; Start session to type again" },
+  { press: "Search & filters", shows: "Finds sample notes by a word, such as osmosis; open one to see its Connections" },
 ];
 
 /** An element whose text is always set as text, never parsed as HTML. `on…` props are listeners. */
@@ -146,8 +159,9 @@ function panel(id: string, title: string, className: string, content: Child[], o
 }
 
 export interface DemoChrome {
-  /** A banner under the demo bar that stays until the page is reloaded, or until dismissed. Repeats are shown once. */
-  banner(text: string, dismissable?: boolean): void;
+  /** A banner under the demo bar that stays until the page is reloaded, until dismissed, or until the function it
+   * returns removes it. Repeats are shown once. */
+  banner(text: string, dismissable?: boolean): () => void;
   openWorksheet(): void;
 }
 
@@ -163,9 +177,12 @@ export function renderChrome(root: HTMLElement, options: { live: boolean; voice:
     h("img", { src: "/sample-worksheet.png", loading: "lazy", alt: "Dilution worksheet: use c1 V1 = c2 V2 to find the final volume V2. Trial A: c1 2.50 mol/L, V1 40.0 mL, c2 0.50 mol/L. Trial B: c1 1.20 mol/L, V1 25.0 mL, c2 0.50 mol/L. Water to add = V2 - V1." })],
     () => { if (reopenTry) { reopenTry = false; tryCard.show(true); } });
   const tryCard = panel("demo-try", "Try saying", "demo-try", [
-    h("ol", {}, ...TRY.map(item => h("li", {},
-      ...item.say.flatMap((line, index) => [index ? " then " : "", h("q", {}, line)]), h("small", {}, item.shows)))),
-    h("p", {}, "Or type them and press Send.")]);
+    h("ol", {}, ...(options.live ? TRY : TRY_FIXTURE).map(item => h("li", {},
+      ...("say" in item ? item.say.flatMap((line, index) => [index ? " then " : "", h("q", {}, line)]) : ["Press ", h("strong", {}, item.press)]),
+      h("small", {}, item.shows)))),
+    h("p", {}, options.live ? "Or type them and press Send." : "Type the quoted lines and press Send."),
+    // Undocked, the card covers the controls the fixture list names; demo.css shows this line only then.
+    !options.live && h("p", { class: "demo-try-undocked" }, "Close this card to reach Stop session and Search & filters.")]);
   const models = options.live ? [...MODELS, ...(options.voice ? [VOICE_MODEL] : [])] : [];
   const banners = h("div", { class: "demo-banners" });
   const bar = h("div", { class: "demo-bar", role: "region", "aria-label": "About this demo" },
@@ -186,10 +203,12 @@ export function renderChrome(root: HTMLElement, options: { live: boolean; voice:
   tryCard.show(matchMedia(TRY_DOCKS).matches);
   return {
     banner(text, dismissable = false) {
-      if (Array.from(banners.children).some(item => item.firstChild?.textContent === text)) return;
+      const shown = Array.from(banners.children).find(item => item.firstChild?.textContent === text);
+      if (shown) return () => shown.remove();
       const item = h("div", { class: "demo-banner", role: "status" }, h("span", {}, text));
       if (dismissable) item.append(h("button", { type: "button", class: "text-button", onclick: () => item.remove() }, "Dismiss"));
       banners.append(item);
+      return () => item.remove();
     },
     openWorksheet() {
       reopenTry ||= !tryCard.el.hidden;

@@ -24,12 +24,17 @@ export interface BridgeOptions {
 
 const SCREEN_NOTICE = "Reading your screen. This can take up to a minute.";
 const WORKSHEET_NOTICE = "Moo is reading the sample worksheet (this web demo can't see your screen).";
+/** Longer typed text keeps the live organizer past its time limit, which cuts the note's summary short and holds back
+ * later notes. The renderer shows this message as it is (apps/desktop/src/feedback.ts). */
+const TYPED_LIMIT = 2000;
+const TOO_LONG = `Too long for this demo: send up to ${TYPED_LIMIT.toLocaleString("en-US")} characters at a time.`;
 
-/** The user turns in each saved thought Moo offered help with: the Agent marks one `offered:<record id>` once it asks. */
-async function offeredTurns(brain: BrainPort, records: readonly BrainRecord[]) {
+/** The user turns in each saved thought Moo offered help with: the Agent marks one `offered:<record id>` once it asks.
+ * It also marks a thought whose clarifying question was declined, so `clarified` names the ones to skip. */
+async function offeredTurns(brain: BrainPort, records: readonly BrainRecord[], clarified: ReadonlySet<string>) {
   const turns = new Set<string>();
   for (const record of records)
-    if (await brain.getState(`offered:${record.id}`))
+    if (!clarified.has(record.id) && await brain.getState(`offered:${record.id}`))
       for (const segment of record.segments) if (segment.speaker === "user") turns.add(segment.turnId);
   return turns;
 }
@@ -42,7 +47,16 @@ export function createBridge(options: BridgeOptions): { api: MoolaiApi; emit: Em
   const deliver = (listener: (event: AgentEvent) => void, data: string) => {
     try { listener(JSON.parse(data)); } catch (error) { console.error("Moolai event listener failed:", error); }
   };
+  // Thoughts Moo only asked "Would you like Moo to answer that?" about, seen while the question is pending.
+  const clarified = new Set<string>();
+  const watchOffer = (state = agent.getState()) => {
+    const offer = state.pendingOffer;
+    if (offer?.kind === "clarification") clarified.add(offer.recordId);
+    // A thought that then gets a real help offer keeps its chip.
+    else if (offer?.kind === "help" || offer?.kind === "general_help") clarified.delete(offer.recordId);
+  };
   const emit: Emit = (event) => {
+    watchOffer();
     if (event.type === "notice" && typeof event.message === "string") {
       const own = event.message === SCREEN_NOTICE ? WORKSHEET_NOTICE : event.message;
       const message = options.rewriteNotice ? options.rewriteNotice(own) : own;
@@ -59,6 +73,7 @@ export function createBridge(options: BridgeOptions): { api: MoolaiApi; emit: Em
       // Captured before any await: events emitted while the rest is read carry later sequences, so the renderer replays them.
       const snapshotSequence = sequence;
       const state = agent.getState();
+      watchOffer(state);
       const native = options.nativeSnapshot();
       const records = await brain.listRecords();
       const snapshot: Snapshot = {
@@ -74,7 +89,7 @@ export function createBridge(options: BridgeOptions): { api: MoolaiApi; emit: Em
         localFolders: [],
         localFoldersAvailable: false,
         native: { ...native },
-        intents: intentsFromTrace(await brain.getState("interaction-trace"), await offeredTurns(brain, records)),
+        intents: intentsFromTrace(await brain.getState("interaction-trace"), await offeredTurns(brain, records, clarified)),
       };
       return snapshot;
     }
@@ -99,7 +114,8 @@ export function createBridge(options: BridgeOptions): { api: MoolaiApi; emit: Em
         } else throw new Error("Invalid session action");
         break;
       case "/api/input":
-        if (typeof body.text !== "string" || body.text.length > 60000) throw new Error("Invalid text");
+        if (typeof body.text !== "string") throw new Error("Invalid text");
+        if (body.text.length > TYPED_LIMIT) throw new Error(TOO_LONG);
         await agent.submitText(body.text);
         break;
       case "/api/end":

@@ -35,6 +35,8 @@ const LIMITS: Record<DemoLimit, string> = {
 const UNSUPPORTED = "Use a recent Chrome, Edge, Firefox or Safari 17.4+.";
 const MIC_UNAVAILABLE = "The microphone isn't available (permission or device). You can still type.";
 const NOT_STARTED = "Moolai's web demo couldn't start. Refresh the page to try again.";
+/** The renderer's "Auto-follow latest" (apps/desktop/src/useChatFollow.ts): off unless this says "true". */
+const FOLLOW_LATEST = "moolai.chat-follow-latest.v1";
 
 /** An error whose message is written for the visitor. */
 class Readable extends Error {}
@@ -86,13 +88,15 @@ async function worksheet(baseFetch: typeof fetch) {
   return { mimeType: "image/png", bytes: new Uint8Array(await response.arrayBuffer()) };
 }
 
-function voiceRuntime(m: Modules, gate: DemoGate, ctx: AudioContext | undefined, options: { e2e: boolean; root: HTMLElement; debug: boolean }): VoiceRuntime {
+function voiceRuntime(m: Modules, gate: DemoGate, ctx: AudioContext | undefined, options: { e2e: boolean; root: HTMLElement; debug: boolean }): VoiceRuntime | undefined {
   const feed = options.e2e ? m.createE2EFeed() : undefined;
   if (feed) window.__moolaiE2E = { feed: (samples, sampleRate) => feed.feed(samples, sampleRate) };
+  // No AudioContext could start in the click, so the microphone never can: no runtime, and the button goes.
+  const open = feed ? feed.open : ctx && m.openMicrophone(ctx, "/voice-worklet.js");
+  if (!open) return undefined;
   const debug = options.debug ? createDebugOverlay(options.root) : undefined;
   return {
-    open: feed ? feed.open : ctx ? m.openMicrophone(ctx, "/voice-worklet.js")
-      : () => Promise.reject(new Error("This browser couldn't start audio capture")),
+    open,
     createController: controllerOptions => m.createVoiceController({ ...controllerOptions, onActivity: activity => {
       controllerOptions.onActivity?.(activity);
       debug?.(activity);
@@ -256,14 +260,25 @@ async function main() {
       console.error(error);
     }
     intro.close();
+    // A first visit follows Moo's newest reply, which would otherwise land below the fold; a visitor's own choice stays.
+    try {
+      if (localStorage.getItem(FOLLOW_LATEST) === null) localStorage.setItem(FOLLOW_LATEST, "true");
+    } catch { /* Without storage, following stays off as on the desktop. */ }
     await import("../../desktop/src/main.tsx");
+    // Voice was asked for, but no AudioContext could start: the button is gone (voiceOff above), and this says why.
+    if (voice && !runtime) chrome.banner(MIC_UNAVAILABLE, true);
     if (!voice || !runtime) return;
     try {
       await bridge.api.request("POST", "/api/voice", { action: "start" });
     } catch (error) {
       console.error(error);
-      chrome.banner(MIC_UNAVAILABLE, true);
-      voiceOff();
+      // A dismissed or denied prompt, or a busy device: the microphone button stays, so the visitor can try again, and
+      // the banner goes once a try starts listening.
+      const removeBanner = chrome.banner(MIC_UNAVAILABLE, true);
+      toBridge = event => {
+        bridge.emit(event);
+        if (event.type === "voice" && event.voice?.listening === true) removeBanner();
+      };
     }
   }
 }
