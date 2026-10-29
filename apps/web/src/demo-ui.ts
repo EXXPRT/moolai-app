@@ -126,16 +126,20 @@ export function renderIntro(root: HTMLElement): Intro {
   };
 }
 
-/** A panel the demo bar opens and closes; its own button is the bar's toggle. */
-function panel(id: string, title: string, className: string, ...content: Child[]) {
+/** A panel the demo bar opens and closes; its own button is the bar's toggle. The body's `<id>-open` class says it is
+ * open, which demo.css uses to dock the "Try saying" card. */
+function panel(id: string, title: string, className: string, content: Child[], onClose?: () => void) {
   const toggle = h("button", { type: "button", "aria-expanded": "false", "aria-controls": id }, title);
   const el = h("aside", { id, class: `demo-panel ${className}`, "aria-label": title, hidden: true },
     h("header", {}, h("strong", {}, title),
       h("button", { type: "button", class: "icon-button", "aria-label": `Close ${title}`, onclick: () => show(false) }, "×")),
     ...content);
   const show = (open: boolean) => {
+    const wasOpen = !el.hidden;
     el.hidden = !open;
     toggle.setAttribute("aria-expanded", String(open));
+    document.body.classList.toggle(`${id}-open`, open);
+    if (wasOpen && !open) onClose?.();
   };
   toggle.addEventListener("click", () => show(el.hidden !== false));
   return { el, toggle, show };
@@ -147,15 +151,21 @@ export interface DemoChrome {
   openWorksheet(): void;
 }
 
+/** Where demo.css docks the "Try saying" card beside the renderer, which keeps 900 px or more. */
+const TRY_DOCKS = "(min-width: 1260px)";
+
 /** The demo bar above the renderer, its banners, the worksheet drawer and the "Try saying" card. */
 export function renderChrome(root: HTMLElement, options: { live: boolean; voice: boolean }): DemoChrome {
-  const worksheet = panel("demo-worksheet", "Sample worksheet", "demo-drawer",
+  // The worksheet drawer covers the card; closing it brings the card back if it was open, for the steps after the doubt.
+  let reopenTry = false;
+  const worksheet = panel("demo-worksheet", "Sample worksheet", "demo-drawer", [
     h("p", {}, "In this web demo, 'your screen' is this sample worksheet."),
-    h("img", { src: "/sample-worksheet.png", loading: "lazy", alt: "Dilution worksheet: use c1 V1 = c2 V2 to find the final volume V2. Trial A: c1 2.50 mol/L, V1 40.0 mL, c2 0.50 mol/L. Trial B: c1 1.20 mol/L, V1 25.0 mL, c2 0.50 mol/L. Water to add = V2 - V1." }));
-  const tryCard = panel("demo-try", "Try saying", "demo-try",
+    h("img", { src: "/sample-worksheet.png", loading: "lazy", alt: "Dilution worksheet: use c1 V1 = c2 V2 to find the final volume V2. Trial A: c1 2.50 mol/L, V1 40.0 mL, c2 0.50 mol/L. Trial B: c1 1.20 mol/L, V1 25.0 mL, c2 0.50 mol/L. Water to add = V2 - V1." })],
+    () => { if (reopenTry) { reopenTry = false; tryCard.show(true); } });
+  const tryCard = panel("demo-try", "Try saying", "demo-try", [
     h("ol", {}, ...TRY.map(item => h("li", {},
       ...item.say.flatMap((line, index) => [index ? " then " : "", h("q", {}, line)]), h("small", {}, item.shows)))),
-    h("p", {}, "Or type them and press Send."));
+    h("p", {}, "Or type them and press Send.")]);
   const models = options.live ? [...MODELS, ...(options.voice ? [VOICE_MODEL] : [])] : [];
   const banners = h("div", { class: "demo-banners" });
   const bar = h("div", { class: "demo-bar", role: "region", "aria-label": "About this demo" },
@@ -167,11 +177,13 @@ export function renderChrome(root: HTMLElement, options: { live: boolean; voice:
   root.append(bar, banners, worksheet.el, tryCard.el);
   document.addEventListener("keydown", event => {
     if (event.key !== "Escape") return;
+    reopenTry = false;
     worksheet.show(false);
     tryCard.show(false);
   });
-  // First visit: what to say is the first question.
-  tryCard.show(true);
+  // First visit: what to say is the first question. A wide window docks the card beside the app (demo.css); in a
+  // narrower one it would cover the app's own controls, such as Search & filters, so it starts closed there.
+  tryCard.show(matchMedia(TRY_DOCKS).matches);
   return {
     banner(text, dismissable = false) {
       if (Array.from(banners.children).some(item => item.firstChild?.textContent === text)) return;
@@ -180,6 +192,7 @@ export function renderChrome(root: HTMLElement, options: { live: boolean; voice:
       banners.append(item);
     },
     openWorksheet() {
+      reopenTry ||= !tryCard.el.hidden;
       tryCard.show(false);
       worksheet.show(true);
     },

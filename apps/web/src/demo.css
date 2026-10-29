@@ -73,6 +73,11 @@ body.voice-off .mic-toggle { display: none; }
 .demo-try { position: absolute; z-index: 19; top: calc(100% + 8px); right: 16px; width: min(390px, calc(100vw - 32px)); max-height: calc(100dvh - 90px); }
 .demo-try ol { margin: 0; padding-left: 20px; display: grid; gap: 10px; font-size: 13px; line-height: 1.5; }
 .demo-try small { display: block; margin-top: 2px; font-size: 11px; }
+/* A wide window docks the card beside the renderer, so it covers none of its controls (TRY_DOCKS in demo-ui.ts). */
+@media (min-width: 1260px) {
+  .demo-try { width: 320px; }
+  body.web-demo.demo-try-open #root { margin-right: 352px; }
+}
 
 /* Under 900 px the renderer's two panes don't fit; the notice says so once. */
 .demo-narrow { display: none; }
