@@ -332,7 +332,7 @@ test("the microphone turns itself off after the idle time without an onset, neve
   } finally { t.mock.timers.reset(); await r.close(); }
 });
 
-test("hiding the tab turns the microphone off", async () => {
+test("hiding the tab pauses the microphone, and returning turns it back on unless it was already off", async () => {
   const listeners = new Map<string, () => void>();
   const page = {
     hidden: false,
@@ -352,7 +352,22 @@ test("hiding the tab turns the microphone off", async () => {
       listeners.get("visibilitychange")!();
       await settle();
       assert.deepEqual(r.host.nativeSnapshot(), OFF);
-      assert.deepEqual(r.notices(), ["The microphone turned off while this tab was in the background. Turn it on to continue."]);
+      assert.deepEqual(r.notices(), ["The microphone paused while this tab was in the background. It turns back on when you return."]);
+      page.hidden = false;
+      listeners.get("visibilitychange")!();
+      await settle();
+      assert.equal(r.host.nativeSnapshot().phase, "listening", "Returning to the tab resumes listening");
+      assert.equal(r.controllers.length, 2, "With a new microphone run");
+      await r.host.voice("stop");
+      page.hidden = true;
+      listeners.get("visibilitychange")!();
+      await settle();
+      page.hidden = false;
+      listeners.get("visibilitychange")!();
+      await settle();
+      assert.deepEqual(r.host.nativeSnapshot(), OFF, "A microphone turned off by hand stays off");
+      assert.equal(r.controllers.length, 2);
+      assert.equal(r.notices().length, 1);
     } finally { await r.close(); }
     assert.equal(listeners.size, 0, "Close removes the listener");
   } finally { delete scope.document; }

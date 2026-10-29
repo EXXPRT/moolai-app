@@ -9,7 +9,7 @@ const MIC_FAILED = "The microphone could not connect. Check its permission and c
 const NO_VOICE = "Voice is not available in fixture mode. Type instead.";
 const VOICE_ENDED = "Voice is off for the rest of this demo session. You can keep typing.";
 const IDLE_OFF = "The microphone turned off after a few minutes without speech. Turn it on to continue.";
-const HIDDEN_OFF = "The microphone turned off while this tab was in the background. Turn it on to continue.";
+const HIDDEN_OFF = "The microphone paused while this tab was in the background. It turns back on when you return.";
 const FINISH_FAILED = "Moo couldn't finish transcribing your last words. Please say them again.";
 const VOICE_FAILED = {
   save: "Moo couldn't save what you just said. Please say it again.",
@@ -78,11 +78,20 @@ export async function createWebHost(options: WebHostOptions): Promise<WebHost> {
   });
   const page = typeof document === "undefined" ? undefined : document;
   const view = typeof window === "undefined" ? undefined : window;
-  const hidden = () => { if (page?.hidden) void autoOff(HIDDEN_OFF); };
+  // A background tab stops listening, and returning resumes it: macOS also hides a tab that another window covers.
+  let resumeOnShow = false;
+  const visibility = () => {
+    if (page?.hidden) {
+      if (voiceEnabled && !closed) { resumeOnShow = true; void autoOff(HIDDEN_OFF); }
+    } else if (resumeOnShow) {
+      resumeOnShow = false;
+      if (!closed && !limited) void voice("start").catch(error => console.error(`Microphone resume failed: ${String(error)}`));
+    }
+  };
   const leave = () => void close();
   // A page restored from the back-forward cache was closed on pagehide; a reload starts the demo again.
   const restored = (event: PageTransitionEvent) => { if (event.persisted) view?.location.reload(); };
-  page?.addEventListener("visibilitychange", hidden);
+  page?.addEventListener("visibilitychange", visibility);
   view?.addEventListener("pagehide", leave);
   view?.addEventListener("pageshow", restored);
 
@@ -190,7 +199,7 @@ export async function createWebHost(options: WebHostOptions): Promise<WebHost> {
     const own = capture;
     capture = undefined;
     if (own) release(own);
-    page?.removeEventListener("visibilitychange", hidden);
+    page?.removeEventListener("visibilitychange", visibility);
     view?.removeEventListener("pagehide", leave);
     view?.removeEventListener("pageshow", restored);
     unsubscribe();

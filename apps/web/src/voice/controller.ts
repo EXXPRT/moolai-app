@@ -192,7 +192,15 @@ class WebVoiceController implements VoiceController {
       const text = await untilAborted(this.p.transcribe(wav, prompt, abort.signal), abort.signal);
       if (typeof text !== "string") throw new Error("Speech recognition returned no text");
       const heard = text.trim();
-      return heard && !hintEcho(heard, WAKE, prompt.slice(WAKE.length + 1)) && !repetitiveOutput(heard) ? heard : null;
+      if (!heard) return null;
+      if (!hintEcho(heard, WAKE, prompt.slice(WAKE.length + 1))) return repetitiveOutput(heard) ? null : heard;
+      // Never route an echo of the prompt. As in the desktop's whisper-bridge, one hint-free transcription decides: a bare
+      // wake word keeps the hinted spelling ("Moo.", not "Mu."), and anything else is taken as heard without the hint.
+      let plain: string;
+      try { plain = await untilAborted(this.p.transcribe(wav, "", abort.signal), abort.signal); }
+      catch (error) { if (abort.signal.aborted) throw error; return null; }
+      if (typeof plain !== "string" || !/[\p{L}\p{N}]/u.test(plain) || repetitiveOutput(plain)) return null;
+      return hintEcho(heard, WAKE) && !repetitiveOutput(heard) ? heard : plain.trim();
     } catch (error) {
       if (!this.closed) this.p.onError("transcribe", error);
       return null;

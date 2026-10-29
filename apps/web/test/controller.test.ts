@@ -89,20 +89,29 @@ test("an utterance voiced under 600 ms has no preview, so its final is revision 
 });
 
 test("a rejection never settles a turn, and a preview already shown is replaced by an empty final", async () => {
-  const outcomes: [string, (request: Request) => void][] = [
+  // An echo of the prompt gets one hint-free transcription, which here hears nothing usable.
+  const outcomes: [string, (request: Request) => void, ((request: Request) => void)?][] = [
     ["empty", request => request.resolve("   ")],
-    ["the wake word echoed", request => request.resolve("Moo.")],
-    ["the context echoed", request => request.resolve("Moo. Osmosis.")],
+    ["the wake word echoed", request => request.resolve("Moo."), request => request.resolve("   ")],
+    ["the context echoed", request => request.resolve("Moo. Osmosis."), request => request.resolve("...")],
+    ["an echo whose hint-free retry loops", request => request.resolve("Moo."), request => request.resolve("Thank you. ".repeat(12))],
+    ["an echo whose hint-free retry fails", request => request.resolve("Moo."), request => request.reject(new Error("Backend 502"))],
     ["repetitive output", request => request.resolve("Thank you. ".repeat(12))],
     ["a failed request", request => request.reject(new Error("Backend 503: voice_unavailable"))],
   ];
-  for (const [name, answer] of outcomes) {
+  for (const [name, answer, retry] of outcomes) {
     for (const ms of [800, 400]) {
       const h = harness();
       h.feed(said(ms));
       await settle();
       answer(h.requests[0]!);
       await settle();
+      assert.equal(h.requests.length, retry ? 2 : 1, name);
+      if (retry) {
+        assert.equal(h.requests[1]!.prompt, "", `${name}: the retry has no hint`);
+        retry(h.requests[1]!);
+        await settle();
+      }
       assert.deepEqual(h.log, ms === 800 ? ["hold", 'preview id2 r1 "…"', 'final id2 r2 ""', "rejected"] : ["hold", "rejected"], `${name}, ${ms} ms`);
       assert.deepEqual(h.errors, name === "a failed request" ? [{ stage: "transcribe", message: "Error: Backend 503: voice_unavailable" }] : [], name);
     }
@@ -112,6 +121,26 @@ test("a rejection never settles a turn, and a preview already shown is replaced 
   await settle();
   assert.equal(short.requests.length, 0, "Under 300 ms voiced is never sent");
   assert.deepEqual(short.log, ["hold", "rejected"]);
+});
+
+test("a bare wake word is kept when a hint-free transcription hears speech, and an echoed sentence becomes its own words", async () => {
+  // 29 Oct: "Moo" alone was always dropped as an echo of the prompt, so Moo could not be called by voice.
+  const wake = harness();
+  wake.feed(said(400));
+  await settle();
+  wake.requests[0]!.resolve("Moo.");
+  await settle();
+  wake.requests[1]!.resolve("Mu.");
+  await settle();
+  assert.deepEqual(wake.log, ["hold", 'final id2 r1 "Moo."', "settle id2"], "The hinted spelling is kept");
+  const sentence = harness();
+  sentence.feed(said(800));
+  await settle();
+  sentence.requests[0]!.resolve("Moo. Osmosis.");
+  await settle();
+  sentence.requests[1]!.resolve(" Osmosis needs a membrane. ");
+  await settle();
+  assert.deepEqual(sentence.log, ["hold", 'preview id2 r1 "…"', 'final id2 r2 "Osmosis needs a membrane."', "settle id2"]);
 });
 
 test("outcomes apply in utterance order when a later result is ready first, and each takes the hold for the speech after it", async () => {
