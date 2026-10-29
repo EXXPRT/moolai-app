@@ -1,8 +1,9 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { MarkdownContent as Preview } from "./MarkdownContent.js";
+import { MarkdownContent as Preview, SegmentText } from "./MarkdownContent.js";
 import type { BrainRecord, BrainQuery, LiveThoughtPreview, RecordPatch } from "../../../packages/contracts/src/index.js";
 import { noteTitle, queryRecords } from "../../../packages/contracts/src/records.js";
 import { connectionDismissals, connectionsFor, originalSources, readerError, sourceGroups } from "./note-reader.js";
+import { matchesSearch, notePreview } from "./note-text.js";
 import { useLiveNoteFollow } from "./useLiveNoteFollow.js";
 import { sessionHubs } from "./session-hubs.js";
 import { organizingStatus } from "./organizing-status.js";
@@ -41,9 +42,12 @@ export function BrainWorkspace({ records, api, refresh, requestedNote, processin
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const inspector = useRef<HTMLElement>(null);
+  const filterPanel = useRef<HTMLDetailsElement>(null);
   const lastFocus = useRef<HTMLElement | null>(null);
   const focusSelection = useRef(false);
-  const notes = queryRecords(records, filters);
+  // The search matches as you type; queryRecords keeps the kinds, topic and category scope and the recency order.
+  const { text: search = "", ...scope } = filters;
+  const notes = queryRecords(records.filter(item => matchesSearch(item, search)), scope);
   const activeFilters = [filters.text?.trim(), filters.topic, filters.purpose].filter(Boolean).length;
   const record = records.find(item => item.id === selected && !item.suppressed);
   const live = liveThought && (!liveThought.recordId || !records.find(item => item.id === liveThought.recordId)?.suppressed) ? liveThought : undefined;
@@ -68,28 +72,46 @@ export function BrainWorkspace({ records, api, refresh, requestedNote, processin
   function select(id: string) {
     follow.pause(); focusSelection.current = true; setTemporaryPreview(false);
     if (!selected) lastFocus.current = document.activeElement as HTMLElement;
+    if (filterPanel.current) filterPanel.current.open = false;
     setSelected(id); setTab("summary"); setEditor(undefined); setError("");
   }
   function close() { follow.pause(); setSelected(""); setTemporaryPreview(false); setEditor(undefined); setError(""); lastFocus.current?.focus(); }
   useEffect(() => { if (requestedNote) select(requestedNote.id); }, [requestedNote?.id, requestedNote?.nonce]);
+  // Search & filters opens over the inspector: a press outside it or Escape closes it, and that Escape leaves the note open.
+  useEffect(() => {
+    const panel = filterPanel.current;
+    if (!panel) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !panel.open) return;
+      const focused = panel.contains(document.activeElement);
+      panel.open = false;
+      if (focused) panel.querySelector("summary")?.focus();
+    };
+    const onPointer = (event: PointerEvent) => { if (panel.open && !panel.contains(event.target as Node)) panel.open = false; };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onPointer);
+    return () => { document.removeEventListener("keydown", onKey); document.removeEventListener("pointerdown", onPointer); };
+  }, []);
   useEffect(() => {
     if (focusSelection.current) inspector.current?.querySelector<HTMLButtonElement>('[aria-label="Close note"]')?.focus();
     focusSelection.current = false;
   }, [selected]);
 
-  async function run(action: () => Promise<void>) {
+  async function run(action: () => Promise<void>, conflict?: string) {
     setBusy(true); setError("");
     try { await action(); await refresh(); }
-    catch (cause) { setError(readerError(cause)); }
+    catch (cause) { setError(readerError(cause, conflict)); }
     finally { setBusy(false); }
   }
   async function save(draft: RecordPatch) {
-    if (!api || !editor) return;
-    const editing = editor;
+    // Save against the latest revision, since organization moves a growing note on while it is edited; later passes keep the edited fields.
+    const latest = editor && records.find(item => item.id === editor.id && !item.suppressed);
+    if (!api || !latest) return;
+    // After a conflict, saving again posts the newer revision and keeps the typed edits; reopening the note would lose them.
     await run(async () => {
-      await api.request("POST", `/api/record/${editing.id}`, { revision: editing.revision, patch: draft });
+      await api.request("POST", `/api/record/${latest.id}`, { revision: latest.revision, patch: draft });
       setEditor(undefined);
-    });
+    }, "This note changed while you were saving. Save again to keep your edits.");
   }
   async function removeConnection(other: BrainRecord) {
     if (!record || !api) return;
@@ -101,7 +123,7 @@ export function BrainWorkspace({ records, api, refresh, requestedNote, processin
   return <section className={`brain workspace ${record || showTemporaryPreview ? "has-inspector" : ""}`}>
     <div className="section-heading">
       <div><span className="eyebrow">YOUR SECOND BRAIN</span><h2>Thoughts, connected.</h2></div>
-      <details className="search-dropdown">
+      <details ref={filterPanel} className="search-dropdown">
         <summary>Search &amp; filters{activeFilters ? <span className="filter-count">{activeFilters}</span> : null}</summary>
         <div className="search-popover">
           <label>Search<input aria-label="Search Brain" placeholder="Find a thought…" value={filters.text ?? ""} onChange={event => setFilters({ ...filters, text: event.target.value })} /></label>
@@ -131,26 +153,26 @@ export function BrainWorkspace({ records, api, refresh, requestedNote, processin
         <div className="recent-heading"><span>{activeFilters ? "Matching thoughts" : "Recent thoughts"}</span><span>{notes.length}</span></div>
         <div className="notes" aria-label="Saved notes">
           {notes.slice(0, 100).map(note => <button className={`note ${record?.id === note.id ? "selected" : ""}`} aria-pressed={record?.id === note.id} key={note.id} onClick={() => select(note.id)}>
-            <strong>{noteTitle(note, records)}</strong>{note.thoughtStatus === "draft" || note.thoughtStatus === "growing" ? <span className="hint">Growing note</span> : null}<SummaryReview record={note} /><p>{note.summary || note.body || note.segments[0]?.text || "Summary pending"}</p>
+            <strong>{noteTitle(note, records)}</strong>{note.thoughtStatus === "draft" || note.thoughtStatus === "growing" ? <span className="hint">Growing note</span> : null}<SummaryReview record={note} /><p>{notePreview(note) || "Summary pending"}</p>
           </button>)}
           {!notes.length ? <p className="recent-empty">{activeFilters ? "No thoughts match these filters." : "Your saved thoughts will appear here."}</p> : null}
         </div>
       </aside>
-      <div className="graph-area"><Suspense fallback={<p className="hint">Opening your connections…</p>}><Graph records={notes} record={record} onSelect={select} sessions={sessionHubs(records, notes)} status={organizingStatus(processing, notes)} overview /></Suspense></div>
-      {record ? <article key={record.id} ref={inspector} className="brain-document" aria-label="Note inspector" onKeyDown={event => { if (event.key === "Escape" && !editor) close(); }}>
+      <div className="graph-area"><Suspense fallback={<p className="hint">Opening your connections…</p>}><Graph records={notes} record={record} onSelect={select} sessions={sessionHubs(records, notes)} status={organizingStatus(processing, notes)} filtered={activeFilters > 0} overview /></Suspense></div>
+      {record ? <article key={record.id} ref={inspector} className="brain-document" aria-label="Note inspector" onKeyDown={event => { if (event.key === "Escape" && !editor && !filterPanel.current?.open) close(); }}>
         <div className="inspector-header"><h3>{noteTitle(record, records)}</h3><button className="icon-button close-inspector" aria-label="Close note" title="Close note" onClick={close}>×</button></div>
         <div className="view-switch" role="tablist" aria-label="Note views">
-          {tabs.map((item, index) => <button key={item.id} id={`note-tab-${item.id}`} role="tab" aria-selected={tab === item.id} aria-controls={`note-panel-${item.id}`} tabIndex={tab === item.id ? 0 : -1} onClick={() => { setTab(item.id); setEditor(undefined); }} onKeyDown={event => {
+          {tabs.map((item, index) => <button key={item.id} id={`note-tab-${item.id}`} role="tab" aria-selected={tab === item.id} aria-controls={`note-panel-${item.id}`} tabIndex={tab === item.id ? 0 : -1} onClick={() => { setTab(item.id); setEditor(undefined); if (editor) setError(""); }} onKeyDown={event => {
             const direction = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
             if (!direction) return;
             event.preventDefault(); const next = tabs[(index + direction + tabs.length) % tabs.length]!;
-            setTab(next.id); setEditor(undefined); document.getElementById(`note-tab-${next.id}`)?.focus();
+            setTab(next.id); setEditor(undefined); if (editor) setError(""); document.getElementById(`note-tab-${next.id}`)?.focus();
           }}>{item.label}</button>)}
         </div>
         <div className="inspector-content" role="tabpanel" id={`note-panel-${tab}`} aria-labelledby={`note-tab-${tab}`}>
-          {error ? <p role="alert" className="inline-alert">{error}</p> : null}
-          {tab === "summary" ? editor ? <SummaryEditor key={editor.id} record={editor} busy={busy} save={save} cancel={() => setEditor(undefined)} /> : <>
-            <div className="summary-actions"><button className="text-button" disabled={busy || !api} onClick={() => { follow.pause(); setEditor(record); }}>Edit</button></div>
+          {error && !editor ? <p role="alert" className="inline-alert">{error}</p> : null}
+          {tab === "summary" ? editor ? <SummaryEditor key={editor.id} record={editor} busy={busy} error={error} save={save} cancel={() => { setEditor(undefined); setError(""); }} /> : <>
+            <div className="summary-actions"><button className="text-button" disabled={busy || !api} onClick={() => { follow.pause(); setEditor(record); setError(""); }}>Edit</button></div>
             {record.thoughtStatus === "draft" && record.summarySourceRevision === undefined && !record.manualFields.includes("summary")
               ? <p className="note-processing" role="status">Preview from your recorded words · {record.error ? "Organization is paused." : "Moo is preparing the summary in the background."} Full text is in Recorded text.</p>
               : record.thoughtStatus === "draft" || record.thoughtStatus === "growing" ? <p className="note-processing" role="status">Growing note · This summary stays visible while new speech is organized. Your edits are preserved.</p> : null}
@@ -164,14 +186,14 @@ export function BrainWorkspace({ records, api, refresh, requestedNote, processin
           {tab === "recorded" ? <RecordedText key={record.id} record={record} records={records} api={api} /> : null}
           {tab === "connections" ? <div className="connections">
             {connectionsFor(record, records).map(connection => <div className="relationship" key={connection.record.id}>
-              <button className="connection-note" onClick={() => select(connection.record.id)}><span>{connection.label}</span><strong>{noteTitle(connection.record, records)}</strong><p>{connection.record.summary || connection.record.body || connection.record.segments[0]?.text}</p></button>
+              <button className="connection-note" onClick={() => select(connection.record.id)}><span>{connection.label}</span><strong>{noteTitle(connection.record, records)}</strong><p>{notePreview(connection.record)}</p></button>
               {connection.removable ? <button className="text-button" disabled={busy || !api} aria-label={`Remove connection to ${noteTitle(connection.record, records)}`} onClick={() => void removeConnection(connection.record)}>Remove</button> : null}
             </div>)}
             {!connectionsFor(record, records).length ? <p className="empty-summary">{record.connectionStatus === "pending" ? "Looking for related thoughts…" : record.connectionStatus === "failed" ? "Connections couldn’t be checked yet." : "No connections yet. Related thoughts will appear here."}</p> : null}
           </div> : null}
         </div>
       </article> : null}
-      {showTemporaryPreview ? <article className="brain-document live-thought-document" aria-label="Live thought preview" onKeyDown={event => { if (event.key === "Escape") close(); }}>
+      {showTemporaryPreview ? <article className="brain-document live-thought-document" aria-label="Live thought preview" onKeyDown={event => { if (event.key === "Escape" && !filterPanel.current?.open) close(); }}>
         <div className="inspector-header"><h3>Your next thought</h3><button className="icon-button close-inspector" aria-label="Close live preview" onClick={close}>×</button></div>
         <div className="inspector-content"><p className="hint">These words may change as you speak. A note appears after Moo understands what to keep.</p><LivePreview preview={live!} /></div>
       </article> : null}
@@ -189,14 +211,17 @@ function LivePreview({ preview }: { preview: LiveThoughtPreview }) {
   </section>;
 }
 
-function SummaryEditor({ record, busy, save, cancel }: { record: BrainRecord; busy: boolean; save: (patch: RecordPatch) => Promise<void>; cancel: () => void }) {
+function SummaryEditor({ record, busy, error, save, cancel }: { record: BrainRecord; busy: boolean; error: string; save: (patch: RecordPatch) => Promise<void>; cancel: () => void }) {
   const [title, setTitle] = useState(record.title);
   const [summary, setSummary] = useState(record.summary);
+  const alert = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { if (error) alert.current?.scrollIntoView({ block: "nearest" }); }, [error]);
   function submit() { const patch: RecordPatch = {}; if (title !== record.title) patch.title = title; if (summary !== record.summary) patch.summary = summary; if (Object.keys(patch).length) void save(patch); else cancel(); }
   return <form className="note-editor" onSubmit={event => { event.preventDefault(); submit(); }} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "s") { event.preventDefault(); if (!busy) submit(); } }}>
     <label>Title<input required disabled={busy} value={title} onChange={event => setTitle(event.target.value)} /></label>
     <label>Summary<textarea disabled={busy} value={summary} onChange={event => setSummary(event.target.value)} /></label>
     <div className="editor-actions"><button className="primary" disabled={busy}>Save</button><button type="button" disabled={busy} onClick={cancel}>Cancel</button></div>
+    {error ? <p ref={alert} role="alert" className="inline-alert">{error}</p> : null}
   </form>;
 }
 
@@ -218,11 +243,11 @@ function RecordedText({ record, records, api }: { record: BrainRecord; records: 
   }
   return <div className="recorded-text">
     {record.body ? <div className="source-group"><h4>Written note</h4><Preview text={record.body} /></div> : null}
-    {groups.map((group, index) => <div className="source-group" key={index}><h4>{group.kind}</h4>{group.segments.map(segment => <div className="source" key={segment.id}><span>{segment.speaker === "user" ? "You" : segment.speaker === "assistant" ? "Moo" : "Session"}</span><Preview text={segment.text} /></div>)}</div>)}
+    {groups.map((group, index) => <div className="source-group" key={index}><h4>{group.kind}</h4>{group.segments.map(segment => <div className="source" key={segment.id}><span>{segment.speaker === "user" ? "You" : segment.speaker === "assistant" ? "Moo" : "Session"}</span><SegmentText segment={segment} /></div>)}</div>)}
     {!record.body && !groups.length ? <p className="empty-summary">No original text is available for this note.</p> : null}
     {sources.length ? <div className="original-sources">{sources.map(source => <details key={source.id}><summary>{source.kind === "conversation" ? "Original Moo conversation" : source.kind === "session" ? "Full recorded session" : "Original request"}{source.kind !== "session" && source.kind !== "conversation" ? ` · ${noteTitle(source, records)}` : ""}</summary>
       {source.body ? <Preview text={source.body} /> : null}
-      {source.segments.map(segment => <div className="source" key={segment.id}><span>{segment.speaker === "user" ? "You" : segment.speaker === "assistant" ? "Moo" : "Session"}</span><Preview text={segment.text} /></div>)}
+      {source.segments.map(segment => <div className="source" key={segment.id}><span>{segment.speaker === "user" ? "You" : segment.speaker === "assistant" ? "Moo" : "Session"}</span><SegmentText segment={segment} /></div>)}
     </details>)}</div> : null}
     {attachments.length ? <div className="source-attachments"><h4>Attachments</h4>{attachments.map((id, index) => <button disabled={loading || !api} key={id} onClick={() => void openAttachment(id)}>View attachment{attachments.length > 1 ? ` ${index + 1}` : ""}</button>)}</div> : null}
     {loading ? <p role="status" className="hint">Opening attachment…</p> : null}

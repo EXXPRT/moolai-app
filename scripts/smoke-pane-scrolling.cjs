@@ -19,7 +19,8 @@ execFileSync(process.env.MOOLAI_NODE || 'node', ['--import', 'tsx', '--input-typ
   const b=new SQLiteBrain(${JSON.stringify(data)}), at='2026-10-02T00:00:00Z';
   const text=${JSON.stringify(fixtureText)};
   const session=await b.createRecord({id:'scroll-session',kind:'session',createdAt:at});
-  for(let i=0;i<30;i++) await b.upsertSegment(session.id,{id:'scroll-segment-'+i,turnId:'scroll-turn-'+i,text,speaker:i%2?'assistant':'user',revision:1,final:true,createdAt:at});
+  // Moo speaks first: its turns render the Markdown tables and code, while the user's own words show as written.
+  for(let i=0;i<30;i++) await b.upsertSegment(session.id,{id:'scroll-segment-'+i,turnId:'scroll-turn-'+i,text,speaker:i%2?'user':'assistant',revision:1,final:true,createdAt:at});
   for(let i=0;i<12;i++){const note=await b.createRecord({id:'scroll-note-'+i,kind:'note',createdAt:at});await b.updateRecord(note.id,note.revision,{title:'Scroll note '+i,body:text,summary:text,quality:'ready',manualFields:['title','summary']});}
   const connected=await b.getRecord('scroll-note-0');
   await b.updateRecord(connected.id,connected.revision,{links:Array.from({length:11},(_,i)=>({targetId:'scroll-note-'+(i+1),provenance:'manual',decision:'accepted'}))});

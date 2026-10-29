@@ -5,9 +5,9 @@ import type { BrainRecord } from "../../../packages/contracts/src/index.js";
 import { noteTitle, relatedRecords } from "../../../packages/contracts/src/records.js";
 import type { SessionHub } from "./session-hubs.js";
 
-export default function BrainGraph({ record, records, onSelect, overview = false, sessions = [], status }: {
+export default function BrainGraph({ record, records, onSelect, overview = false, sessions = [], status, filtered = false }: {
   record?: BrainRecord; records: BrainRecord[]; onSelect: (id: string) => void; overview?: boolean; sessions?: SessionHub[];
-  status?: { label: string; tone: "busy" | "done" | "attention" };
+  status?: { label: string; tone: "busy" | "done" | "attention" }; filtered?: boolean;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const graph = useRef<cytoscape.Core | null>(null);
@@ -176,7 +176,7 @@ export default function BrainGraph({ record, records, onSelect, overview = false
         const pan = cy.pan(); animateViewport({ pan: { x: pan.x + (event.key === "ArrowLeft" ? 45 : event.key === "ArrowRight" ? -45 : 0), y: pan.y + (event.key === "ArrowUp" ? 45 : event.key === "ArrowDown" ? -45 : 0) } });
       }
     }} />
-    {!visible.length ? <div className="graph-empty"><span aria-hidden="true">✧</span><p>A little space for your next idea.</p><small>Your thoughts and their connections will grow here.</small></div> : null}
+    {!visible.length ? <div className="graph-empty"><span aria-hidden="true">✧</span>{filtered ? <p>No notes match these filters.</p> : <><p>A little space for your next idea.</p><small>Your thoughts and their connections will grow here.</small></>}</div> : null}
     <div className="graph-toolbar">
       {status ? <span className={`graph-organizing ${status.tone}`} role="status" aria-live="polite">{status.label}</span> : null}
       <span className="graph-scope">{visible.length} of {available.length} notes{hubs.length ? ` · ${hubs.length} session${hubs.length === 1 ? "" : "s"}` : ""}{overview ? " · recent + connected" : " · neighbourhood"}</span>

@@ -69,6 +69,9 @@ test("reader failures disclose neither raw backend errors nor an unsupported unc
   assert.doesNotMatch(error, /502|provider|secret|unchanged/);
   assert.match(error, /could not be confirmed/);
   assert.match(readerError(new Error("409 revision conflict")), /latest version/);
+  // The editor passes its own conflict text; other failures keep theirs.
+  assert.equal(readerError(new Error("Record changed; reload before editing"), "Save again."), "Save again.");
+  assert.match(readerError(new Error("HTTP 502"), "Save again."), /could not be confirmed/);
 });
 
 test('one-sided removal suppresses reverse associations but retains source connections',()=>{

@@ -248,6 +248,7 @@ summary { cursor: pointer; color: var(--muted); font-size: 12px; line-height: 1.
 
 .markdown { min-width: 0; overflow-wrap: anywhere; }
 .utterance .markdown p, .source .markdown p { white-space: normal; }
+.markdown.plain-text p { white-space: pre-wrap; }
 /* Only contain horizontal gestures inside tables/code. Containing both axes traps
    vertical trackpad gestures here instead of letting the owning pane scroll. */
 .markdown-table { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; overscroll-behavior-y: auto; margin: 1rem 0; }

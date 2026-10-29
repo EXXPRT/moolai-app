@@ -1,4 +1,4 @@
-import { MarkdownContent } from "./MarkdownContent.js";
+import { SegmentText } from "./MarkdownContent.js";
 import { BrainWorkspace } from "./BrainWorkspace.js";
 import { useChatFollow } from "./useChatFollow.js";
 import React, { useEffect, useRef, useState } from "react";
@@ -312,7 +312,7 @@ function App() {
                     <em className="intent-chip" title="How Jev routed this turn">{snapshot.intents[segment.turnId]!.label}</em>}
                 </span>
                 <div>
-                  <MarkdownContent text={segment.text} />
+                  <SegmentText segment={segment} />
                   {!segment.final && <em> · Transcribing…</em>}
                 </div>
                 {segment.references?.map(ref=><button key={ref.recordId} className="note-reference" onClick={()=>setSelectedNote({id:ref.recordId,nonce:Date.now()})}>{ref.title}</button>)}

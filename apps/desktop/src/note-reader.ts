@@ -57,8 +57,8 @@ export function connectionDismissals(record: BrainRecord, other: BrainRecord): {
   });
 }
 
-export function readerError(error: unknown): string {
+export function readerError(error: unknown, conflict = "This note changed while you were editing. Reopen it to use the latest version."): string {
   const message = error instanceof Error ? error.message : String(error);
-  if (/conflict|revision|changed|409/i.test(message)) return "This note changed while you were editing. Reopen it to use the latest version.";
+  if (/conflict|revision|changed|409/i.test(message)) return conflict;
   return "That action could not be confirmed. Reopen the note before trying again.";
 }
