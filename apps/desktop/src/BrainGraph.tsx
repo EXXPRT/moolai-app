@@ -90,7 +90,8 @@ export default function BrainGraph({ record, records, onSelect, overview = false
     const elements: cytoscape.ElementDefinition[] = [...items.map(item => ({ id: item.id, label: item.title })),
       ...hubs.map(hub => ({ id: hub.id, label: hub.label }))].map((data, index) => ({
       data, classes: index < items.length ? undefined : "session",
-      position: before ? center
+      // Cytoscape keeps the object it is given as the node's position, so a shared one would move every new node together.
+      position: before ? { ...center }
         : { x: 180 + (index % 8) * 120, y: 120 + Math.floor(index / 8) * 120 },
     }));
     const edges = new Set<string>();
