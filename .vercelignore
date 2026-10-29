@@ -1,0 +1,13 @@
+**/.env
+**/.env.*
+!**/.env.example
+runtime.env
+.data
+**/*.sqlite*
+obsidian-notes
+*-2026-09-19
+*-2026-09-20
+*-note-update
+backend/.venv
+**/__pycache__
+**/.pytest_cache
