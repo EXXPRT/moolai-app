@@ -76,7 +76,8 @@ export interface VoiceControllerOptions {
   /** Milliseconds, monotonic. Defaults to performance.now. */
   clock?: () => number;
   onError(stage: "save" | "route" | "transcribe", error: unknown): void;
-  /** Debug overlay and auto-off: called on onsets and whenever the outcome queue changes. */
+  /** Debug overlay and auto-off: called on onsets, whenever the outcome queue changes, and about every 100 ms with the
+   * latest level. Only an onset is the visitor's activity. */
   onActivity?(activity: { onset?: true; pending: number; rms?: number }): void;
   tailMs?: number;
   previewMinVoicedMs?: number;

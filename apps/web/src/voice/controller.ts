@@ -7,6 +7,7 @@ import { Downsampler, encodeWav, hintEcho, repetitiveOutput } from "./pcm.js";
 const WAKE = "Moo.";
 const PROMPT_LIMIT = 400;
 const QUEUED_LIMIT = 2;
+const LEVEL_MS = 100;
 const TIMED_OUT = "Speech recognition timed out. Please say that again.";
 const BEHIND = "Speech recognition is behind. Please say that again.";
 
@@ -37,8 +38,10 @@ class WebVoiceController implements VoiceController {
   private outstanding = 0;
   private finishing = 0;
   private closed = false;
+  private levelAt: number;
   constructor(private readonly p: VoiceControllerOptions) {
     this.clock = p.clock ?? (() => performance.now());
+    this.levelAt = this.clock();
     this.endpointer = new Endpointer(WEB_ENDPOINTER, event => this.handle(event));
   }
   get utteranceOpen() { return this.endpointer.open; }
@@ -48,12 +51,15 @@ class WebVoiceController implements VoiceController {
     if (this.closed || this.finishing) return;
     const downsampler = this.downsampler?.inputRate === sampleRate ? this.downsampler : (this.downsampler = new Downsampler(sampleRate));
     const audio = downsampler.process(samples);
-    // Half-duplex: Moo's own voice, a line of it still downloading, and its tail in the room are heard as silence.
-    const speech = this.p.speech;
-    if (speech.audible || speech.busy || this.clock() - speech.quietSince < (this.p.tailMs ?? 300)) this.endpointer.gap(audio.length);
-    else this.endpointer.push(audio);
+    // Half-duplex: Moo's own voice and a line of it still downloading are heard as silence. Its tail in the room is
+    // heard, so a reply begun in it keeps its first words, but an onset in it waits for the tail to end.
+    const speech = this.p.speech, now = this.clock();
+    if (speech.audible || speech.busy) this.endpointer.gap(audio.length);
+    else this.endpointer.push(audio, now - speech.quietSince < (this.p.tailMs ?? 300));
     const turn = this.current;
     if (turn && !turn.previewed && this.endpointer.voicedMs >= (this.p.previewMinVoicedMs ?? 600)) this.preview(turn);
+    // So ?debug=1 shows the level between onsets too; with no onset, it is not the visitor's activity.
+    if (now - this.levelAt >= LEVEL_MS) { this.levelAt = now; this.activity(); }
   }
 
   async finish(timeoutMs?: number) {

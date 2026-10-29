@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { Segment } from "../../../packages/contracts/src/index.js";
+import { createWebSpeech } from "../src/speech.js";
 import type { VoiceControllerOptions, VoiceSink } from "../src/types.js";
 import { createVoiceController } from "../src/voice/controller.js";
 
 const tone = (ms: number, amplitude = 0.1) => Float32Array.from({ length: ms * 16 }, (_, i) => (i % 2 ? -amplitude : amplitude));
 const quiet = (ms: number) => new Float32Array(ms * 16);
+/** Below the onset and continuation levels: the room, or what echo cancellation leaves of Moo's voice. */
+const room = (ms: number) => tone(ms, 0.004);
 /** Syllables: 180 ms of sound and a 20 ms dip, so long speech is not taken for the room's floor. */
 const speech = (ms: number) => tone(ms).map((sample, i) => (i % 3200 < 2880 ? sample : 0));
 const join = (...parts: Float32Array[]) => {
@@ -16,6 +19,9 @@ const join = (...parts: Float32Array[]) => {
 };
 /** Sound, then enough silence for the 1000 ms endpoint. */
 const said = (ms: number) => join(tone(ms), quiet(1100));
+/** The samples of a WAV the controller sent, and samples as encodeWav writes them. */
+const pcm16 = (wav: Uint8Array) => { const view = new DataView(wav.buffer, wav.byteOffset + 44); return Int16Array.from({ length: view.byteLength / 2 }, (_, i) => view.getInt16(i * 2, true)); };
+const int16 = (samples: Float32Array) => Int16Array.from(samples, sample => Math.round(sample * 32767));
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const deferred = () => {
   let resolve!: () => void;
@@ -54,9 +60,19 @@ function harness(options: Partial<VoiceControllerOptions> = {}, hooks: {
   });
   return {
     controller, log, segments, requests, errors, activity, speechGate,
+    get time() { return time; },
     at(ms: number) { time = ms; },
     feed(samples: Float32Array, sampleRate = 16000) { controller.accept(samples, sampleRate); },
+    /** As the microphone delivers it: 20 ms chunks, each at its own clock time. */
+    stream(samples: Float32Array) { for (let at = 0; at < samples.length; at += 320, time += 20) controller.accept(samples.subarray(at, at + 320), 16000); },
   };
+}
+/** Moo speaks while `heard` comes in, then stops. */
+function mooSpeaks(h: ReturnType<typeof harness>, heard: Float32Array) {
+  h.speechGate.audible = true;
+  h.stream(heard);
+  h.speechGate.audible = false;
+  h.speechGate.quietSince = h.time;
 }
 
 test("an utterance is previewed, then its final replaces the preview and its turn settles", async () => {
@@ -203,19 +219,20 @@ test("a 30 s limit split continues in a new utterance that holds Moo, and the sp
   assert.notEqual(h.segments.at(-1)!.createdAt, h.segments[0]!.createdAt);
 });
 
-test("half-duplex: input is ignored while Moo is audible and for 300 ms after it stops", async () => {
+test("half-duplex: input is silence while Moo is audible, and an onset in the 300 ms after it stops waits for their end", async () => {
   const h = harness();
   h.speechGate.audible = true;
   h.feed(said(500));
   h.speechGate.audible = false;
   h.speechGate.quietSince = 1000;
   h.at(1200);
+  h.feed(join(quiet(20), tone(500)));
+  assert.deepEqual(h.log, [], "Heard, but held while Moo's voice may still ring in the room");
+  h.at(1300);
   h.feed(said(500));
   await settle();
-  assert.deepEqual(h.log, []);
-  h.at(1300);
-  h.feed(tone(500));
-  assert.deepEqual(h.log, ["hold"]);
+  assert.deepEqual(h.log, ["hold", 'preview id2 r1 "…"'], "The held onset opens at the first frame after the tail");
+  assert.deepEqual(pcm16(h.requests[0]!.wav), int16(join(quiet(300), tone(1000), quiet(1000))), "Its pre-roll counts back from the run's first frame");
   const overlap = harness();
   overlap.feed(tone(500));
   overlap.speechGate.audible = true;
@@ -226,6 +243,114 @@ test("half-duplex: input is ignored while Moo is audible and for 300 ms after it
   assert.equal(pcm.byteLength, 1500 * 32);
   assert.equal(pcm.getInt16(500 * 32 - 2, true), -3277);
   for (let at = 500 * 32; at < pcm.byteLength; at += 2) assert.equal(pcm.getInt16(at, true), 0);
+});
+
+test("a reply begun in the 300 ms after Moo stops keeps its start, and opens once they are over", async () => {
+  // 29 Oct: those 300 ms were silence, so "Moo, what do my notes say…" said at once lost its "Moo,". Moo stops at 1000 ms;
+  // the reply's first 20 ms are soft, as speech's attack is (loud from its very first frame, see the next test).
+  // [delay, where the upload starts, when the utterance opens, where it ends], in ms.
+  for (const [delay, from, opens, to] of [[0, 720, 1300, 2820], [100, 820, 1300, 2920], [150, 860, 1300, 2980], [300, 1020, 1420, 3120]] as const) {
+    const h = harness();
+    mooSpeaks(h, room(1000));
+    const reply = join(room(delay), tone(20, 0.006), tone(800), quiet(1100));
+    h.stream(reply.subarray(0, (opens - 1000) * 16));
+    assert.deepEqual(h.log, [], `${delay} ms: nothing opens before ${opens} ms`);
+    h.stream(reply.subarray((opens - 1000) * 16));
+    await settle();
+    assert.deepEqual(h.log, ["hold", 'preview id2 r1 "…"'], `${delay} ms`);
+    // Moo's own time is silence; from its stop on, every sample is as heard, from 300 ms before the reply's first loud frame.
+    assert.deepEqual(pcm16(h.requests[0]!.wav), int16(join(quiet(1000), reply).subarray(from * 16, to * 16)), `${delay} ms`);
+  }
+});
+
+test("a short wake word in the 300 ms after Moo stops, then a pause, keeps the whole wake word", async () => {
+  // 29 Oct: its onset fired only if it was still loud when the 300 ms ended, so "Moo." and a pause lost the "Moo.".
+  for (const [word, pause] of [[160, 300], [200, 200]] as const) {
+    for (const delay of [20, 60, 100, 140]) {
+      const h = harness();
+      mooSpeaks(h, room(1000));
+      const reply = join(room(delay), tone(word, 0.05), room(pause), tone(800), quiet(1100));
+      h.stream(reply);
+      await settle();
+      const name = `"Moo" ${word} ms, ${pause} ms pause, ${delay} ms after Moo stops`;
+      assert.deepEqual(h.log, ["hold", 'preview id2 r1 "…"'], name);
+      // From 300 ms before the wake word's first frame to the question's endpoint.
+      assert.deepEqual(pcm16(h.requests[0]!.wav), int16(join(quiet(1000), reply).subarray((700 + delay) * 16, (1000 + delay + word + pause + 1800) * 16)), name);
+    }
+  }
+});
+
+test("speech already under way when Moo stops opens nothing until a pause, and the next phrase is its own utterance", async () => {
+  // 29 Oct: the rest of a sentence begun over Moo was sent as a turn of its own, saved as a fragment or answered.
+  const h = harness();
+  mooSpeaks(h, join(room(500), tone(500)));
+  h.stream(join(tone(900), quiet(400), tone(800), quiet(1100)));
+  await settle();
+  assert.deepEqual(h.log, ["hold", 'preview id2 r1 "…"']);
+  assert.deepEqual(pcm16(h.requests[0]!.wav), int16(join(quiet(300), tone(800), quiet(1000))), "Only the phrase after the pause");
+  // Loud from the very first frame after Moo stops, a reply can't be told from speech begun under Moo's voice.
+  const prompt = harness();
+  mooSpeaks(prompt, room(1000));
+  prompt.stream(said(800));
+  await settle();
+  assert.deepEqual(prompt.log, []);
+  assert.equal(prompt.requests.length, 0);
+});
+
+test("speech begun over Moo is dropped when Moo stops mid-word, and its next words are a fragment when Moo stops in or near a pause", async () => {
+  // A stop between words can't be told from a new reply by energy alone.
+  // [ms into a 180 ms syllable when Moo stops at 1000 ms (180: its 20 ms dip), where the fragment's upload starts or null].
+  for (const [phase, from] of [[0, null], [20, null], [40, null], [60, null], [80, 820], [100, 800], [120, 780], [140, 760], [160, 740], [180, 720]] as const) {
+    const h = harness();
+    const heard = join(quiet(600 - phase), speech(2000), quiet(1500));
+    mooSpeaks(h, heard.subarray(0, 1000 * 16));
+    h.stream(heard.subarray(1000 * 16));
+    await settle();
+    assert.deepEqual(h.log, from === null ? [] : ["hold", 'preview id2 r1 "…"'], `${phase} ms`);
+    // A fragment starts 300 ms before the first syllable begun after Moo stops, and ends 1000 ms after the speech.
+    if (from !== null) assert.deepEqual(pcm16(h.requests[0]!.wav), int16(join(quiet(1000), heard.subarray(1000 * 16)).subarray(from * 16, (3580 - phase) * 16)), `${phase} ms`);
+  }
+});
+
+test("an echo of Moo shorter than an onset, right as it stops, doesn't keep a reply 150 ms later from opening", async () => {
+  const h = harness();
+  mooSpeaks(h, room(1000));
+  const after = join(tone(80, 0.05), room(70), tone(800), quiet(1100));
+  h.stream(after);
+  await settle();
+  assert.deepEqual(h.log, ["hold", 'preview id2 r1 "…"']);
+  assert.deepEqual(pcm16(h.requests[0]!.wav), int16(join(quiet(1000), after).subarray(840 * 16, 2960 * 16)));
+});
+
+test("Stop speech stops Moo as a line's end does: a reply 100 ms after it keeps its start", async () => {
+  // The real speech port, on an element that plays at once.
+  const audio = { src: "", currentTime: 0, paused: true, ended: false, play: async () => {}, pause() {}, load() {}, addEventListener() {}, removeEventListener() {} };
+  let h: ReturnType<typeof harness> | undefined;
+  const speech = createWebSpeech({ audio, synthesize: async () => new Blob(), urls: { create: () => "blob:line", revoke() {} }, clock: () => h!.time });
+  h = harness({ speech });
+  speech.speak("Osmosis moves water toward the side with more solute.").catch(() => {});
+  await settle();
+  assert.equal(speech.audible, true);
+  h.stream(room(1000));
+  await speech.stop();
+  assert.equal(speech.quietSince, 1000);
+  const reply = join(room(100), tone(20, 0.006), tone(800), quiet(1100));
+  h.stream(reply);
+  await settle();
+  assert.deepEqual(h.log, ["hold", 'preview id2 r1 "…"']);
+  assert.deepEqual(pcm16(h.requests[0]!.wav), int16(join(quiet(1000), reply).subarray(820 * 16, 2920 * 16)));
+});
+
+test("the latest level reaches the debug overlay about every 100 ms, and is never an onset", async () => {
+  // The host's idle auto-off restarts its wait only on an onset.
+  const h = harness();
+  h.stream(room(1000));
+  assert.equal(h.activity.length, 9, "At 100, 200, … 900 ms");
+  assert.ok(h.activity.every(report => report.onset === undefined && report.pending === 0 && Math.abs(report.rms! - 0.004) < 1e-6));
+  h.speechGate.audible = true;
+  h.stream(room(200));
+  assert.equal(h.activity.length, 11);
+  assert.equal(h.activity.at(-1)!.rms, 0, "Moo's own voice is heard as silence");
 });
 
 test("one transcription in flight and two queued; the next is rejected without a request", async () => {
@@ -270,9 +395,9 @@ test("half-duplex also ignores input while a line of Moo's is still downloading"
   await settle();
   assert.deepEqual(h.log, [], "A sound before the line is audible would otherwise cut it, with nothing held to resume");
   h.speechGate.busy = false;
-  h.feed(said(500));
+  h.feed(join(quiet(100), said(500)));
   await settle();
-  assert.deepEqual(h.log, ["hold"]);
+  assert.deepEqual(h.log, ["hold"], "Speech begun after the line opens as usual");
 });
 
 test("a transcription past its timeout is aborted and its utterance rejected", async () => {

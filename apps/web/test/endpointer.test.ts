@@ -13,18 +13,19 @@ const join = (...parts: Float32Array[]) => {
   for (const part of parts) { out.set(part, at); at += part.length; }
   return out;
 };
-type Step = Float32Array | { gap: number };
-/** Runs push and gap steps in chunks of the given sizes; events carry the samples given by the end of the chunk that fired them. */
+type Step = Float32Array | { gap: number } | { held: Float32Array };
+/** Runs push, held push and gap steps in chunks of the given sizes; events carry the samples given by the end of the chunk that fired them. */
 function run(steps: Step[], { sizes = [Infinity], config = WEB_ENDPOINTER, commit = false }: { sizes?: number[]; config?: Readonly<EndpointerConfig>; commit?: boolean } = {}) {
   const events: (EndpointerEvent & { at: number })[] = [];
   let at = 0, chunk = 0;
   const endpointer = new Endpointer(config, event => events.push({ ...event, at }));
   for (const step of steps) {
-    const length = step instanceof Float32Array ? step.length : step.gap;
+    const audio = step instanceof Float32Array ? step : "held" in step ? step.held : undefined;
+    const length = audio ? audio.length : "gap" in step ? step.gap : 0;
     for (let offset = 0; offset < length;) {
       const size = Math.min(sizes[chunk++ % sizes.length]!, length - offset);
       at += size;
-      if (step instanceof Float32Array) endpointer.push(step.subarray(offset, offset + size));
+      if (audio) endpointer.push(audio.subarray(offset, offset + size), "held" in step);
       else endpointer.gap(size);
       offset += size;
     }
@@ -114,11 +115,38 @@ test("a gap is heard as silence and leaves the noise floor alone", () => {
   assert.deepEqual(run([quiet(500), tone(80), { gap: 60 * 16 }, tone(80), quiet(1500)]).events, [], "A run cannot straddle a gap");
 });
 
+test("a run already loud at the first frame after a gap opens nothing, and the next onset needs the usual pause", () => {
+  // Its start was under Moo's voice, so never heard. 340 ms of quiet is not yet the 350 ms re-arm.
+  const straddle = run([quiet(1000), { gap: 500 * 16 }, tone(900), quiet(340), tone(400), quiet(400), tone(500), quiet(1100)], { sizes: [320] });
+  assert.equal(straddle.onsets.length, 1);
+  assert.deepEqual(straddle.utterances.map(u => u.samples), [join(quiet(300), tone(500), quiet(1000))]);
+  const later = run([quiet(1000), { gap: 500 * 16 }, quiet(20), tone(400), quiet(1100)]);
+  assert.deepEqual(later.utterances.map(u => u.voicedMs), [400], "A run that starts a frame later is an onset");
+  const echo = run([quiet(1000), { gap: 500 * 16 }, tone(100), quiet(60), tone(400), quiet(1100)]);
+  assert.deepEqual(echo.utterances.map(u => u.voicedMs), [400], "A run after the gap shorter than an onset leaves it armed");
+  const held = run([quiet(1000), { gap: 500 * 16 }, { held: join(tone(200), quiet(100)) }, quiet(200), tone(400), quiet(1100)]);
+  assert.deepEqual(held.events, [], "Its disarm doesn't wait for the hold to end: a phrase 300 ms after a run over within it opens nothing");
+});
+
+test("held audio reaches the pre-roll, and its onset waits for the first frame pushed without the hold", () => {
+  const { onsets, utterances } = run([quiet(1000), { held: join(quiet(100), tone(200)) }, tone(400), quiet(1100)], { sizes: [320] });
+  assert.deepEqual(onsets.map(event => event.at), [(1000 + 300 + 20) * 16]);
+  assert.deepEqual(utterances.map(u => u.voicedMs), [600]);
+  assert.deepEqual(utterances[0]!.samples, join(quiet(300), tone(600), quiet(1000)), "300 ms before the run's first frame, though the run outgrew 120 ms");
+  // A short "Moo" and a pause: the onset is latched, and fires though its run is over.
+  const over = run([quiet(1000), { held: join(tone(200), quiet(100)) }, quiet(1500)], { sizes: [320] });
+  assert.deepEqual(over.onsets.map(event => event.at), [(1000 + 300 + 20) * 16], "A run over within the hold opens at the first frame after it");
+  assert.deepEqual(over.utterances.map(u => [u.voicedMs, u.samples]), [[200, join(quiet(300), tone(200), quiet(120 + 1000))]]);
+  assert.deepEqual(run([quiet(1000), { held: join(tone(100), quiet(200)) }, quiet(1500)]).events, [], "A run shorter than an onset still opens nothing");
+  assert.deepEqual(run([quiet(1000), { held: join(tone(200), quiet(50)) }, { gap: 500 * 16 }, quiet(1500)]).events, [], "Moo audible again drops it");
+});
+
 test("chunk size and gap splitting never change an event", () => {
   const steps: Step[] = [quiet(300), tone(700), quiet(1200), tone(60), quiet(500), speech(2500, 0.05), tone(800, 0.009),
-    { gap: 333 * 16 + 7 }, quiet(1500), tone(400), tone(30, 0.3), quiet(200), tone(500)];
+    { gap: 333 * 16 + 7 }, quiet(1500), tone(400), tone(30, 0.3), quiet(200), tone(500), quiet(1100), { gap: 200 * 16 + 5 },
+    tone(300), quiet(500), { held: join(quiet(70), tone(250)) }, tone(300), quiet(1100)];
   const whole = run(steps, { commit: true });
-  assert.equal(whole.utterances.length, 3);
+  assert.equal(whole.utterances.length, 4);
   const strip = (events: typeof whole.events) => events.map(({ at: _at, ...event }) => event);
   for (const sizes of [[320], [1, 79, 257, 1019], [128], [960, 3]])
     assert.deepEqual(strip(run(steps, { sizes, commit: true }).events), strip(whole.events), `${sizes.join("/")}-sample chunks`);
@@ -139,6 +167,9 @@ test("commit keeps the final short frame and re-arms at once; discard drops ever
   discarded.commit();
   assert.deepEqual(dropped.map(event => event.type), ["onset"]);
   assert.equal(discarded.open, false);
+  const latched = run([quiet(1000), { held: tone(200) }], { commit: true });
+  latched.endpointer.push(quiet(400));
+  assert.deepEqual(latched.events, [], "Commit drops a latched onset, with no utterance open");
 });
 
 test("non-finite input is silence and cannot poison the noise floor", () => {
