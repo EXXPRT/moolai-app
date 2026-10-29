@@ -1171,6 +1171,18 @@ async def test_a_bad_backend_variable_gives_a_fail_closed_app_instead_of_raising
     assert refused.status_code == 503 and demo.upstream.requests == []
 
 
+async def test_provider_keys_entered_with_trailing_whitespace_reach_the_providers_clean(record):
+    # Vercel keeps a value as entered, and the HTTP client refuses a header that ends in a newline without sending it.
+    padded = {name: f'{value} \n' for name, value in PROVIDER_KEYS.items()}
+    async with Demo({**padded, 'NEBIUS_BASE_URL': ' https://api.tokenfactory.nebius.com/v1/\n'}) as demo:
+        summarized = await demo.call('summarize', {'record': record.model_dump(exclude_none=True)})
+        routed = await demo.call('route', ROUTE)
+    assert summarized.status_code == 200 and routed.status_code == 200
+    sent = {request.url.host: request.headers['authorization'] for request in demo.upstream.providers}
+    assert sent == {NEBIUS: f"Bearer {PROVIDER_KEYS['NEBIUS_API_KEY']}",
+                    'api.typesafe.ai': f"Bearer {PROVIDER_KEYS['TYPESAFE_API_KEY']}"}
+
+
 async def test_any_construction_error_gives_a_fail_closed_app(monkeypatch):
     def broken(_env):
         raise RuntimeError('unexpected')

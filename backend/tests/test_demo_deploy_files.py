@@ -80,7 +80,7 @@ def test_vercel_json_builds_the_page_and_bundles_only_the_gateway():
     assert isinstance(excluded, str) and excluded[0] == '{' and excluded[-1] == '}'
     patterns = set(excluded[1:-1].split(','))
     assert {'**/.env', '**/.env.*', 'runtime.env', '.data/**', '**/*.sqlite*', 'backend/tests/**',
-            '.claude/**'} <= patterns
+            '.claude/**', 'node_modules/**'} <= patterns
     assert not any(pattern.endswith('.md') for pattern in patterns)  # prompts.py reads instructions/*.md.
     assert not any('moolai_backend' in pattern for pattern in patterns)
     assert config['rewrites'] == [{'source': '/api/(.*)', 'destination': '/api?__path=$1'}]

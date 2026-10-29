@@ -8,7 +8,7 @@
     "api/index.py": {
       "maxDuration": 300,
       "includeFiles": "backend/moolai_backend/**",
-      "excludeFiles": "{apps/**,packages/**,native/**,scripts/**,experiments/**,docs/**,backend/tests/**,backend/Dockerfile,**/.env,**/.env.*,runtime.env,.data/**,**/*.sqlite*,obsidian-notes/**,.claude/**}"
+      "excludeFiles": "{apps/**,packages/**,native/**,scripts/**,experiments/**,docs/**,backend/tests/**,backend/Dockerfile,**/.env,**/.env.*,runtime.env,.data/**,**/*.sqlite*,obsidian-notes/**,.claude/**,node_modules/**}"
     }
   },
   "rewrites": [{ "source": "/api/(.*)", "destination": "/api?__path=$1" }],

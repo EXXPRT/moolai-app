@@ -256,10 +256,11 @@ def settings_from_env(env: Mapping[str, str]) -> Settings:
     """Settings.from_env() over a mapping, so the local runner and tests never mutate os.environ."""
     default = Settings()
     return Settings(
-        typesafe_api_key=env.get('TYPESAFE_API_KEY', ''),
-        nebius_api_key=env.get('NEBIUS_API_KEY', ''),
-        tavily_api_key=env.get('TAVILY_API_KEY', ''),
-        nebius_base_url=env.get('NEBIUS_BASE_URL', default.nebius_base_url).rstrip('/'),
+        # Stripped like the other secrets: a key pasted with a trailing newline is refused by the HTTP client unsent.
+        typesafe_api_key=env.get('TYPESAFE_API_KEY', '').strip(),
+        nebius_api_key=env.get('NEBIUS_API_KEY', '').strip(),
+        tavily_api_key=env.get('TAVILY_API_KEY', '').strip(),
+        nebius_base_url=env.get('NEBIUS_BASE_URL', default.nebius_base_url).strip().rstrip('/'),
         jev_model=env.get('JEV_MODEL', default.jev_model),
         summary_model=env.get('NEBIUS_SUMMARY_MODEL', default.summary_model),
         agent_model=env.get('NEBIUS_AGENT_MODEL', default.agent_model),

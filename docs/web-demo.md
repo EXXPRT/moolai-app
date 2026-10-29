@@ -20,7 +20,7 @@ A stateless, voice-first version of Moolai that runs in the browser:
 2. **Intro.** It loads `GET /api/demo/config` and the sample sessions (`public/seed.json`), then says what the demo sends where. When live, it shows the Turnstile check, then **Start with voice** (if voice is available) and **Start with typing**. When not live, it gives the reason and offers **Explore in fixture mode**: simulated replies, typing only, and nothing the visitor types leaves the page. A live intro offers fixture mode too when the bot check can't load or fails, or when the gateway refuses the session.
 3. **Start.** In the click, a live page creates the AudioContext and unlocks its one audio element, then opens a session with the Turnstile token. The page loads the sample sessions into an in-memory Brain, with their times moved so that the later session started at 16:00 yesterday in the visitor's time zone. A live page then installs the fetch wrapper. Last, the page starts the host, the bridge (`window.moolai`) and a study session, imports the desktop renderer (`apps/desktop/src/main.tsx`) and, for **Start with voice**, turns the microphone on.
 
-Above the renderer, a demo bar names the models and opens the sample worksheet and a **Try saying** card. Each user turn shows how Jev routed it, for example **Saved as a thought**. Limits show as lasting banners. Once voice can't work, the microphone button is hidden, because the renderer would describe any voice failure as a microphone problem.
+Above the renderer, a demo bar names the models and opens the sample worksheet and a **Try saying** card. Each user turn shows how Jev routed it, for example **Saved as a thought**. A typed or pasted message can be up to 2,000 characters. Limits show as lasting banners. If the microphone fails to start, its button stays for another try; once voice can't work, the button is hidden, because the renderer would describe any voice failure as a microphone problem.
 
 ## HTTP contract
 
@@ -102,9 +102,9 @@ Backend errors from the forwarded `/api/v1/*` routes keep the backend's own `{"d
 
 The repository must include `apps/web/public/seed.json` (see [Run it locally](#run-it-locally)); the Vercel build fails without it, and so does CI's `npm test`. Deploy only through Vercel's Git integration. **Never run the Vercel CLI from a working copy that has `backend/.env` or `.data/`**: the CLI uploads files that Git ignores.
 
-1. **Import the project.** At vercel.com, choose **Add New → Project** and import the public GitHub repository. Leave the build settings alone; `vercel.json` sets them. The first deployment isn't live yet, which is expected: `/api/demo/config` reports `live: false`, and the page offers fixture mode.
+1. **Import the project.** At vercel.com, choose **Add New → Project** and import the GitHub repository. Leave the build settings alone; `vercel.json` sets them. The first deployment isn't live yet, which is expected: `/api/demo/config` reports `live: false`, and the page offers fixture mode. Check that **Settings → Functions → Fluid compute** is on (new projects have it on): on Hobby, the function's 300 s limit, which Moo's longer answers can need, comes with it.
 2. **Counters.** Choose **Storage → Marketplace → Upstash for Redis**. Create a free database in `us-east-1` and connect it to the project, all environments, with no custom prefix. This adds `KV_REST_API_URL` and `KV_REST_API_TOKEN`.
-3. **Bot check.** In the Cloudflare dashboard, choose **Turnstile → Add widget**, mode **Managed**, and set the hostname to your production domain, for example `moolai-app.vercel.app`. Copy the site key and the secret key.
+3. **Bot check.** In the Cloudflare dashboard, choose **Turnstile → Add widget**, mode **Managed**, and set the hostname to your production domain. Vercel names it after the project, so a project imported from `moolai-vercel` is usually `moolai-vercel.vercel.app`; **Settings → Domains** shows it. Copy the site key and the secret key.
 4. **Environment variables.** Under **Settings → Environment Variables**, set these for the **Production** environment only:
 
    | Variable | Value |
@@ -117,9 +117,10 @@ The repository must include `apps/web/public/seed.json` (see [Run it locally](#r
    | `DEMO_BUDGET_TOTAL_USD` | `45` |
    | `DEMO_BUDGET_DAILY_USD` | `6` |
    | `DEMO_SESSION_BUDGET_USD` | `1.5` |
+   | `DEMO_ALLOWED_HOSTNAMES` | optional: only if visitors use another domain, such as a custom one. A comma-separated list, the same hostnames as the Turnstile widget. Without it the gateway accepts only the project's production domain. |
 
 5. **Firewall.** Under **Firewall → Rules**, add one rate-limit rule: requests whose path starts with `/api/`, at most 600 per 60 s per IP.
-6. **Redeploy.** Choose **Deployments → ⋯ → Redeploy**; environment variables only reach new deployments. Then open `https://<your-domain>/api/demo/selftest`. Every check should be `true`.
+6. **Redeploy.** Choose **Deployments → ⋯ → Redeploy**; environment variables only reach new deployments. Then open `https://<your-domain>/api/demo/selftest`. Every check should be `true`; `voice` is `true` only when `OPENAI_API_KEY` is set.
 7. **OpenAI limit.** In the OpenAI console, open the project, then **Limits**, and set a monthly budget of US$10 with **Enforce hard limit** on.
 8. **Share only the production domain.** Vercel protects preview and per-deployment URLs by default.
 
