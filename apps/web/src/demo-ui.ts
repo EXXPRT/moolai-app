@@ -65,6 +65,8 @@ export interface Intro {
   status(text: string, error?: boolean): void;
   /** No way to start: the buttons go and the message stays. */
   fail(message: string): void;
+  /** The live demo can't start here (the bot check, or a refused session): offers fixture mode as well. */
+  fallback(start: () => void): void;
   /** The visitor started: the intro goes, and the app and its demo bar show. */
   close(): void;
 }
@@ -75,7 +77,7 @@ export function renderIntro(root: HTMLElement): Intro {
   const page = h("div", { class: "demo-intro" }, h("section", { class: "demo-card", "aria-label": "Moolai web demo" },
     brand(), h("p", { class: "demo-lead" }, LEAD), offer, line));
   root.append(page);
-  let buttons: HTMLButtonElement[] = [];
+  let buttons: HTMLButtonElement[] = [], fixture: HTMLButtonElement | undefined;
   const status = (text: string, error = false) => {
     line.textContent = text;
     line.classList.toggle("is-error", error);
@@ -101,7 +103,20 @@ export function renderIntro(root: HTMLElement): Intro {
     fail(message) {
       offer.replaceChildren();
       buttons = [];
+      fixture = undefined;
       status(message, true);
+    },
+    fallback(start) {
+      if (!fixture) {
+        const button: HTMLButtonElement = h("button", { type: "button", onclick: () => {
+          for (const item of [...buttons, button]) item.disabled = true;
+          start();
+        } }, "Explore in fixture mode");
+        fixture = button;
+        offer.append(h("p", { class: "demo-reason" }, FIXTURE), h("div", { class: "demo-actions" }, button));
+      }
+      // Offered again after a later failure, it works again.
+      fixture.disabled = false;
     },
     close() {
       page.remove();

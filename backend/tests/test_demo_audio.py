@@ -6,8 +6,8 @@ import httpx
 import pytest
 
 from moolai_backend.demo_audio import (
-    INSTRUCTIONS, MAX_AUDIO, MAX_TEXT, SPEECH_URL, TRANSCRIBE_URL, AudioError, DemoAudio, clean_speech_text,
-    map_openai_error, wav_seconds,
+    INSTRUCTIONS, MAX_AUDIO, MAX_TEXT, SPEECH_URL, TRANSCRIBE_URL, AudioError, DemoAudio, canonical_wav,
+    clean_speech_text, map_openai_error, wav_seconds,
 )
 
 KEY = 'openai-fixture-key'
@@ -60,6 +60,52 @@ def test_invalid_wavs_are_refused(clip):
     with pytest.raises(AudioError) as raised:
         wav_seconds(clip)
     assert (raised.value.status, raised.value.code) == (422, 'invalid_audio')
+
+
+def chunk(tag: bytes, payload: bytes) -> bytes:
+    return tag + struct.pack('<I', len(payload)) + payload + b'\x00' * (len(payload) & 1)
+
+
+def riff(*chunks: bytes) -> bytes:
+    body = b''.join(chunks)
+    return b'RIFF' + struct.pack('<I', 4 + len(body)) + b'WAVE' + body
+
+
+FMT = chunk(b'fmt ', struct.pack('<HHIIHH', 1, 1, 16_000, 32_000, 2, 16))
+
+
+def test_a_plain_wav_is_sent_as_it_came():
+    for clip in (wav(1.0), wav(34.0), wav(0.2)):
+        assert canonical_wav(clip) == (clip, len(clip[44:]) / 32_000)
+
+
+@pytest.mark.parametrize('clip,pcm', [
+    # Only the first data chunk is audio, whatever follows it: another data chunk, other chunks or junk.
+    (riff(FMT, chunk(b'data', b'\x01\x02' * 3_200), chunk(b'data', b'\x03\x04' * 536_000)), b'\x01\x02' * 3_200),
+    (riff(FMT, chunk(b'data', b'\x01\x02' * 3_200), chunk(b'LIST', b'abc'), chunk(b'data', b'\x03\x04' * 9_000)),
+     b'\x01\x02' * 3_200),
+    (riff(FMT, chunk(b'data', b'\x01\x02' * 8_000)) + b'junk' * 4_000, b'\x01\x02' * 8_000),
+    # Extension bytes and chunks before the data are dropped, and an odd last byte is not a sample.
+    (wav(1.0, fmt_size=18, before_data=b'LIST' + struct.pack('<I', 3) + b'abc\x00'), b'\x01\x02' * 16_000),
+    (riff(FMT, chunk(b'data', b'\x01\x02' * 8_000 + b'\x05')), b'\x01\x02' * 8_000),
+    (wav(1.0, declared=0xFFFF_FFFF), b'\x01\x02' * 16_000),
+    (wav(1.0, declared=16_000), b'\x01\x02' * 8_000),
+], ids=['two data chunks', 'data, list, data', 'trailing junk', 'extension and list', 'odd byte', 'streamed',
+        'short header'])
+def test_only_the_measured_audio_is_rebuilt_into_the_wav_that_is_sent(clip, pcm):
+    sent, seconds = canonical_wav(clip)
+    assert sent == wav(samples=pcm) and seconds == len(pcm) / 32_000
+
+
+def test_a_second_format_chunk_is_refused_however_it_is_ordered():
+    # A decoder that reads the first format hears 1,088 s where the one before the data says 34.
+    slow = chunk(b'fmt ', struct.pack('<HHIIHH', 1, 1, 1_000, 1_000, 1, 8))
+    clips = (riff(slow, FMT, chunk(b'data', b'\x01' * 1_088_000)), riff(FMT, slow, chunk(b'data', b'\x01' * 16_000)),
+             riff(FMT, FMT, chunk(b'data', b'\x01\x02' * 16_000)))
+    for clip in clips:
+        with pytest.raises(AudioError) as raised:
+            canonical_wav(clip)
+        assert (raised.value.status, raised.value.code) == (422, 'invalid_audio')
 
 
 def test_speech_text_is_normalised_and_bounded():

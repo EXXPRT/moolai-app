@@ -1,12 +1,18 @@
 import { safeEnd } from "../../../packages/contracts/src/records.js";
 import type { DemoConfig, DemoLimit, DemoSession, Processing, Synthesize, Transcriber } from "./types.js";
 
-/** The gateway refusals that end live calls for this page (docs/web-demo.md). Any other failure stays an ordinary error. */
+/** The gateway refusals that end live calls for this page (docs/web-demo.md). Any other failure stays an ordinary error,
+ * such as `503 counters_unavailable`, which passes. */
 const LIMITS = new Map<string, DemoLimit>([
   ["401 invalid_session", "session_expired"], ["401 session_expired", "session_expired"],
   ["429 session_limit", "session_limit"], ["429 session_rate_limited", "session_limit"],
   ["503 demo_budget_exhausted", "budget_exhausted"], ["503 demo_unavailable", "unavailable"], ["503 voice_unavailable", "voice_unavailable"],
 ]);
+/** One endpoint's used-up quota (`429 call_limit`) ends only what that endpoint does: voice, for these two. For any other,
+ * the Agent reports the failed tool or turn itself, and the rest of the page goes on. */
+const VOICE_ROUTES = new Set(["/api/v1/transcribe", "/api/v1/speech"]);
+/** A part longer than this to arrive would keep the microphone deaf (half-duplex), so it fails instead. */
+const SPEECH_TIMEOUT_MS = 20_000;
 const SESSION_REFUSED = new Map<string, string>([
   ["turnstile_failed", "The bot check didn't pass. Refresh the page to try again."],
   ["session_rate_limited", "Too many demo sessions were started from this network. Try again later, or explore in fixture mode."],
@@ -46,7 +52,8 @@ export function createDemoGate(options: {
     const response = await baseFetch(request);
     if (![401, 429, 503].includes(response.status)) return response;
     const detail = await response.clone().json().then((body: { detail?: unknown }) => typeof body?.detail === "string" ? body.detail : "", () => "");
-    const kind = LIMITS.get(`${response.status} ${detail}`);
+    const kind = LIMITS.get(`${response.status} ${detail}`)
+      ?? (response.status === 429 && detail === "call_limit" && VOICE_ROUTES.has(new URL(request.url).pathname) ? "voice_unavailable" : undefined);
     if (kind && !reported.has(kind)) {
       reported.add(kind);
       if (kind !== "voice_unavailable") unavailableAt ??= new Date().toISOString();
@@ -109,12 +116,13 @@ export function createTranscriber(gate: DemoGate): Transcriber {
   };
 }
 
-export function createSynthesizer(gate: DemoGate): Synthesize {
+export function createSynthesizer(gate: DemoGate, timeoutMs = SPEECH_TIMEOUT_MS): Synthesize {
   return async (text, signal) => {
     // Line breaks and other control characters carry nothing for the voice, and the gateway refuses control characters.
     const spoken = wellFormed(text).replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ");
     const response = await gate.call("/api/v1/speech", {
-      method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: spoken }),
+      method: "POST", signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: spoken }),
     });
     if (!response.ok) throw await failure(response, "Speech");
     return response.blob();

@@ -5,6 +5,7 @@ runtime.env
 .data
 **/*.sqlite*
 obsidian-notes
+.claude
 *-2026-09-19
 *-2026-09-20
 *-note-update

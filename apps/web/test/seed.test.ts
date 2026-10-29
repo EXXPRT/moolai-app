@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Agent } from "../../../packages/agent/src/index.js";
 import { FixtureProviders } from "../../../packages/agent-host/src/providers.js";
@@ -182,6 +183,39 @@ test("the generator's call counter names endpoints and refuses calls past its li
   assert.equal(callTotal(calls), 3);
 });
 
+/** A fresh Agent on a loaded seed, started as the page starts it: the provider calls it made, and its Brain. */
+async function startOn(seed: SeedFile) {
+  const brain = new MemoryBrain();
+  await importSeed(brain, seed);
+  const calls = new Map<string, number>();
+  const providers = countCalls(new FixtureProviders(), calls);
+  const agent = new Agent({ brain, decisions: providers, generation: providers, search: providers, vision: providers,
+    capture: { capture: async () => { throw Error("No capture while loading"); } }, speech: { speak: async () => {}, stop: async () => {} },
+    id: () => crypto.randomUUID(), now: () => new Date().toISOString(), timeZone: "Europe/London" });
+  await agent.initialize();
+  await agent.startSession();
+  await agent.drain();
+  return { brain, calls };
+}
+
+const COMMITTED = new URL("../public/seed.json", import.meta.url);
+// The paid generator writes it once. Until then a local run skips this, but CI never passes without it: the page can't
+// start without its sample sessions, and a seed forced past checkSeed (generate-seed --force) fails here.
+test("the committed seed loads, passes checkSeed, and a fresh Agent on it makes no provider call",
+  { skip: !existsSync(COMMITTED) && !process.env.CI && "apps/web/public/seed.json is not generated yet" }, async () => {
+    assert.ok(existsSync(COMMITTED), "apps/web/public/seed.json is missing: generate it (apps/web/scripts/generate-seed.ts) and commit it");
+    const loaded = parseSeed(JSON.parse(await readFile(COMMITTED, "utf8")));
+    const now = new Date();
+    const shifted = shiftIsoTimestamps(loaded, seedOffsetMs(loaded, now, "Europe/London"));
+    assert.deepEqual(checkSeed(shifted), []);
+    const latest = shifted.records.filter(item => item.kind === "session").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!;
+    assert.deepEqual(local(Date.parse(latest.createdAt), "Europe/London"), { day: yesterday(local(now.getTime(), "Europe/London").day), time: "16:00:00" });
+    assert.ok(Math.max(...timestamps(shifted)) <= now.getTime(), "nothing in the seed lands in the future");
+    const { brain, calls } = await startOn(shifted);
+    assert.deepEqual([...calls], [], "loading the seed makes no provider call");
+    assert.equal((await brain.listRecords()).length, shifted.records.length + 1, "the seed plus the visitor's new session");
+  });
+
 /** Fixtures that file each spoken line as its own settled note, so both sessions grow the two notes a hub needs. */
 class LineFixtures extends FixtureProviders {
   override async consolidate(input: ThoughtInput): Promise<ThoughtResult> {
@@ -207,16 +241,7 @@ for (const [name, fixtures, problems] of [["FixtureProviders", FixtureProviders,
     const latest = shifted.records.filter(item => item.kind === "session").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!;
     assert.deepEqual(local(Date.parse(latest.createdAt), "Europe/London"), { day: yesterday(local(now.getTime(), "Europe/London").day), time: "16:00:00" });
 
-    const brain = new MemoryBrain();
-    await importSeed(brain, shifted);
-    const calls = new Map<string, number>();
-    const providers = countCalls(new FixtureProviders(), calls);
-    const agent = new Agent({ brain, decisions: providers, generation: providers, search: providers, vision: providers,
-      capture: { capture: async () => { throw Error("No capture while loading"); } }, speech: { speak: async () => {}, stop: async () => {} },
-      id: () => crypto.randomUUID(), now: () => new Date().toISOString(), timeZone: "Europe/London" });
-    await agent.initialize();
-    await agent.startSession();
-    await agent.drain();
+    const { brain, calls } = await startOn(shifted);
     assert.deepEqual([...calls], [], "loading the seed makes no provider call");
     assert.equal((await brain.listRecords()).length, shifted.records.length + 1, "the seed plus the visitor's new session");
     const [attachment] = shifted.attachments;

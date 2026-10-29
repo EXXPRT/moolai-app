@@ -28,7 +28,9 @@ export async function createWebHost(options: WebHostOptions): Promise<WebHost> {
   const idleMs = options.idleMicOffMs ?? 300_000;
   let closed = false, voiceEnabled = false, limited = false, epoch = 0, intent = 0;
   let capture: Capture | undefined, stopping: Promise<void> | undefined, idle: ReturnType<typeof setTimeout> | undefined;
-  let status: VoiceStatus = { enabled: false, requestedOn: false, listening: false, speaking: speech.audible, phase: "off", error: null };
+  // Speaking includes a line still downloading, so Stop speech shows from the moment Moo is about to talk.
+  const speaking = () => speech.audible || speech.busy;
+  let status: VoiceStatus = { enabled: false, requestedOn: false, listening: false, speaking: speaking(), phase: "off", error: null };
   let schedule: ThoughtSchedule | undefined;
   // Read at each call, and a failing listener never fails the Agent work that emitted.
   const emit = (event: AgentEvent) => {
@@ -70,8 +72,8 @@ export async function createWebHost(options: WebHostOptions): Promise<WebHost> {
     intervalMs: options.thoughtIntervalMs ?? 30_000 });
   try { await agent.initialize(); } catch (error) { schedule.close(); throw error; }
 
-  const unsubscribe = speech.onAudibleChange(audible => {
-    update({ speaking: audible });
+  const unsubscribe = speech.onSpeakingChange(now => {
+    update({ speaking: now });
     rearm();
   });
   const page = typeof document === "undefined" ? undefined : document;
@@ -91,7 +93,7 @@ export async function createWebHost(options: WebHostOptions): Promise<WebHost> {
   /** `idleMicOffMs` without an onset turns the microphone off. Moo's own speech is not the visitor's silence. */
   function rearm() {
     clearIdle();
-    if (voiceEnabled && !closed && capture?.controller && !speech.audible) idle = setTimeout(() => void autoOff(IDLE_OFF), idleMs);
+    if (voiceEnabled && !closed && capture?.controller && !speaking()) idle = setTimeout(() => void autoOff(IDLE_OFF), idleMs);
   }
   async function autoOff(message: string) {
     if (!voiceEnabled || closed) return;
@@ -157,8 +159,10 @@ export async function createWebHost(options: WebHostOptions): Promise<WebHost> {
     // transcribed, and nothing said after the click reaches the controller.
     if (own) release(own);
     try { await speech.stop(); } catch (error) { console.error(`Speech stop failed: ${String(error)}`); }
+    // Off as requested at once, as on the desktop: the renderer's button then reads "Mic off" and stays disabled
+    // while the last words finish, so a second click can't checkpoint the conversation again.
     if (controller && (controller.utteranceOpen || controller.pending > 0))
-      update({ enabled: false, listening: false, phase: "finishing_transcription" });
+      update({ requestedOn: false, enabled: false, listening: false, phase: "finishing_transcription" });
     try { await controller?.finish(); }
     catch (error) {
       console.error(`Voice finish failed: ${String(error)}`);

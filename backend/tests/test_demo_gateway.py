@@ -7,12 +7,14 @@ import inspect
 import json
 import math
 import struct
+import time
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
+import httpcore
 import httpx
 import pytest
 
@@ -194,6 +196,24 @@ class Upstream:
     @property
     def chats(self):
         return [request for request in self.to(NEBIUS) if request.method == 'POST']
+
+
+async def until(condition, seconds: float = 5.0):
+    async with asyncio.timeout(seconds):
+        while not condition():
+            await asyncio.sleep(0.005)
+
+
+class Reserving(MemoryCounters):
+    """Memory counters that keep each reservation's amount."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.reserved: list[int] = []
+
+    async def reserve(self, r, caps, quota_limit):
+        self.reserved.append(r.amount)
+        return await super().reserve(r, caps, quota_limit)
 
 
 class Counting:
@@ -476,14 +496,19 @@ async def test_refused_requests_reserve_nothing_and_send_nothing():
     assert demo.upstream.requests == [] and demo.counters.values == {}
 
 
-async def test_the_session_quota_is_429_and_sends_nothing_more():
-    async with Demo() as demo:
+async def test_a_used_up_quota_is_429_call_limit_and_its_later_calls_never_reach_the_counters():
+    counters = Counting(MemoryCounters(Keys('local')))
+    async with Demo(counters=counters) as demo:
         for _ in range(6):
             assert (await demo.call('search', {'query': 'osmosis'})).status_code == 200
-        refused = await demo.call('search', {'query': 'osmosis'})
+        before = len(counters.calls)
+        refused = [await demo.call('search', {'query': 'osmosis'}) for _ in range(5)]
+        assert counters.calls[before:] == ['reserve'], 'Only the first refusal asks the counters'
         other = await demo.call('search', {'query': 'osmosis'}, token=demo.mint())
-    assert (refused.status_code, refused.json()) == (429, {'detail': 'session_limit'})
-    assert other.status_code == 200 and len(demo.upstream.to('api.tavily.com')) == 7
+        routed = await demo.call('route', ROUTE)
+    # One endpoint's quota, not the session's end: the page keeps its other calls (gate.ts).
+    assert [(r.status_code, r.json()) for r in refused] == [(429, {'detail': 'call_limit'})] * 5
+    assert other.status_code == routed.status_code == 200 and len(demo.upstream.to('api.tavily.com')) == 7
 
 
 async def test_the_session_budget_is_429_before_any_provider_call():
@@ -492,6 +517,20 @@ async def test_the_session_budget_is_429_before_any_provider_call():
     assert reserve_micro('respond', len(json.dumps(RESPOND)), DEMO_SETTINGS, demo.app.cfg) > 30_000
     assert (refused.status_code, refused.json()) == (429, {'detail': 'session_limit'})
     assert demo.upstream.requests == [] and await demo.totals() == (0, 0)
+
+
+async def test_a_spent_session_refuses_as_large_calls_in_process_and_still_admits_smaller_ones():
+    clock = Clock()
+    counters = Counting(MemoryCounters(Keys('local'), clock=clock))
+    async with Demo({'DEMO_SESSION_BUDGET_USD': '0.03'}, counters=counters, clock=clock) as demo:
+        first, second = [await demo.call('respond', RESPOND) for _ in range(2)]
+        assert counters.calls == ['reserve'], 'The second large call is refused without a counter call'
+        routed = await demo.call('route', ROUTE)
+        clock.now += 31
+        third = await demo.call('respond', RESPOND)
+    assert [(r.status_code, r.json()) for r in (first, second, third)] == [(429, {'detail': 'session_limit'})] * 3
+    assert routed.status_code == 200, 'A call that fits what is left still goes to the counters'
+    assert counters.calls.count('reserve') == 3, 'Settling can hand budget back, so the refusal is held only briefly'
 
 
 @pytest.mark.parametrize('env,prefill,detail', [
@@ -506,7 +545,8 @@ async def test_day_total_and_kill_switch_refusals_are_503_and_cached_in_process(
         if prefill == 'off':
             counters.values[counters.keys.off()] = '1'
         else:
-            await counters.inner.reserve(Reservation('route', 'other', DAY, 995_000), Caps(10 ** 9, 10 ** 9, 10 ** 9), 9)
+            # Less than the smallest call is left, so no call can fit until the day or the budget changes.
+            await counters.inner.reserve(Reservation('route', 'other', DAY, 999_600), Caps(10 ** 9, 10 ** 9, 10 ** 9), 9)
         first = await demo.call('search', {'query': 'osmosis'})
         second = await demo.call('tag', {'record': {}}, token=demo.mint())
         assert [(r.status_code, r.json()) for r in (first, second)] == [(503, {'detail': detail})] * 2
@@ -514,6 +554,19 @@ async def test_day_total_and_kill_switch_refusals_are_503_and_cached_in_process(
         clock.now += 31
         await demo.call('search', {'query': 'osmosis'})
         assert counters.calls == ['reserve', 'reserve']
+
+
+async def test_a_call_too_large_for_what_is_left_today_is_refused_alone():
+    counters = Counting(MemoryCounters(Keys('local')))
+    async with Demo({'DEMO_BUDGET_DAILY_USD': '1'}, counters=counters) as demo:
+        await counters.inner.reserve(Reservation('route', 'other', DAY, 900_000), Caps(10 ** 9, 10 ** 9, 10 ** 9), 9)
+        large = {**RESPOND, 'messages': [{'role': 'user', 'content': 'x' * 150_000}]}
+        refused = await demo.call('respond', large)
+        cheap = await demo.call('route', ROUTE, token=demo.mint())
+    assert reserve_micro('respond', len(json.dumps(large)), DEMO_SETTINGS, demo.app.cfg) > 100_000
+    assert (refused.status_code, refused.json()) == (503, {'detail': 'demo_budget_exhausted'})
+    assert cheap.status_code == 200, "US$0.10 is still left today, so the instance doesn't close"
+    assert counters.calls.count('reserve') == 2
 
 
 # ---- 7: settlement ----
@@ -601,6 +654,41 @@ async def test_route_and_tag_caps_admit_the_largest_route_the_agent_sends():
     assert [(r.status_code, r.json()) for r in (route_over, tag_over)] == [(413, {'detail': 'body_too_large'})] * 2
 
 
+@pytest.mark.parametrize('value', ['é' * 30_000, '水' * 20_000, '"' * 30_000, '😀' * 15_000],
+                         ids=['accented', 'cjk', 'quotes', 'emoji'])
+async def test_respond_reserves_for_its_tool_arguments_as_they_are_sent(value):
+    sent = []
+
+    def chat(request, payload):
+        sent.append(len(request.content))
+        return completion(payload['model'], 'Short answer.', usage=(1, 1))
+    body = {'messages': [{'role': 'user', 'content': 'Explain.'},
+                         {'role': 'assistant', 'content': '', 'toolCalls': [
+                             {'id': 'c1', 'name': 'search_notes', 'arguments': {'q': value}}]},
+                         {'role': 'tool', 'content': 'none', 'toolCallId': 'c1'}],
+            'tools': [{'name': 'search_notes', 'description': 'Search.', 'parameters': {'type': 'object'}}]}
+    raw = json.dumps(body, ensure_ascii=False).encode()
+    counters = Reserving(Keys('local'))
+    async with Demo(upstream=Upstream(chat), counters=counters) as demo:
+        response = await demo.client.post('/api/v1/respond', content=raw,
+                                          headers={**demo.auth(), 'content-type': 'application/json'})
+    # providers.chat_message re-encodes the arguments ASCII-escaped, so they are sent up to 3.5 times as large.
+    assert response.status_code == 200 and sent[0] > 1.9 * len(raw)
+    (reserved,) = counters.reserved
+    assert reserved >= worst(ULTRA, sent[0], 4_096) > reserve_micro('respond', len(raw), DEMO_SETTINGS, demo.app.cfg)
+
+
+@pytest.mark.parametrize('context', ['"' * 85_000, '\\' * 85_000, '\n' * 85_000, 'x' * 140_000],
+                         ids=['quotes', 'backslashes', 'newlines', 'plain'])
+async def test_jev_reserves_for_a_state_that_grows_when_it_is_sent_as_a_string(context):
+    counters = Reserving(Keys('local'))
+    async with Demo(counters=counters) as demo:
+        response = await demo.call('route', {**ROUTE, 'recentContext': context})
+    (sent,) = demo.upstream.to('api.typesafe.ai')
+    assert response.status_code == 200
+    assert demo.spend() == 10_000 * math.ceil(len(sent.content) / 32_768) <= counters.reserved[0]
+
+
 async def test_an_overrun_raises_the_counters_past_the_reservation(record):
     upstream = Upstream(lambda request, payload: completion(payload['model'], SUMMARY, usage=(200_000, 8_000)))
     async with Demo(upstream=upstream) as demo:
@@ -641,7 +729,8 @@ def test_provider_calls_are_priced_by_kind():
 @pytest.mark.parametrize('endpoint,size,low,high', [
     ('summarize', 0, 0.0026, 0.0028), ('consolidate', 0, 0.0062, 0.0064), ('respond', 20_000, 0.06, 0.063),
     ('respond', 200_000, 0.28, 0.29), ('respond', 10 ** 7, 0.28, 0.32), ('vision', 0, 0.013, 0.015),
-    ('search', 0, 0.01, 0.01), ('extract', 0, 0.01, 0.01), ('route', 1, 0.01, 0.01), ('connect', 160_000, 0.05, 0.05),
+    ('search', 0, 0.01, 0.01), ('extract', 0, 0.01, 0.01), ('route', 1, 0.01, 0.01), ('route', 12_000, 0.01, 0.01),
+    ('route', 13_000, 0.02, 0.02), ('connect', 160_000, 0.11, 0.11),
 ])
 def test_reservations_follow_the_clamped_settings(endpoint, size, low, high):
     cfg = replace(DemoConfig.closed('test'), jev_unit_micro=10_000)
@@ -651,6 +740,10 @@ def test_reservations_follow_the_clamped_settings(endpoint, size, low, high):
 def test_audio_is_charged_by_seconds_and_weighted_characters():
     assert transcribe_micro(30.0) == 3_750 and transcribe_micro(1.0) == FLOOR_MICRO
     assert speech_micro('a' * 1_000) == 20_000 and speech_micro('In 2026, 12 of 30.') == (18 + 4 * 8) * 20
+    # A symbol or another script is read as a word or more, so it weighs as a digit does.
+    assert speech_micro('≈' * 1_000) == speech_micro('7' * 1_000) == 100_000
+    assert speech_micro('水' * 100) == speech_micro('%' * 100) == 100 * 5 * 20
+    assert speech_micro("Yes (it's 'fine'): ok; no!?") == len("Yes (it's 'fine'): ok; no!?") * 20
 
 
 # ---- 8, 9, 10: disconnects, odd usage, isolation ----
@@ -750,9 +843,9 @@ def test_each_event_loop_gets_its_own_pooled_client_and_closed_loops_are_dropped
         assert second is not first
         loops[0].close()
         loops[2].run_until_complete(pooled())
-        assert list(metered._clients) == loops[1:]
+        assert list(metered.pool._clients) == loops[1:]
         loops[1].run_until_complete(metered.aclose())
-        assert second.is_closed and list(metered._clients) == loops[2:]
+        assert second.is_closed and list(metered.pool._clients) == loops[2:]
     finally:
         for loop in loops:
             loop.close()
@@ -773,6 +866,106 @@ async def test_concurrent_sessions_are_each_charged_only_their_own_usage(record)
                                              demo.call('summarize', body('The second one speaks.'), token=second_token))
     assert first.status_code == second.status_code == 200
     assert demo.spend() == priced(LIGHTNING, 30_000, 1_000) and demo.spend(second_token) == priced(LIGHTNING, 10_000, 500)
+
+
+class MemoryNetwork(httpcore.AsyncNetworkBackend):
+    """Sockets in memory, so httpx's real pools and their limits apply, which MockTransport skips. Upstash and the
+    model list answer at once; a Nebius generation waits for `release`."""
+
+    def __init__(self):
+        self.release = asyncio.Event()
+        self.generating = 0
+        self.reserves = 0
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        return MemoryStream(self, host)
+
+    async def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        raise httpcore.ConnectError('No sockets here')
+
+    async def sleep(self, seconds):
+        await asyncio.sleep(seconds)
+
+
+class MemoryStream(httpcore.AsyncNetworkStream):
+    def __init__(self, network: MemoryNetwork, host: str):
+        self.network, self.host, self.sent, self.reply = network, host, b'', None
+
+    async def write(self, buffer, timeout=None):
+        self.sent += buffer
+
+    async def read(self, max_bytes, timeout=None):
+        if self.reply is None:
+            self.reply = await self.answer()
+        data, self.reply = self.reply[:max_bytes], self.reply[max_bytes:]
+        return data
+
+    async def answer(self) -> bytes:
+        head, _, body = self.sent.partition(b'\r\n\r\n')
+        if self.host == 'kv.upstash.test':
+            kind = command_kind(json.loads(body))
+            self.network.reserves += kind == 'RESERVE'
+            content = json.dumps({'result': {'RESERVE': [1, 1], 'SETTLE': 1}[kind]}).encode()
+        elif head.startswith(b'GET'):
+            content = json.dumps({'data': [{'id': model} for model in PRICES_NANO]}).encode()
+        else:
+            self.network.generating += 1
+            await self.network.release.wait()
+            content = completion(json.loads(body)['model'], SUMMARY).content
+        return (b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n'
+                b'Content-Length: %d\r\n\r\n' % len(content) + content)
+
+    async def aclose(self):
+        pass
+
+    async def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+        return self
+
+    def get_extra_info(self, info):
+        return None
+
+
+async def test_counter_calls_never_wait_behind_generations_that_fill_the_providers_pool(record):
+    network = MemoryNetwork()
+    # No transport: the pools production uses, with their limits, over the in-memory network.
+    app = create_demo_app({**BASE_ENV, 'KV_REST_API_URL': 'https://kv.upstash.test', 'KV_REST_API_TOKEN': UPSTASH_TOKEN})
+    for pool in app.pools:
+        pool()._transport._pool._network_backend = network
+    body = {'record': record.model_dump(exclude_none=True)}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='https://demo.test') as client:
+        async def summarize():
+            token = mint_token(SECRET.encode(), time.time())[0]
+            return await client.post('/api/v1/summarize', json=body, headers={'Authorization': f'Bearer {token}'})
+        held = [asyncio.create_task(summarize()) for _ in range(32)]
+        await until(lambda: network.generating == 32)
+        late = asyncio.create_task(summarize())
+        # Sharing the providers' 32 connections, this reservation waited out Upstash's 3 s and refused the call.
+        await until(lambda: network.reserves == 33, seconds=2)
+        network.release.set()
+        responses = await asyncio.gather(*held, late)
+    assert [response.status_code for response in responses] == [200] * 33
+
+
+async def test_one_session_has_at_most_six_model_calls_in_flight_and_the_rest_wait():
+    release, started = asyncio.Event(), []
+
+    async def slow_jev(request):
+        started.append(request)
+        await release.wait()
+        return jev(request)
+    upstream = Upstream()
+    upstream.handlers['api.typesafe.ai'] = slow_jev
+    async with Demo(upstream=upstream) as demo:
+        mine = [asyncio.create_task(demo.call('route', ROUTE)) for _ in range(8)]
+        other = asyncio.create_task(demo.call('route', ROUTE, token=demo.mint()))
+        await until(lambda: len(started) == 7)
+        await asyncio.sleep(0.05)
+        assert len(started) == 7, "Six of this session's calls and the other session's one"
+        release.set()
+        responses = await asyncio.gather(*mine, other)
+    # Waiting, not refused: a 429 would end the visitor's live session.
+    assert [response.status_code for response in responses] == [200] * 9 and len(started) == 9
+    assert demo.app._slots == {}
 
 
 # ---- 11, 12: extract and vision pins ----
@@ -800,6 +993,17 @@ async def test_extract_only_reads_urls_this_session_found():
             'https://other.example/dilution']
         elsewhere = await demo.call('extract', {'urls': ['https://other.example/dilution']}, token=demo.mint())
         assert elsewhere.status_code == 403 and len(demo.upstream.to('api.tavily.com', '/extract')) == 2
+
+
+async def test_a_session_gets_a_few_url_checks_and_later_ones_never_reach_the_counters():
+    counters = Counting(MemoryCounters(Keys('local')))
+    async with Demo(counters=counters) as demo:
+        refused = [await demo.call('extract', {'urls': [f'https://unknown.example/{index}']}) for index in range(12)]
+        other = await demo.call('extract', {'urls': ['https://unknown.example/0']}, token=demo.mint())
+    # A refused check reserves nothing, so without a count a page could ask the counters without end.
+    assert [r.json()['detail'] for r in refused] == ['extract_not_allowed'] * 9 + ['call_limit'] * 3
+    assert other.json()['detail'] == 'extract_not_allowed' and counters.calls.count('urls_allowed') == 10
+    assert demo.upstream.requests == []
 
 
 def test_url_keys_ignore_scheme_and_host_case_default_ports_and_fragments():
@@ -849,16 +1053,22 @@ async def test_a_vision_call_without_usage_is_priced_as_text_plus_one_image():
 
 # ---- 13: fail closed ----
 
-async def test_an_upstash_error_on_reserve_is_503_with_no_provider_call():
+@pytest.mark.parametrize('kind,name,body', [
+    ('RESERVE', 'route', ROUTE), ('SMISMEMBER', 'extract', {'urls': ['https://example.org/osmosis']}),
+])
+async def test_an_upstash_error_is_a_passing_503_with_no_provider_call(kind, name, body):
     upstash = Upstash()
-    upstash.fail['RESERVE'] = [httpx.Response(500, text='down')]
+    upstash.fail[kind] = [httpx.Response(500, text='down')]
     upstream = Upstream()
     upstream.handlers['kv.upstash.test'] = upstash
     env = {'KV_REST_API_URL': 'https://kv.upstash.test', 'KV_REST_API_TOKEN': UPSTASH_TOKEN}
     async with Demo(env, counters=None, upstream=upstream) as demo:
-        response = await demo.call('route', ROUTE)
-    assert (response.status_code, response.json()) == (503, {'detail': 'demo_unavailable'})
-    assert upstash.kinds() == ['RESERVE'] and upstream.providers == []
+        response = await demo.call(name, body)
+        again = await demo.call('route', ROUTE)
+    # Not demo_unavailable, the kill switch's code, which ends the page's live session (gate.ts).
+    assert (response.status_code, response.json()) == (503, {'detail': 'counters_unavailable'})
+    assert upstash.kinds()[0] == kind and again.status_code == 200
+    assert len(upstream.providers) == 1, 'Only the second call reached a provider'
 
 
 @pytest.mark.parametrize('failure,attempts,settled', [
@@ -1303,6 +1513,47 @@ async def test_transcription_takes_raw_wav_and_returns_text():
     assert demo.spend() == transcribe_micro(30.0) == 3_750
 
 
+def riff(*chunks: bytes) -> bytes:
+    body = b''.join(chunks)
+    return b'RIFF' + struct.pack('<I', 4 + len(body)) + b'WAVE' + body
+
+
+def chunk(tag: bytes, payload: bytes) -> bytes:
+    return tag + struct.pack('<I', len(payload)) + payload + b'\x00' * (len(payload) & 1)
+
+
+FMT = chunk(b'fmt ', struct.pack('<HHIIHH', 1, 1, 16_000, 32_000, 2, 16))
+
+
+@pytest.mark.parametrize('upload', [
+    riff(FMT, chunk(b'data', b'\x01\x02' * 3_200), chunk(b'data', b'\x03\x04' * 536_000)),
+    riff(FMT, chunk(b'data', b'\x01\x02' * 3_200), chunk(b'LIST', b'x' * 10), chunk(b'data', b'\x03\x04' * 536_000)),
+    riff(FMT, chunk(b'data', b'\x01\x02' * 3_200 + b'\x05'), b'trailing junk' * 1_000),
+], ids=['two data chunks', 'data, list, data', 'odd data and trailing junk'])
+async def test_transcription_sends_only_the_audio_it_measured_and_charged(upload):
+    upstream = openai_with()
+    async with Demo(upstream=upstream) as demo:
+        response = await demo.client.post('/api/v1/transcribe', content=upload,
+                                          headers={**demo.auth(), 'content-type': 'audio/wav'})
+    assert response.status_code == 200 and len(upload) <= 1_100_000
+    (sent,) = upstream.to('api.openai.com')
+    # The first data chunk, 0.2 s, rebuilt as a plain WAV: a decoder can't find the 33.5 s after it.
+    assert (b'filename="clip.wav"\r\nContent-Type: audio/wav\r\n\r\n' + wav(0.2) + b'\r\n--') in sent.content
+    assert len(sent.content) < len(wav(0.2)) + 2_000 and demo.spend() == FLOOR_MICRO
+
+
+async def test_a_wav_with_a_second_format_chunk_is_refused_before_reserving():
+    # A decoder that takes the first format would hear 1,088 s where the second says 34.
+    first = chunk(b'fmt ', struct.pack('<HHIIHH', 1, 1, 1_000, 1_000, 1, 8))
+    upload = riff(first, FMT, chunk(b'data', b'\x01' * 1_088_000))
+    upstream = openai_with()
+    async with Demo(upstream=upstream) as demo:
+        response = await demo.client.post('/api/v1/transcribe', content=upload,
+                                          headers={**demo.auth(), 'content-type': 'audio/wav'})
+    assert (response.status_code, response.json()) == (422, {'detail': 'invalid_audio'})
+    assert upstream.requests == [] and demo.counters.values == {}
+
+
 @pytest.mark.parametrize('content,headers,status,detail', [
     (wav(1.0), {'content-type': 'audio/mpeg'}, 415, 'unsupported_media_type'),
     (wav(1.0), {}, 415, 'unsupported_media_type'),
@@ -1372,6 +1623,19 @@ async def test_another_instance_learns_voice_is_off_from_the_counters():
         speech = await demo.call('speech', {'text': 'Hello.'})
     assert config['live'] is True and config['voice'] is False
     assert speech.status_code == 503 and upstream.requests == []
+
+
+@pytest.mark.parametrize('env,voice', [
+    ({'OPENAI_TTS_MODEL': 'gpt-4o-audio-preview'}, False), ({'OPENAI_TRANSCRIBE_MODEL': 'whisper-2'}, False),
+    ({'OPENAI_TRANSCRIBE_MODEL': 'gpt-4o-mini-transcribe'}, True),
+])
+async def test_an_openai_model_the_prices_are_not_for_turns_voice_off(env, voice):
+    upstream = openai_with()
+    async with Demo(env, upstream=upstream) as demo:
+        config = (await demo.client.get('/api/demo/config')).json()
+        speech = await demo.call('speech', {'text': 'Hello.'})
+    assert config['live'] is True and config['voice'] is voice
+    assert speech.status_code == (200 if voice else 503) and len(upstream.requests) == int(voice)
 
 
 async def test_without_an_openai_key_the_demo_is_live_but_typed_only():

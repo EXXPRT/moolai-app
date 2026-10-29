@@ -70,14 +70,17 @@ def test_vercel_json_builds_the_page_and_bundles_only_the_gateway():
     config = json.loads((ROOT / 'vercel.json').read_text())
     assert config['framework'] is None
     assert config['installCommand'] == 'ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci --no-audit --no-fund'
-    assert (config['buildCommand'], config['outputDirectory']) == ('npm run build:web', 'apps/web/dist')
+    # Without the sample sessions the page can't start at all, so a deploy without them fails its build.
+    assert config['buildCommand'] == 'test -s apps/web/public/seed.json && npm run build:web'
+    assert config['outputDirectory'] == 'apps/web/dist'
     assert set(config['functions']) == {'api/index.py'}
     function = config['functions']['api/index.py']
     assert function['maxDuration'] == 300 and function['includeFiles'] == 'backend/moolai_backend/**'
     excluded = function['excludeFiles']
     assert isinstance(excluded, str) and excluded[0] == '{' and excluded[-1] == '}'
     patterns = set(excluded[1:-1].split(','))
-    assert {'**/.env', '**/.env.*', 'runtime.env', '.data/**', '**/*.sqlite*', 'backend/tests/**'} <= patterns
+    assert {'**/.env', '**/.env.*', 'runtime.env', '.data/**', '**/*.sqlite*', 'backend/tests/**',
+            '.claude/**'} <= patterns
     assert not any(pattern.endswith('.md') for pattern in patterns)  # prompts.py reads instructions/*.md.
     assert not any('moolai_backend' in pattern for pattern in patterns)
     assert config['rewrites'] == [{'source': '/api/(.*)', 'destination': '/api?__path=$1'}]
@@ -104,9 +107,11 @@ def test_every_public_route_survives_the_vercel_rewrite():
 def test_vercelignore_keeps_keys_and_local_data_out_of_any_upload():
     patterns = [line for line in (ROOT / '.vercelignore').read_text().splitlines() if line and not line.startswith('#')]
     assert {'**/.env', '**/.env.*', '!**/.env.example', 'runtime.env', '.data', '**/*.sqlite*', 'backend/.venv',
-            'obsidian-notes'} <= set(patterns)
+            'obsidian-notes', '.claude'} <= set(patterns)
     ignored = [pattern for pattern in patterns if not pattern.startswith('!')]
-    for path in ('backend/.env', '.env', 'apps/web/.env.local', '.data/brain.sqlite', 'brain.sqlite-wal'):
+    # .claude holds local agent worktrees, whole copies of the repository with their own keys and data.
+    for path in ('backend/.env', '.env', 'apps/web/.env.local', '.data/brain.sqlite', 'brain.sqlite-wal',
+                 '.claude/worktrees/fix/apps/web/src/main.ts'):
         assert any(PurePosixPath(path).full_match(pattern) or PurePosixPath(path).parts[0] == pattern
                    for pattern in ignored), path
 

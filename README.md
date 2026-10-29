@@ -32,9 +32,10 @@ Moolai is entered in the **Best Apps and Agents** track.
 
 ### Try it in your browser
 
-A live web version runs the same Agent in the browser, against the same backend models, with two sample study sessions already in its Brain. Talk or type to Moo: it saves what you say as notes, connects them to the sample sessions and answers. See the [web demo guide](docs/web-demo.md). It differs from the desktop app in four ways:
+A live web version runs the same Agent in the browser, against the same backend models, with two sample study sessions already in its Brain. Talk or type to Moo: it saves what you say as notes, connects them to the sample sessions and answers. See the [web demo guide](docs/web-demo.md). It differs from the desktop app in these ways:
 - speech uses OpenAI instead of on-device models;
 - listening is half-duplex, so press **Stop speech** to interrupt Moo;
+- with typing only, Moo answers on screen without voice;
 - screen help reads a sample worksheet instead of your screen;
 - nothing is saved, so a refresh starts over.
 

@@ -13,6 +13,9 @@ import httpx
 TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions'
 SPEECH_URL = 'https://api.openai.com/v1/audio/speech'
 DEFAULTS = dict(transcribe='gpt-transcribe', tts='gpt-4o-mini-tts', voice='marin')
+# The models the gateway's audio prices are for; any other model would be spent at a price it doesn't know.
+PRICED_MODELS = dict(transcribe=frozenset({'gpt-transcribe', 'gpt-4o-mini-transcribe'}),
+                     tts=frozenset({'gpt-4o-mini-tts'}))
 WAV_RATE = 16_000
 MIN_S, MAX_S = 0.2, 34.0
 MAX_TEXT = 1_000
@@ -37,7 +40,12 @@ class AudioError(Exception):
         self.voice_off = voice_off
 
 
-def wav_seconds(data: bytes) -> float:
+def canonical_wav(data: bytes) -> tuple[bytes, float]:
+    """The audio the gateway measured, rebuilt as a plain 44-byte-header WAV, and its length in seconds.
+
+    Only this is sent on: a decoder reading a later data chunk, or a format chunk this check didn't use, would hear
+    far more audio than was charged for.
+    """
     if len(data) < 12 or data[:4] != b'RIFF' or data[8:12] != b'WAVE':
         raise AudioError(422, 'invalid_audio')
     offset, fmt = 12, None
@@ -45,20 +53,27 @@ def wav_seconds(data: bytes) -> float:
         chunk, size = data[offset:offset + 4], int.from_bytes(data[offset + 4:offset + 8], 'little')
         start = offset + 8
         if chunk == b'fmt ':
-            if size < 16 or start + 16 > len(data):
+            # Two format chunks would describe the same bytes differently to different decoders.
+            if fmt is not None or size < 16 or start + 16 > len(data):
                 break
             fmt = struct.unpack('<HHIIHH', data[start:start + 16])
         elif chunk == b'data':
             if fmt != _FORMAT:
                 break
-            # A streamed header can declare more than arrived; only the bytes present are audio.
-            samples = min(size, len(data) - start) // 2
-            seconds = samples / WAV_RATE
+            # A streamed header can declare more than arrived; only the whole samples present are audio.
+            pcm = data[start:start + min(size, len(data) - start)]
+            pcm = pcm[:len(pcm) - len(pcm) % 2]
+            seconds = len(pcm) / 2 / WAV_RATE
             if not MIN_S <= seconds <= MAX_S:
                 break
-            return seconds
+            header = b'RIFF' + struct.pack('<I', 36 + len(pcm)) + b'WAVEfmt ' + struct.pack('<IHHIIHH', 16, *_FORMAT)
+            return header + b'data' + struct.pack('<I', len(pcm)) + pcm, seconds
         offset = start + size + (size & 1)  # Chunks are padded to an even length.
     raise AudioError(422, 'invalid_audio')
+
+
+def wav_seconds(data: bytes) -> float:
+    return canonical_wav(data)[1]
 
 
 def clean_speech_text(value: object) -> str:

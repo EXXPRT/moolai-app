@@ -6,11 +6,12 @@ export interface AudioLike {
   src: string;
   currentTime: number;
   readonly paused: boolean;
+  readonly ended: boolean;
   play(): Promise<void>;
   pause(): void;
   load(): void;
-  addEventListener(type: "ended" | "error", listener: () => void): void;
-  removeEventListener(type: "ended" | "error", listener: () => void): void;
+  addEventListener(type: "ended" | "error" | "pause", listener: () => void): void;
+  removeEventListener(type: "ended" | "error" | "pause", listener: () => void): void;
 }
 export interface WebSpeechOptions {
   synthesize: Synthesize;
@@ -57,8 +58,9 @@ interface Reading {
 /** The Agent's SpeechPort: each part is synthesized by the gateway and played through one audio element. */
 export class WebSpeech implements WebSpeechPort {
   private reading?: Reading;
-  private readonly listeners = new Set<(audible: boolean) => void>();
+  private readonly listeners = new Set<(speaking: boolean) => void>();
   private playing = false;
+  private speaking = false;
   private quiet = -Infinity;
   private held = false;
   private closed = false;
@@ -71,6 +73,9 @@ export class WebSpeech implements WebSpeechPort {
   get audible() { return this.playing; }
   get quietSince() { return this.quiet; }
   get heldPaused() { return this.held; }
+  /** A line is under way, though its audio may still be downloading. A sound heard then would cut the line before it
+   * is ever heard, with nothing held to resume, so half-duplex counts it as Moo speaking. */
+  get busy() { return !!this.reading && !this.held; }
   async speak(text: string) {
     if (!text.trim()) throw new Error("Speech text is empty; playback was not started.");
     if (this.closed) throw new Error("Speech session closed");
@@ -84,6 +89,7 @@ export class WebSpeech implements WebSpeechPort {
       if (error) reject(error); else resolve();
     } };
     this.reading = reading;
+    this.changed();
     void this.read(reading, speechParts(text, this.p.partLimit ?? 450));
     return done;
   }
@@ -115,21 +121,29 @@ export class WebSpeech implements WebSpeechPort {
   private play(reading: Reading, blob: Blob) {
     const { audio } = this.p;
     return new Promise<void>((resolve, reject) => {
+      const current = () => this.reading === reading && reading.detach === detach;
       const ended = () => { detach(); this.revoke(reading); resolve(); };
       const failed = (error: unknown) => { detach(); reject(error); };
       const broken = () => failed(new Error("Audio playback failed"));
+      // A pause asked for elsewhere (media keys, the browser's media controls, a headset taken off) brings no `ended`,
+      // so Moo would stay speaking, and the mic deaf, for good: it ends the line as Stop speech does. A part that
+      // plays to its end pauses too, but only once the element has ended.
+      const interrupted = () => {
+        if (!audio.ended && current() && !this.held) this.cut(Object.assign(new Error("Speech interrupted"), { stopped: true }));
+      };
       const detach = () => {
         audio.removeEventListener("ended", ended);
         audio.removeEventListener("error", broken);
+        audio.removeEventListener("pause", interrupted);
         if (reading.detach === detach) reading.detach = undefined;
       };
       reading.url = this.urls.create(blob);
       reading.detach = detach;
       audio.addEventListener("ended", ended);
       audio.addEventListener("error", broken);
+      audio.addEventListener("pause", interrupted);
       audio.src = reading.url;
       audio.load();
-      const current = () => this.reading === reading && reading.detach === detach;
       audio.play().then(
         () => { if (current() && !this.held) this.setAudible(true); },
         // A held pause interrupts a play() still starting; resume() plays the element again.
@@ -153,8 +167,9 @@ export class WebSpeech implements WebSpeechPort {
   }
   pause() {
     if (!this.reading || this.held || !this.playing || this.p.audio.paused) return false;
-    this.p.audio.pause();
+    // Held first, so the element's own pause event reads as this hold, not as an interruption.
     this.held = true;
+    this.p.audio.pause();
     this.setAudible(false);
     return true;
   }
@@ -166,7 +181,7 @@ export class WebSpeech implements WebSpeechPort {
     this.cut(new Error("Speech session closed"));
     this.listeners.clear();
   }
-  onAudibleChange(listener: (audible: boolean) => void) {
+  onSpeakingChange(listener: (speaking: boolean) => void) {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   }
@@ -188,11 +203,19 @@ export class WebSpeech implements WebSpeechPort {
     reading.url = undefined;
   }
   private setAudible(audible: boolean) {
-    if (audible === this.playing) return;
-    this.playing = audible;
-    if (!audible) this.quiet = this.clock();
+    if (audible !== this.playing) {
+      this.playing = audible;
+      if (!audible) this.quiet = this.clock();
+    }
+    this.changed();
+  }
+  /** Tells the listeners when Moo starts or stops speaking, audibly or with a line still downloading. */
+  private changed() {
+    const speaking = this.playing || this.busy;
+    if (speaking === this.speaking) return;
+    this.speaking = speaking;
     for (const listener of [...this.listeners])
-      try { listener(audible); } catch (error) { console.error(`Speech state listener failed: ${String(error)}`); }
+      try { listener(speaking); } catch (error) { console.error(`Speech state listener failed: ${String(error)}`); }
   }
 }
 

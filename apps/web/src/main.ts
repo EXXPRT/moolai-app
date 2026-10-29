@@ -16,7 +16,7 @@ declare global {
 
 /** The desktop's host-specific lines, worded for the web (apps/desktop/src/main.tsx hostText). */
 const WEB_TEXT: Partial<Record<HostTextKey, string>> = {
-  fixtureBanner: "Fixture mode: the live demo is unavailable right now, so replies are simulated. Watch the video to see Moo live.",
+  fixtureBanner: "Fixture mode: the live demo is unavailable right now, so replies are simulated.",
   connecting: "Starting Moo…",
   reconnecting: "Reconnecting… Your draft stays here.",
   speaking: "Moo is speaking · press Stop speech to interrupt",
@@ -26,7 +26,7 @@ const WEB_TEXT: Partial<Record<HostTextKey, string>> = {
 };
 /** Lasting banners: the renderer's own notices hide after 8 s, and it hides "Backend 5xx" ones altogether. */
 const LIMITS: Record<DemoLimit, string> = {
-  budget_exhausted: "Today's live budget for this demo is used up. Refresh to keep exploring in fixture mode, or watch the video.",
+  budget_exhausted: "Today's live budget for this demo is used up. Refresh to keep exploring in fixture mode.",
   session_limit: "This demo session has reached its limit. Refresh to start a new one.",
   session_expired: "This demo session has expired. Refresh to continue.",
   unavailable: "The live demo is unavailable right now. Refresh to explore in fixture mode.",
@@ -139,6 +139,13 @@ async function main() {
     }
     void launch(voice);
   });
+  /** When the live path can't start here (the bot check, or a refused session), fixture mode still can. */
+  const offerFixture = () => intro.fallback(() => {
+    if (starting) return;
+    starting = true;
+    intro.status("Starting Moo…");
+    void launch(false, true);
+  });
   if (live) {
     intro.status("Complete the check above to start.");
     loadTurnstile().then(turnstile => {
@@ -156,21 +163,25 @@ async function main() {
         },
         "error-callback": () => {
           token = undefined;
-          if (!starting) { intro.ready(false); intro.status("The bot check didn't work. Refresh the page to try again.", true); }
+          if (starting) return;
+          intro.ready(false);
+          intro.status("The bot check didn't work. Refresh the page to try again.", true);
+          offerFixture();
         },
       });
     }).catch(error => {
       console.error(error);
       intro.status("The bot check couldn't load. Check your connection, then refresh the page.", true);
+      offerFixture();
     });
   } else {
     intro.ready(true);
     intro.status("");
   }
 
-  async function launch(voice: boolean) {
+  async function launch(voice: boolean, fixture = false) {
     let session: DemoSession | undefined;
-    if (live) {
+    if (live && !fixture) {
       try {
         session = await m.openDemoSession(baseFetch, token!);
       } catch (error) {
@@ -181,6 +192,7 @@ async function main() {
         failure = error instanceof Error ? error.message : NOT_STARTED;
         intro.status(failure, true);
         if (widget !== undefined) window.turnstile?.reset(widget);
+        offerFixture();
         return;
       }
     }
@@ -196,7 +208,8 @@ async function main() {
     const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const brain = new m.MemoryBrain();
     await m.importSeed(brain, m.shiftIsoTimestamps(seed, m.seedOffsetMs(seed, new Date(), timeZone)));
-    const chrome = renderChrome(root, { live, voice: live && config.voice });
+    // Live only with a session: fixture mode can also be chosen when the live path couldn't start.
+    const chrome = renderChrome(root, { live: !!session, voice: !!session && config.voice });
     // The renderer reads every /api/voice failure as a microphone problem, so its button goes once voice can't work.
     const voiceOff = () => document.body.classList.add("voice-off");
     let host: WebHost | undefined, toBridge: Emit = () => {};

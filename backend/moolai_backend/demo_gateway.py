@@ -6,6 +6,7 @@ import or construction.
 """
 import asyncio
 import base64
+import contextlib
 import hashlib
 import hmac
 import ipaddress
@@ -15,6 +16,7 @@ import math
 import os
 import re
 import secrets
+import string
 import time
 import unicodedata
 import uuid
@@ -29,7 +31,8 @@ from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 
 import httpx
 
-from .demo_audio import DEFAULTS as AUDIO_DEFAULTS, AudioError, DemoAudio, clean_speech_text, wav_seconds
+from .demo_audio import (DEFAULTS as AUDIO_DEFAULTS, PRICED_MODELS as AUDIO_MODELS, AudioError, DemoAudio,
+                         canonical_wav, clean_speech_text)
 from .demo_counters import (Caps, CounterError, Counters, Keys, MemoryCounters, Outcome, Reservation, Status,
                             UpstashCounters, usd_to_micro, utc_day)
 from .settings import Settings
@@ -58,8 +61,15 @@ RESPOND_OVERHEAD = 16_384
 FLOOR_MICRO = 500
 TAVILY_MICRO = 10_000
 JEV_UNIT_BYTES = 32_768
+# Jev's state goes out as one JSON string inside the request, so each quote or backslash in a body is sent twice
+# over, and the questions add a few kilobytes.
+JEV_OVERHEAD_BYTES = 8_192
 TRANSCRIBE_MICRO_PER_MINUTE = 7_500
 SPEECH_MICRO_PER_CHAR = 20
+# Letters and plain punctuation are read as written. Anything else (a digit, a symbol, another script) is read as a
+# word or more, so it weighs as five.
+PLAIN_SPEECH = frozenset(string.ascii_letters + " .,;:!?'\"()-")
+SPEECH_WEIGHT = 5
 # Whatever the env says: tool arguments are re-encoded ASCII-escaped (providers.py chat_message), so request
 # bytes, not characters, bound the worst case.
 DEMO_OVERRIDES = dict(agent_max_tokens=4_096, agent_max_request_bytes=240_000, database_url='')
@@ -81,7 +91,17 @@ CONFIG_CACHE_S = 30.0
 STATUS_ERROR_CACHE_S = 5.0
 SELFTEST_CACHE_S = 60.0
 CLOSED_CACHE_S = 30.0
+SESSION_LIFE_S = SESSION_TTL_S + TOKEN_SKEW_S  # No token is accepted for longer.
 VOICE_OFF_S = 3_600
+# Separate pools: slow generations filling the providers' pool must never make a counter or bot-check call wait,
+# which would refuse every call on this instance.
+PROVIDER_LIMITS = httpx.Limits(max_connections=32, max_keepalive_connections=8)
+VOICE_LIMITS = httpx.Limits(max_connections=16, max_keepalive_connections=8)
+CONTROL_LIMITS = httpx.Limits(max_connections=16, max_keepalive_connections=8)
+# Model calls one session may have in flight on an instance; more wait their turn, since a refusal ends its page.
+SESSION_CONCURRENCY = 6
+# Each extract URL check is a counter command, so a session gets a few more than its extracts.
+URL_CHECKS = 9
 MAX_INNER_RESPONSE = 4_000_000
 NO_STORE = 'no-store'
 CONFIG_CACHE = 'public, max-age=0, s-maxage=15'
@@ -193,13 +213,17 @@ class DemoConfig:
             if _test_key(site_key) or _test_key(secret_key):
                 problems.append('turnstile_test_keys')
         openai_key = env.get('OPENAI_API_KEY', '').strip()
+        transcribe_model = env.get('OPENAI_TRANSCRIBE_MODEL', '').strip() or AUDIO_DEFAULTS['transcribe']
+        tts_model = env.get('OPENAI_TTS_MODEL', '').strip() or AUDIO_DEFAULTS['tts']
+        priced = transcribe_model in AUDIO_MODELS['transcribe'] and tts_model in AUDIO_MODELS['tts']
+        if openai_key and not priced:
+            logger.warning('Demo gateway: an OpenAI model has no price; voice is off')
         live = not problems
-        return cls(live=live, reason=problems[0] if problems else None, voice=live and bool(openai_key), caps=caps,
-                   env_name=env_name, on_vercel=on_vercel, local=local, site_key=site_key, secret_key=secret_key,
-                   session_secret=session_secret, hostnames=hostnames, jev_unit_micro=jev_unit_micro, end_at=end_at,
-                   openai_key=openai_key,
-                   transcribe_model=env.get('OPENAI_TRANSCRIBE_MODEL', '').strip() or AUDIO_DEFAULTS['transcribe'],
-                   tts_model=env.get('OPENAI_TTS_MODEL', '').strip() or AUDIO_DEFAULTS['tts'],
+        return cls(live=live, reason=problems[0] if problems else None, voice=live and bool(openai_key) and priced,
+                   caps=caps, env_name=env_name, on_vercel=on_vercel, local=local, site_key=site_key,
+                   secret_key=secret_key, session_secret=session_secret, hostnames=hostnames,
+                   jev_unit_micro=jev_unit_micro, end_at=end_at, openai_key=openai_key,
+                   transcribe_model=transcribe_model, tts_model=tts_model,
                    tts_voice=env.get('OPENAI_TTS_VOICE', '').strip() or AUDIO_DEFAULTS['voice'])
 
     def not_live(self, reason: str) -> 'DemoConfig':
@@ -361,25 +385,40 @@ def _usage(response: httpx.Response) -> tuple[int, int] | None:
         return None
 
 
-class MeteredClient:
-    """What providers.Gateway gets as its client: it only calls request(), and the app only aclose()."""
+class PerLoop:
+    """One pooled client per event loop, called to get the current loop's."""
 
-    def __init__(self, allowed_hosts: frozenset[str], *, transport: httpx.AsyncBaseTransport | None = None):
-        self.allowed_hosts = allowed_hosts
-        self._transport = transport
+    def __init__(self, limits: httpx.Limits, transport: httpx.AsyncBaseTransport | None = None):
+        self.limits = limits
+        self.transport = transport
         self._clients: dict[asyncio.AbstractEventLoop, httpx.AsyncClient] = {}
 
-    def _client(self) -> httpx.AsyncClient:
+    def __call__(self) -> httpx.AsyncClient:
         # A pooled client is bound to the loop that opened its connections. Keyed by the loop itself, not a weak
         # reference, because not every loop implementation supports one; closed loops are dropped instead.
         loop = asyncio.get_running_loop()
         client = self._clients.get(loop)
         if client is None:
             self._clients = {owner: other for owner, other in self._clients.items() if not owner.is_closed()}
-            client = self._clients[loop] = httpx.AsyncClient(
-                limits=httpx.Limits(max_connections=32, max_keepalive_connections=8), trust_env=False,
-                transport=self._transport)
+            client = self._clients[loop] = httpx.AsyncClient(limits=self.limits, trust_env=False,
+                                                             transport=self.transport)
         return client
+
+    async def aclose(self) -> None:
+        client = self._clients.pop(asyncio.get_running_loop(), None)
+        if client is not None:
+            await client.aclose()
+
+
+class MeteredClient:
+    """What providers.Gateway gets as its client: it only calls request(), and the app only aclose()."""
+
+    def __init__(self, allowed_hosts: frozenset[str], *, transport: httpx.AsyncBaseTransport | None = None):
+        self.allowed_hosts = allowed_hosts
+        self.pool = PerLoop(PROVIDER_LIMITS, transport)
+
+    def _client(self) -> httpx.AsyncClient:
+        return self.pool()
 
     async def request(self, method: str, url: str, **kw: Any) -> httpx.Response:
         meter = _meter.get()
@@ -395,14 +434,29 @@ class MeteredClient:
         return response
 
     async def aclose(self) -> None:
-        client = self._clients.pop(asyncio.get_running_loop(), None)
-        if client is not None:
-            await client.aclose()
+        await self.pool.aclose()
+
+
+def tool_argument_growth(value: Any) -> int:
+    """How many bytes respond's tool arguments gain once sent: providers.chat_message re-encodes each one as an
+    ASCII-escaped JSON string, so an é grows from 2 bytes to 7."""
+    growth = 0
+    try:
+        for message in value.get('messages') or ():
+            for call in message.get('toolCalls') or ():
+                arguments = call.get('arguments')
+                sent = json.dumps(json.dumps(arguments)).encode('ascii')
+                received = json.dumps(arguments, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+                growth += max(0, len(sent) - len(received))
+    except (AttributeError, TypeError, ValueError, RecursionError):
+        return 0  # The inner app refuses such a body before anything is sent.
+    return growth
 
 
 def reserve_micro(endpoint: str, body_len: int, s: Settings, cfg: DemoConfig) -> int:
     if endpoint in ('route', 'tag', 'connect'):
-        nano = cfg.jev_unit_micro * 1_000 * max(1, -(-body_len // JEV_UNIT_BYTES))
+        sent = 2 * body_len + JEV_OVERHEAD_BYTES
+        nano = cfg.jev_unit_micro * 1_000 * -(-sent // JEV_UNIT_BYTES)
     elif endpoint == 'summarize':
         nano = chat_nano(s.summary_model, tokens(32_000), s.summary_max_completion_tokens)
     elif endpoint == 'consolidate':
@@ -426,7 +480,7 @@ def transcribe_micro(seconds: float) -> int:
 
 
 def speech_micro(text: str) -> int:
-    weighted = len(text) + 4 * sum(char.isdigit() for char in text)
+    weighted = sum(1 if char in PLAIN_SPEECH else SPEECH_WEIGHT for char in text)
     return max(FLOOR_MICRO, weighted * SPEECH_MICRO_PER_CHAR)
 
 
@@ -660,7 +714,8 @@ class DisabledStore:
 class DemoGateway:
     def __init__(self, cfg: DemoConfig, settings: Settings | None, inner: ASGIApp | None, internal_token: str,
                  counters: Counters | None, metered: MeteredClient | None, audio: DemoAudio | None,
-                 http: Callable[[], httpx.AsyncClient] | None, clock: Callable[[], float]):
+                 http: Callable[[], httpx.AsyncClient] | None, clock: Callable[[], float],
+                 pools: tuple[PerLoop, ...] = ()):
         self.cfg = cfg
         self.settings = settings
         self.inner = inner
@@ -670,10 +725,16 @@ class DemoGateway:
         self.audio = audio
         self.http = http
         self.clock = clock
+        self.pools = pools
         self._status_cache: tuple[float, Status | None] | None = None
         self._selftest_cache: tuple[float, dict[str, bool]] | None = None
         self._closed: tuple[float, str, str | None] | None = None  # (until, detail, UTC day or None)
         self._voice_off_until = 0.0
+        # Refusals answered here, so a page that keeps calling costs no counter command: (until, value) by key.
+        self._quota_spent: dict[tuple[str, str], tuple[float, int]] = {}  # (sid, endpoint) -> (until, 0)
+        self._session_spent: dict[str, tuple[float, int]] = {}  # sid -> (until, what the session had left)
+        self._url_checks: dict[str, tuple[float, int]] = {}  # sid -> (until, checks made)
+        self._slots: dict[str, tuple[asyncio.Semaphore, int]] = {}  # sid -> (its slots, calls holding or waiting)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope['type'] == 'lifespan':
@@ -701,9 +762,9 @@ class DemoGateway:
                     logger.warning('Demo gateway: not live reason=%s', self.cfg.reason)
                 await send({'type': 'lifespan.startup.complete'})
             elif message['type'] == 'lifespan.shutdown':
-                if self.metered is not None:
+                for pool in self.pools:
                     try:
-                        await self.metered.aclose()
+                        await pool.aclose()
                     except Exception as error:
                         logger.warning('Demo gateway: close error=%s', type(error).__name__)
                 await send({'type': 'lifespan.shutdown.complete'})
@@ -752,6 +813,30 @@ class DemoGateway:
 
     def _close(self, detail: str, day: str | None) -> None:
         self._closed = (self.clock() + CLOSED_CACHE_S, detail, day)
+
+    def _remember(self, cache: dict[Any, tuple[float, int]], key: Any, until: float, value: int) -> None:
+        now = self.clock()
+        for stale in [item for item, (expiry, _) in cache.items() if expiry <= now]:
+            del cache[stale]
+        cache[key] = (until, value)
+
+    @contextlib.asynccontextmanager
+    async def _slot(self, sid: str):
+        """One of the session's model-call slots on this instance; a call waits until one is free."""
+        if sid in self._slots:
+            semaphore, users = self._slots[sid]
+        else:
+            semaphore, users = asyncio.Semaphore(SESSION_CONCURRENCY), 0
+        self._slots[sid] = (semaphore, users + 1)
+        try:
+            async with semaphore:
+                yield
+        finally:
+            semaphore, users = self._slots[sid]
+            if users > 1:
+                self._slots[sid] = (semaphore, users - 1)
+            else:
+                del self._slots[sid]
 
     async def _status(self) -> Status | None:
         now = self.clock()
@@ -910,8 +995,8 @@ class DemoGateway:
         return (data.get('action') == TURNSTILE_ACTION and isinstance(hostname, str)
                 and hostname.lower() in self.cfg.hostnames)
 
-    async def _authorize(self, scope: Scope, send: Send) -> Session | None:
-        """Steps 2 to 4 of every guarded call: live, session token, and the in-process 'exhausted' cache."""
+    async def _authorize(self, scope: Scope, send: Send, endpoint: str) -> Session | None:
+        """Steps 2 to 4 of every guarded call: live, session token, and the in-process 'exhausted' and quota caches."""
         if self._not_live() is not None:
             await _error(send, 503, 'demo_unavailable')
             return None
@@ -922,6 +1007,10 @@ class DemoGateway:
         closed = self._closed_detail()
         if closed is not None:
             await _error(send, 503, closed)
+            return None
+        spent = self._quota_spent.get((session.sid, endpoint))
+        if spent is not None and self.clock() < spent[0]:
+            await _error(send, 429, 'call_limit')
             return None
         return session
 
@@ -951,20 +1040,40 @@ class DemoGateway:
     # -- reservations --
 
     async def _reserve(self, reservation: Reservation, send: Send) -> bool:
+        sid, now = reservation.sid, self.clock()
+        spent = self._session_spent.get(sid)
+        if spent is not None and now < spent[0] and reservation.amount > spent[1]:
+            await _error(send, 429, 'session_limit')
+            return False
         try:
-            outcome, _ = await self.counters.reserve(reservation, self.cfg.caps, QUOTAS[reservation.endpoint])
+            outcome, value = await self.counters.reserve(reservation, self.cfg.caps, QUOTAS[reservation.endpoint])
         except CounterError:
+            # Passing, as far as the page knows: it keeps its session, unlike the kill switch's demo_unavailable.
             logger.warning('Demo gateway: reserve_failed endpoint=%s', reservation.endpoint)
-            await _error(send, 503, 'demo_unavailable')
+            await _error(send, 503, 'counters_unavailable')
             return False
         if outcome is Outcome.OK:
             return True
-        if outcome in (Outcome.QUOTA, Outcome.SESSION_BUDGET):
+        if outcome is Outcome.QUOTA:
+            # One endpoint's quota, used up for the session's life; the page's other calls go on.
+            self._remember(self._quota_spent, (sid, reservation.endpoint), now + SESSION_LIFE_S, 0)
+            await _error(send, 429, 'call_limit')
+            return False
+        if outcome is Outcome.SESSION_BUDGET:
+            # Settling can hand some back, so this holds briefly, and only against calls at least this large.
+            self._remember(self._session_spent, sid, now + CLOSED_CACHE_S, self.cfg.caps.session - value)
             await _error(send, 429, 'session_limit')
             return False
-        detail = 'demo_unavailable' if outcome is Outcome.OFF else 'demo_budget_exhausted'
-        self._close(detail, reservation.day if outcome is Outcome.DAY_BUDGET else None)
-        await _error(send, 503, detail)
+        if outcome is Outcome.OFF:
+            self._close('demo_unavailable', None)
+            await _error(send, 503, 'demo_unavailable')
+            return False
+        # Only a budget too spent for the smallest call closes this instance. A large call that doesn't fit is
+        # refused alone, and smaller ones still go to the counters.
+        cap = self.cfg.caps.day if outcome is Outcome.DAY_BUDGET else self.cfg.caps.total
+        if cap - value < FLOOR_MICRO:
+            self._close('demo_budget_exhausted', reservation.day if outcome is Outcome.DAY_BUDGET else None)
+        await _error(send, 503, 'demo_budget_exhausted')
         return False
 
     async def _settle(self, reservation: Reservation, actual: int) -> None:
@@ -978,7 +1087,7 @@ class DemoGateway:
     # -- guarded backend calls --
 
     async def _guarded(self, name: str, scope: Scope, receive: Receive, send: Send) -> None:
-        session = await self._authorize(scope, send)
+        session = await self._authorize(scope, send, name)
         if session is None:
             return
         read = await self._read_json(scope, receive, send, BODY_CAPS[name])
@@ -987,18 +1096,16 @@ class DemoGateway:
         value, body = read
         if name == 'vision' and not _worksheet(value):
             return await _error(send, 403, 'image_not_allowed')
-        if name == 'extract':
-            allowed = await self._extract_allowed(value, session.sid)
-            if allowed is None:
-                return await _error(send, 503, 'demo_unavailable')
-            if not allowed:
-                return await _error(send, 403, 'extract_not_allowed')
+        if name == 'extract' and (refusal := await self._extract_refusal(value, session.sid)):
+            return await _error(send, *refusal)
+        size = len(body) + (tool_argument_growth(value) if name == 'respond' else 0)
         reservation = Reservation(name, session.sid, utc_day(self.clock()),
-                                  reserve_micro(name, len(body), self.settings, self.cfg))
+                                  reserve_micro(name, size, self.settings, self.cfg))
         if not await self._reserve(reservation, send):
             return
         meter = Meter()
-        buffered = await self._forward(name, scope, body, meter)
+        async with self._slot(session.sid):
+            buffered = await self._forward(name, scope, body, meter)
         if name == 'search' and buffered.status == 200:
             await self._record_results(session.sid, buffered.body())
         await self._settle(reservation, max(FLOOR_MICRO, meter.actual_micro(self.cfg.jev_unit_micro)))
@@ -1024,18 +1131,27 @@ class DemoGateway:
             await buffered.send({'type': 'http.response.body', 'body': b'{"detail":"provider_failed"}'})
         return buffered
 
-    async def _extract_allowed(self, value: dict[str, Any], sid: str) -> bool | None:
+    async def _extract_refusal(self, value: dict[str, Any], sid: str) -> tuple[int, str] | None:
+        """Why an extract may not run, or None when every URL came from this session's own searches."""
         urls = value.get('urls')
         if not isinstance(urls, list) or not 1 <= len(urls) <= 3 or not all(isinstance(url, str) for url in urls):
-            return False
+            return 403, 'extract_not_allowed'
         hashes = [url_key(url, self.cfg.session_secret) for url in urls]
         if any(item is None for item in hashes):
-            return False
+            return 403, 'extract_not_allowed'
+        # A refused check reserves nothing, so this count is what keeps a session's checks from being unlimited.
+        now = self.clock()
+        until, checks = self._url_checks.get(sid, (0.0, 0))
+        checks = checks if now < until else 0
+        if checks >= URL_CHECKS:
+            return 429, 'call_limit'
+        self._remember(self._url_checks, sid, now + SESSION_LIFE_S, checks + 1)
         try:
-            return await self.counters.urls_allowed(sid, hashes)
+            allowed = await self.counters.urls_allowed(sid, hashes)
         except CounterError:
             logger.warning('Demo gateway: url_check_failed')
-            return None
+            return 503, 'counters_unavailable'
+        return None if allowed else (403, 'extract_not_allowed')
 
     async def _record_results(self, sid: str, body: bytes) -> None:
         try:
@@ -1051,8 +1167,8 @@ class DemoGateway:
 
     # -- speech --
 
-    async def _voice_session(self, scope: Scope, send: Send) -> Session | None:
-        session = await self._authorize(scope, send)
+    async def _voice_session(self, scope: Scope, send: Send, endpoint: str) -> Session | None:
+        session = await self._authorize(scope, send, endpoint)
         if session is not None and not self._voice_available(self._fresh_status()):
             await _error(send, 503, 'voice_unavailable')
             return None
@@ -1065,7 +1181,7 @@ class DemoGateway:
         return self._status_cache[1]
 
     async def _transcribe(self, scope: Scope, receive: Receive, send: Send) -> None:
-        session = await self._voice_session(scope, send)
+        session = await self._voice_session(scope, send, 'transcribe')
         if session is None:
             return
         headers = scope.get('headers', [])
@@ -1081,14 +1197,16 @@ class DemoGateway:
         if wav is None:
             return
         try:
-            seconds = wav_seconds(wav)
+            # The upload is never sent as it came: only the audio that was measured and charged for.
+            wav, seconds = canonical_wav(wav)
         except AudioError as error:
             return await _error(send, error.status, error.code)
         reservation = Reservation('transcribe', session.sid, utc_day(self.clock()), transcribe_micro(seconds))
         if not await self._reserve(reservation, send):
             return
         try:
-            text = await self.audio.transcribe(wav, prompt)
+            async with self._slot(session.sid):
+                text = await self.audio.transcribe(wav, prompt)
         except AudioError as error:
             await self._audio_failed(reservation, error)
             return await _error(send, error.status, error.code)
@@ -1096,7 +1214,7 @@ class DemoGateway:
         await _json(send, 200, {'text': text})
 
     async def _speech(self, scope: Scope, receive: Receive, send: Send) -> None:
-        session = await self._voice_session(scope, send)
+        session = await self._voice_session(scope, send, 'speech')
         if session is None:
             return
         read = await self._read_json(scope, receive, send, BODY_CAPS['speech'])
@@ -1110,7 +1228,8 @@ class DemoGateway:
         if not await self._reserve(reservation, send):
             return
         try:
-            audio = await self.audio.speak(text)
+            async with self._slot(session.sid):
+                audio = await self.audio.speak(text)
         except AudioError as error:
             await self._audio_failed(reservation, error)
             return await _error(send, error.status, error.code)
@@ -1162,16 +1281,18 @@ def create_demo_app(env: Mapping[str, str] | None = None, *, transport: httpx.As
         cfg = DemoConfig.from_env(source, local=local, settings=settings)
         hosts = {TYPESAFE_HOST, TAVILY_HOST, urlsplit(settings.nebius_base_url).hostname}
         metered = MeteredClient(frozenset(host for host in hosts if host), transport=transport)
+        # Upstash and Turnstile share the control pool, and OpenAI has its own, apart from the providers'.
+        control, voice = PerLoop(CONTROL_LIMITS, transport), PerLoop(VOICE_LIMITS, transport)
         if counters is None:
-            counters = UpstashCounters.from_env(source, Keys(cfg.env_name), metered._client)
+            counters = UpstashCounters.from_env(source, Keys(cfg.env_name), control)
             if counters is None:
                 cfg = cfg.not_live('counters_unconfigured')
         elif cfg.on_vercel and isinstance(counters, MemoryCounters):
             cfg = cfg.not_live('local_on_vercel')
         inner = create_app(settings, http_client=metered, store=DisabledStore())
-        audio = DemoAudio(cfg.openai_key, cfg.transcribe_model, cfg.tts_model, cfg.tts_voice, metered._client)
-        return DemoGateway(cfg, settings, inner, settings.backend_token, counters, metered, audio, metered._client,
-                           clock)
+        audio = DemoAudio(cfg.openai_key, cfg.transcribe_model, cfg.tts_model, cfg.tts_voice, voice)
+        return DemoGateway(cfg, settings, inner, settings.backend_token, counters, metered, audio, control, clock,
+                           pools=(metered.pool, voice, control))
     except Exception as error:
         logger.error('Demo gateway: misconfigured error=%s', type(error).__name__)
         return _closed_gateway('misconfigured', clock)

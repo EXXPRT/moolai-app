@@ -90,6 +90,38 @@ test("an unavailable voice is reported but keeps typed processing available", as
   assert.deepEqual(r.gate.processing(), { status: "available" });
 });
 
+test("one endpoint's used-up quota ends voice when it is a voice route, and nothing for any other", async () => {
+  const r = rig(() => json(429, { detail: "call_limit" }));
+  for (const name of ["extract", "search", "vision", "respond", "route"])
+    assert.equal((await r.gate.fetch(new URL(`/v1/${name}`, origin), { method: "POST", body: "{}" })).status, 429);
+  assert.deepEqual(r.limits, [], "The Agent reports the failed tool or turn itself, and the session goes on");
+  assert.deepEqual(r.gate.processing(), { status: "available" });
+  await assert.rejects(createTranscriber(r.gate)(new Uint8Array([1]), "Moo.", new AbortController().signal), /HTTP 429 call_limit/);
+  await assert.rejects(createSynthesizer(r.gate)("Hello.", new AbortController().signal), /HTTP 429 call_limit/);
+  assert.deepEqual(r.limits, [["voice_unavailable", "call_limit"]]);
+  assert.deepEqual(r.gate.processing(), { status: "available" }, "Typing still works");
+  const spent = rig(() => json(429, { detail: "session_limit" }));
+  await spent.gate.fetch(new URL("/v1/route", origin), { method: "POST", body: "{}" });
+  assert.deepEqual(spent.limits, [["session_limit", "session_limit"]], "The session's own budget still ends it");
+});
+
+test("a passing counters error is an ordinary failure, not the end of the session", async () => {
+  const r = rig(() => json(503, { detail: "counters_unavailable" }));
+  assert.equal((await r.gate.fetch(new URL("/v1/route", origin), { method: "POST", body: "{}" })).status, 503);
+  await assert.rejects(createSynthesizer(r.gate)("Hello.", new AbortController().signal), /HTTP 503 counters_unavailable/);
+  assert.deepEqual(r.limits, []);
+  assert.deepEqual(r.gate.processing(), { status: "available" });
+});
+
+test("a speech part that takes too long to arrive fails, so half-duplex can't keep the microphone deaf", async () => {
+  const gate = createDemoGate({ origin, token: () => "v1.first", onLimit: () => {},
+    baseFetch: async input => new Promise<Response>((_, reject) => {
+      const { signal } = input as Request;
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }) });
+  await assert.rejects(createSynthesizer(gate, 20)("Hello.", new AbortController().signal), (error: Error) => error.name === "TimeoutError");
+});
+
 test("a failing limit handler never turns the gateway's answer into a network error", async () => {
   const gate = createDemoGate({ origin, token: () => "v1.first", baseFetch: async () => json(401, { detail: "session_expired" }),
     onLimit: () => { throw Error("banner failed"); } });

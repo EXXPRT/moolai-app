@@ -10,25 +10,30 @@ const settle = async () => { for (let i = 0; i < 20; i++) await new Promise<void
 const OFF: VoiceStatus = { enabled: false, requestedOn: false, listening: false, speaking: false, phase: "off", error: null };
 const WORKSHEET = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 
-/** The speech port as the host sees it; the test decides when Moo is audible. */
+/** The speech port as the host sees it; the test decides when Moo is audible, or busy with a line still downloading. */
 class FakeSpeech implements WebSpeechPort {
   audible = false;
+  busy = false;
   quietSince = -Infinity;
   heldPaused = false;
   closed = false;
   readonly spoken: string[] = [];
-  private readonly listeners = new Set<(audible: boolean) => void>();
+  private speaking = false;
+  private readonly listeners = new Set<(speaking: boolean) => void>();
   constructor(private readonly log: string[]) {}
   async speak(text: string) { this.spoken.push(text); }
-  async stop() { this.log.push("speech stop"); this.setAudible(false); }
+  async stop() { this.log.push("speech stop"); this.busy = false; this.setAudible(false); }
   async resume() { this.log.push("speech resume"); }
   pause() { return false; }
-  onAudibleChange(listener: (audible: boolean) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
+  onSpeakingChange(listener: (speaking: boolean) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   close() { this.closed = true; this.log.push("speech close"); }
-  setAudible(audible: boolean) {
-    if (audible === this.audible) return;
-    this.audible = audible;
-    for (const listener of this.listeners) listener(audible);
+  setAudible(audible: boolean) { this.audible = audible; this.changed(); }
+  setBusy(busy: boolean) { this.busy = busy; this.changed(); }
+  private changed() {
+    const speaking = this.audible || this.busy;
+    if (speaking === this.speaking) return;
+    this.speaking = speaking;
+    for (const listener of this.listeners) listener(speaking);
   }
 }
 
@@ -119,6 +124,11 @@ test("speaking follows the speech port, merged into the whole status", async () 
     r.speech.setAudible(false);
     assert.equal(r.host.nativeSnapshot().speaking, false);
     assert.equal(r.host.nativeSnapshot().listening, true);
+    // A line still downloading is Moo speaking too, so Stop speech shows before its audio arrives.
+    r.speech.setBusy(true);
+    assert.equal(r.statuses().at(-1)!.speaking, true);
+    r.speech.setBusy(false);
+    assert.equal(r.host.nativeSnapshot().speaking, false);
   } finally { await r.close(); }
 });
 
@@ -165,6 +175,9 @@ test("voice stop quiets Moo, stops the tracks, finishes the last words, reports 
     assert.deepEqual(r.log, ["mic stop", "speech stop", "finish"]);
     assert.equal(r.host.nativeSnapshot().phase, "finishing_transcription");
     assert.equal(r.host.nativeSnapshot().listening, false);
+    // The renderer's button then reads "Mic off" and stays disabled while the stop runs, so a second click can't
+    // checkpoint the conversation again (micRequested in apps/desktop/src/main.tsx).
+    assert.equal(r.host.nativeSnapshot().requestedOn, false);
     r.feed();
     assert.equal(controller!.accepted, 0, "No new audio reaches a finishing controller");
     release();
@@ -302,7 +315,11 @@ test("the microphone turns itself off after the idle time without an onset, neve
     t.mock.timers.tick(999); await settle();
     assert.equal(r.host.nativeSnapshot().phase, "listening", "An onset restarts the wait");
     r.controllers[0]!.options.onActivity!({ pending: 1 });
+    r.speech.setBusy(true);
+    t.mock.timers.tick(5000); await settle();
+    assert.equal(r.host.nativeSnapshot().phase, "listening", "Nor is a line of Moo's still downloading");
     r.speech.setAudible(true);
+    r.speech.setBusy(false);
     t.mock.timers.tick(5000); await settle();
     assert.equal(r.host.nativeSnapshot().phase, "listening", "Moo's own speech is not the visitor's silence");
     r.speech.setAudible(false);

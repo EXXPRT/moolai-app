@@ -21,8 +21,8 @@ export interface MoolaiApi {
 export type DemoErrorCode =
   | "invalid_session" | "session_expired" | "turnstile_failed" | "extract_not_allowed" | "image_not_allowed"
   | "not_found" | "method_not_allowed" | "body_too_large" | "unsupported_media_type" | "invalid_json" | "invalid_audio"
-  | "session_limit" | "session_rate_limited" | "demo_budget_exhausted" | "demo_unavailable" | "voice_unavailable"
-  | "provider_failed" | "provider_timeout" | "internal_error";
+  | "session_limit" | "call_limit" | "session_rate_limited" | "demo_budget_exhausted" | "demo_unavailable"
+  | "voice_unavailable" | "counters_unavailable" | "provider_failed" | "provider_timeout" | "internal_error";
 
 /** GET /api/demo/config */
 export interface DemoConfig {
@@ -62,8 +62,9 @@ export interface VoiceSink {
 }
 /** Sends one WAV (16 kHz mono PCM16) with its recognition prompt; resolves to the transcript text. */
 export type Transcriber = (wav: Uint8Array, prompt: string, signal: AbortSignal) => Promise<string>;
-/** Playback state the pipeline reads for half-duplex gating. `quietSince` is a `clock()` time, -Infinity before any audio. */
-export interface SpeechGate { readonly audible: boolean; readonly quietSince: number }
+/** Playback state the pipeline reads for half-duplex gating. `quietSince` is a `clock()` time, -Infinity before any audio.
+ * `busy`: a line is under way, though its audio may still be downloading; it counts as Moo speaking. */
+export interface SpeechGate { readonly audible: boolean; readonly quietSince: number; readonly busy?: boolean }
 
 export interface VoiceControllerOptions {
   sink: VoiceSink;
@@ -114,8 +115,10 @@ export interface WebSpeechPort extends SpeechGate {
   /** Pauses audible playback; true only when audio really was playing. */
   pause(): boolean;
   readonly heldPaused: boolean;
-  /** The host merges this into its status; the speech port never emits `voice` events itself. */
-  onAudibleChange(listener: (audible: boolean) => void): () => void;
+  readonly busy: boolean;
+  /** Moo starts or stops speaking: audible, or busy with a line. The host merges this into its status; the speech port
+   * never emits `voice` events itself. */
+  onSpeakingChange(listener: (speaking: boolean) => void): () => void;
   close(): void;
 }
 

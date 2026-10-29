@@ -6,24 +6,31 @@ const VOICE_UNAVAILABLE = "Moo’s voice is unavailable. The full response is on
 const tick = async () => { for (let i = 0; i < 5; i++) await new Promise<void>(resolve => setImmediate(resolve)); };
 type Stopped = Error & { stopped?: boolean };
 
-/** An audio element the test plays to the end, breaks or refuses. */
+type AudioEvent = "ended" | "error" | "pause";
+/** An audio element the test plays to the end, breaks, refuses or has paused from elsewhere. Like a browser's, it
+ * announces every pause, the page's own included; this one does so at once, so a pause is never mistaken for a hold. */
 class FakeAudio implements AudioLike {
   src = "";
   currentTime = 0;
   paused = true;
+  ended = false;
   loads = 0;
   readonly played: string[] = [];
   /** What play() does once the element starts. */
   starting: () => Promise<void> = async () => {};
-  private readonly listeners = { ended: new Set<() => void>(), error: new Set<() => void>() };
-  play() { this.paused = false; this.played.push(this.src); return this.starting(); }
-  pause() { this.paused = true; }
-  load() { this.loads++; this.currentTime = 0; }
-  addEventListener(type: "ended" | "error", listener: () => void) { this.listeners[type].add(listener); }
-  removeEventListener(type: "ended" | "error", listener: () => void) { this.listeners[type].delete(listener); }
-  end() { this.paused = true; for (const listener of [...this.listeners.ended]) listener(); }
-  fail() { for (const listener of [...this.listeners.error]) listener(); }
-  get attached() { return this.listeners.ended.size + this.listeners.error.size; }
+  private readonly listeners = { ended: new Set<() => void>(), error: new Set<() => void>(), pause: new Set<() => void>() };
+  play() { this.paused = false; this.ended = false; this.played.push(this.src); return this.starting(); }
+  pause() { if (this.paused) return; this.paused = true; this.fire("pause"); }
+  load() { this.loads++; this.currentTime = 0; this.ended = false; }
+  addEventListener(type: AudioEvent, listener: () => void) { this.listeners[type].add(listener); }
+  removeEventListener(type: AudioEvent, listener: () => void) { this.listeners[type].delete(listener); }
+  /** Played to its end: a browser pauses the element, then reports it ended. */
+  end() { this.paused = true; this.ended = true; this.fire("pause"); this.fire("ended"); }
+  fail() { this.fire("error"); }
+  /** Media keys, the browser's media controls, or a headset taken off. */
+  interrupt() { this.paused = true; this.fire("pause"); }
+  private fire(type: AudioEvent) { for (const listener of [...this.listeners[type]]) listener(); }
+  get attached() { return this.listeners.ended.size + this.listeners.error.size + this.listeners.pause.size; }
 }
 
 function rig(partLimit?: number) {
@@ -38,7 +45,7 @@ function rig(partLimit?: number) {
     }),
     urls: { create: () => { const url = `blob:part-${++made}`; live.add(url); return url; }, revoke: url => { live.delete(url); } },
   });
-  speech.onAudibleChange(audible => { changes.push(audible); });
+  speech.onSpeakingChange(speaking => { changes.push(speaking); });
   return { audio, speech, requests, live, changes, at(next: number) { time = next; } };
 }
 
@@ -64,12 +71,13 @@ test("a long answer plays its parts in order, each fetched while the one before 
   r.at(1500); r.audio.end(); await tick();
   assert.equal(r.speech.audible, false, "Waiting for a part still downloading is silence");
   assert.equal(r.speech.quietSince, 1500);
+  assert.equal(r.speech.busy, true, "but Moo is still speaking: half-duplex keeps the mic deaf until the line ends");
   assert.equal(done, false);
   r.requests[2]!.resolve(); await tick();
   assert.equal(r.speech.audible, true);
   r.at(3000); r.audio.end(); await speaking;
   assert.deepEqual(r.audio.played, ["blob:part-1", "blob:part-2", "blob:part-3"]);
-  assert.deepEqual(r.changes, [true, false, true, false]);
+  assert.deepEqual(r.changes, [true, false], "Speaking from the first request to the last part's end");
   assert.equal(r.speech.quietSince, 3000);
   assert.equal(r.live.size, 0, "Every URL is revoked");
   assert.equal(r.audio.attached, 0);
@@ -176,10 +184,43 @@ test("a failed synthesis, a broken file or refused playback rejects with the rea
   assert.equal(r.audio.attached, 0);
 });
 
-test("audible changes reach each listener until it unsubscribes, and a failing listener stops nothing", async () => {
+test("Moo is busy from the moment a line starts, before its audio arrives, until the line ends or fails", async () => {
+  const r = rig();
+  assert.equal(r.speech.busy, false);
+  const speaking = r.speech.speak("A short answer.");
+  assert.equal(r.speech.busy, true);
+  assert.equal(r.speech.audible, false);
+  assert.deepEqual(r.changes, [true], "Speaking starts with the download, so Stop speech shows at once");
+  r.requests[0]!.resolve(); await tick();
+  r.audio.end(); await speaking;
+  assert.equal(r.speech.busy, false);
+  assert.deepEqual(r.changes, [true, false]);
+  const failed = r.speech.speak("Never heard.");
+  r.requests[1]!.reject(new Error("Speech failed: HTTP 504 provider_timeout"));
+  await assert.rejects(failed, (error: Error) => error.message === VOICE_UNAVAILABLE);
+  assert.equal(r.speech.busy, false);
+  assert.deepEqual(r.changes, [true, false, true, false], "A line that never played ends as well");
+});
+
+test("a pause from elsewhere ends the line as interrupted, so Moo is never left speaking with no end coming", async () => {
+  const r = rig(60);
+  const speaking = r.speech.speak("Osmosis moves water across a membrane. It moves toward more solute. Dilution adds solvent.");
+  r.requests[0]!.resolve(); await tick();
+  assert.equal(r.speech.audible, true);
+  r.audio.interrupt();
+  await assert.rejects(speaking, (error: Stopped) => error.message === "Speech interrupted" && error.stopped === true);
+  assert.equal(r.speech.audible, false);
+  assert.equal(r.speech.busy, false);
+  assert.equal(r.requests[1]!.signal.aborted, true, "The next part's request is aborted");
+  assert.deepEqual(r.changes, [true, false]);
+  assert.equal(r.audio.attached, 0);
+  assert.equal(r.live.size, 0);
+});
+
+test("speaking changes reach each listener until it unsubscribes, and a failing listener stops nothing", async () => {
   const r = rig(), seen: boolean[] = [];
-  const unsubscribe = r.speech.onAudibleChange(audible => { seen.push(audible); });
-  r.speech.onAudibleChange(() => { throw Error("listener failed"); });
+  const unsubscribe = r.speech.onSpeakingChange(speaking => { seen.push(speaking); });
+  r.speech.onSpeakingChange(() => { throw Error("listener failed"); });
   const errors: unknown[] = [], log = console.error;
   console.error = (...items: unknown[]) => { errors.push(items); };
   try {

@@ -18,8 +18,9 @@ const PACKAGES = new Set(["react", "react-dom", "react-dom/client", "react/jsx-r
 /** Every module a source loads at run time. `import type` and `export type` are erased before bundling, so they don't count. */
 function specifiers(source: string) {
   const found: string[] = [];
-  // The clause before `from` holds only names, braces, commas, `*`, `as` and `type`, so other exports never match.
-  for (const match of source.matchAll(/^[ \t]*(?:import|export)\s+(type\s+)?[\w$\s{},*]*?\s*from\s*["']([^"']+)["']/gm))
+  // The clause before `from` holds only names, braces, commas, `*`, `as`, `type` and comments, so other exports never
+  // match. A comment is read whole, so a `from "…"` inside one is never taken for the specifier.
+  for (const match of source.matchAll(/^[ \t]*(?:import|export)\s+(type\s+)?(?:[\w$\s{},*]|\/\/[^\n]*|\/\*[\s\S]*?\*\/)*?\s*from\s*["']([^"']+)["']/gm))
     if (!match[1]) found.push(match[2]!);
   for (const match of source.matchAll(/^[ \t]*import\s*["']([^"']+)["']/gm)) found.push(match[1]!);
   for (const match of source.matchAll(/\bimport\s*\(\s*(?:["']([^"']+)["']\s*\))?/g))
@@ -79,6 +80,10 @@ test("the scan counts value imports, re-exports and dynamic imports, and skips t
     'import type {\n  BrainPort,\n} from "../brain/src/index.js";',
     'import React, { useState, type FC } from "react";',
     'import {\n  a,\n  b,\n} from "./values.js";',
+    'import {\n  createAgentHost, // the desktop host\n} from "../agent-host/src/index.js";',
+    'import { /* host */ speech } from "../agent-host/src/speech.js";',
+    'import { a, // from "./not-this.js"\n} from "./this.js";',
+    'import type {\n  // a note\n  Segment,\n} from "../contracts/src/index.js";',
     'export { c } from "./c.js";',
     'export type { D } from "./d.js";',
     'export * from "./e.js";',
@@ -87,6 +92,7 @@ test("the scan counts value imports, re-exports and dynamic imports, and skips t
     'const loaded = await import(name);',
   ].join("\n");
   assert.deepEqual(specifiers(source).sort(), ["./BrainGraph.js", "./c.js", "./e.js", "./style.css", "./values.js",
+    "../agent-host/src/index.js", "../agent-host/src/speech.js", "./this.js",
     "<an import() of a computed specifier>", "react"].sort());
 });
 

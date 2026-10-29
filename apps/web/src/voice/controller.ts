@@ -30,6 +30,8 @@ class WebVoiceController implements VoiceController {
   private writes: Promise<void> = Promise.resolve();
   private turns: Promise<void> = Promise.resolve();
   private waiting: Job[] = [];
+  /** Utterances sent for transcription whose outcomes are not yet applied: words still to come. */
+  private readonly queued = new Set<number>();
   private transcribing = 0;
   private readonly aborts = new Set<AbortController>();
   private outstanding = 0;
@@ -46,9 +48,9 @@ class WebVoiceController implements VoiceController {
     if (this.closed || this.finishing) return;
     const downsampler = this.downsampler?.inputRate === sampleRate ? this.downsampler : (this.downsampler = new Downsampler(sampleRate));
     const audio = downsampler.process(samples);
-    // Half-duplex: Moo's own voice, and its tail in the room, is heard as silence.
+    // Half-duplex: Moo's own voice, a line of it still downloading, and its tail in the room are heard as silence.
     const speech = this.p.speech;
-    if (speech.audible || this.clock() - speech.quietSince < (this.p.tailMs ?? 300)) this.endpointer.gap(audio.length);
+    if (speech.audible || speech.busy || this.clock() - speech.quietSince < (this.p.tailMs ?? 300)) this.endpointer.gap(audio.length);
     else this.endpointer.push(audio);
     const turn = this.current;
     if (turn && !turn.previewed && this.endpointer.voicedMs >= (this.p.previewMinVoicedMs ?? 600)) this.preview(turn);
@@ -91,7 +93,7 @@ class WebVoiceController implements VoiceController {
   }
   private end(turn: Turn, samples: Float32Array, voicedMs: number) {
     if (!turn.previewed && voicedMs >= (this.p.previewMinVoicedMs ?? 600)) this.preview(turn);
-    const result = voicedMs < (this.p.minVoicedMs ?? 300) ? Promise.resolve(null) : this.transcribe(samples);
+    const result = voicedMs < (this.p.minVoicedMs ?? 300) ? Promise.resolve(null) : this.transcribe(samples, turn.seq);
     this.outstanding++;
     this.activity();
     this.order = this.order.then(() => result).then(text => {
@@ -104,6 +106,7 @@ class WebVoiceController implements VoiceController {
     this.order = this.order.then(() => this.ingest(segment));
   }
   private apply(turn: Turn, text: string | null): Promise<void> {
+    this.queued.delete(turn.seq);
     if (this.closed) return Promise.resolve();
     if (text !== null) {
       this.ingest(this.segment(turn, turn.previewed ? 2 : 1, text, true));
@@ -130,8 +133,10 @@ class WebVoiceController implements VoiceController {
         if (this.closed) return;
         const settled = this.p.sink.settleTurn(turn.turnId);
         // settleTurn captures the speech epoch when called and, if it is unchanged when the turn is done, releases
-        // the hold. An onset that came first is the next utterance's: take the hold again, or Moo answers over it.
-        if (this.started > turn.seq) this.hold();
+        // the hold. Speech that came first and may still bring words is the next utterance's: take the hold again,
+        // or Moo answers over it. A sound already over and refused unheard (a cough) is not: holding for it would
+        // only drop this turn's offer or question.
+        if (this.speechAfter(turn.seq)) this.hold();
         return settled;
       })
       .then(() => {})
@@ -143,9 +148,9 @@ class WebVoiceController implements VoiceController {
       .then(() => precedingWrites)
       .then(async () => {
         if (this.closed) return;
-        // A rejection releases the hold outright, so speech that began since takes it again.
+        // A rejection releases the hold outright, so speech since that may still bring words takes it again.
         try { await this.p.sink.recognitionRejected(); }
-        finally { if (this.started > turn.seq && !this.closed) this.hold(); }
+        finally { if (this.speechAfter(turn.seq) && !this.closed) this.hold(); }
       })
       .catch(error => this.p.onError("route", error));
   }
@@ -155,11 +160,16 @@ class WebVoiceController implements VoiceController {
     catch (error) { this.p.onError("route", error); }
   }
 
-  private transcribe(samples: Float32Array): Promise<string | null> {
+  /** An open utterance, or a later one still being transcribed. */
+  private speechAfter(seq: number) {
+    return this.endpointer.open || [...this.queued].some(later => later > seq);
+  }
+  private transcribe(samples: Float32Array, seq: number): Promise<string | null> {
     if (this.transcribing + this.waiting.length > QUEUED_LIMIT) {
       this.p.onError("transcribe", new Error(BEHIND));
       return Promise.resolve(null);
     }
+    this.queued.add(seq);
     const wav = encodeWav(samples);
     return new Promise(resolve => { this.waiting.push({ wav, resolve }); this.pump(); });
   }

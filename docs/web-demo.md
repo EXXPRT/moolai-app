@@ -4,7 +4,7 @@ A stateless, voice-first version of Moolai that runs in the browser:
 - **The page** (`apps/web`) runs the real Agent with an in-memory Brain seeded with two study sessions. A refresh resets it.
 - **Model calls** go through a small gateway (`backend/moolai_backend/demo_gateway.py`) in front of the same FastAPI backend the desktop uses.
 - **Hosting:** the gateway runs as a Vercel Python function (`api/index.py`) next to the static page.
-- **What is stored:** nothing a visitor says. The gateway keeps only spending counters, hashed IP buckets and hashed search-result URLs, all expiring, in Upstash Redis.
+- **What is stored:** nothing a visitor says. The gateway keeps only spending counters, hashed IP buckets and hashed search-result URLs in Upstash Redis. All of them expire except the running spend total and the off switch, neither of which holds visitor data.
 
 **How it differs from the desktop app:**
 - Speech uses OpenAI (speech-to-text and Moo's voice) instead of on-device Whisper/Qwen and Kokoro.
@@ -17,7 +17,7 @@ A stateless, voice-first version of Moolai that runs in the browser:
 
 `apps/web/src/main.ts` boots in this order:
 1. **Capability check.** The Agent and its host need `AbortSignal.any`, `crypto.subtle`, `crypto.randomUUID` and regex lookbehind. Without them the page asks for a recent Chrome, Edge, Firefox or Safari 17.4+. Everything that needs them loads only after the check, so an older browser still gets that message.
-2. **Intro.** It loads `GET /api/demo/config` and the sample sessions (`public/seed.json`), then says what the demo sends where. When live, it shows the Turnstile check, then **Start with voice** (if voice is available) and **Start with typing**. When not live, it gives the reason and offers **Explore in fixture mode**: simulated replies, typing only, and nothing the visitor types leaves the page.
+2. **Intro.** It loads `GET /api/demo/config` and the sample sessions (`public/seed.json`), then says what the demo sends where. When live, it shows the Turnstile check, then **Start with voice** (if voice is available) and **Start with typing**. When not live, it gives the reason and offers **Explore in fixture mode**: simulated replies, typing only, and nothing the visitor types leaves the page. A live intro offers fixture mode too when the bot check can't load or fails, or when the gateway refuses the session.
 3. **Start.** In the click, a live page creates the AudioContext and unlocks its one audio element, then opens a session with the Turnstile token. The page loads the sample sessions into an in-memory Brain, with their times moved so that the later session started at 16:00 yesterday in the visitor's time zone. A live page then installs the fetch wrapper. Last, the page starts the host, the bridge (`window.moolai`) and a study session, imports the desktop renderer (`apps/desktop/src/main.tsx`) and, for **Start with voice**, turns the microphone on.
 
 Above the renderer, a demo bar names the models and opens the sample worksheet and a **Try saying** card. Each user turn shows how Jev routed it, for example **Saved as a thought**. Limits show as lasting banners. Once voice can't work, the microphone button is hidden, because the renderer would describe any voice failure as a microphone problem.
@@ -47,10 +47,10 @@ All paths are same-origin. Every error is JSON `{"detail": "<code>"}`.
 | 413 | `body_too_large` |
 | 415 | `unsupported_media_type` |
 | 422 | `invalid_json`, `invalid_audio` |
-| 429 | `session_limit`, `session_rate_limited` |
+| 429 | `session_limit` (the session's budget), `call_limit` (one endpoint's quota, or the session's extract URL checks), `session_rate_limited` |
 | 500 | `internal_error` |
 | 502 | `provider_failed` (speech, or a backend call that ended without a response) |
-| 503 | `demo_budget_exhausted`, `demo_unavailable`, `voice_unavailable` |
+| 503 | `demo_budget_exhausted`, `demo_unavailable`, `voice_unavailable`, `counters_unavailable` (Upstash didn't answer; the next call may succeed) |
 | 504 | `provider_timeout` (speech) |
 
 Backend errors from the forwarded `/api/v1/*` routes keep the backend's own `{"detail": ...}` and status.
@@ -59,7 +59,8 @@ Backend errors from the forwarded `/api/v1/*` routes keep the backend's own `{"d
 
 **Browser rules:**
 - `BackendProviders` builds `new URL("/v1/…", origin)`. The page's fetch wrapper rewrites same-origin `/v1/*` to `/api/v1/*`, swaps in the session token, and answers `/health` itself.
-- These refusals end live calls for the page: 401 `invalid_session` or `session_expired`, 429 `session_limit` or `session_rate_limited`, and 503 `demo_budget_exhausted`, `demo_unavailable` or `voice_unavailable`. The page stops voice for the rest of the session and shows a lasting banner. Except for `voice_unavailable`, it also reports processing as unavailable. It never retries a model call by itself, and it never renews a session silently.
+- These refusals end live calls for the page: 401 `invalid_session` or `session_expired`, 429 `session_limit` or `session_rate_limited`, and 503 `demo_budget_exhausted`, `demo_unavailable` or `voice_unavailable`. A 429 `call_limit` from `/api/v1/transcribe` or `/api/v1/speech` counts as `voice_unavailable`. The page stops voice for the rest of the session and shows a lasting banner. Except for `voice_unavailable`, it also reports processing as unavailable. It never retries a model call by itself, and it never renews a session silently.
+- A `call_limit` from any other route, and 503 `counters_unavailable`, are ordinary failures: the Agent reports that tool call or turn, and the session goes on.
 
 **Caching:** every response is `Cache-Control: no-store`, except config (`s-maxage=15`) and selftest (`s-maxage=60`).
 
@@ -69,8 +70,9 @@ Backend errors from the forwarded `/api/v1/*` routes keep the backend's own `{"d
   - Nebius calls are priced from the token usage the provider reports;
   - Jev calls cost `DEMO_JEV_CALL_USD` (default US$0.01) per started 32 KB;
   - Tavily calls cost US$0.01;
-  - OpenAI calls are priced from audio length or text length;
+  - OpenAI calls are priced from audio length or text length. In Moo's speech, any character other than an A–Z letter, a space or plain punctuation counts as five, because a digit, a symbol or another script is read as a word or more. Only `gpt-transcribe` or `gpt-4o-mini-transcribe` and `gpt-4o-mini-tts` are priced; with `OPENAI_TRANSCRIBE_MODEL` or `OPENAI_TTS_MODEL` set to anything else, voice is off;
   - every guarded call also costs a non-refundable US$0.0005.
+- **What is sent to OpenAI** is a WAV the gateway rebuilds from the audio it measured, never the upload itself.
 - **Caps:**
 
   | Variable | Default | Ceiling |
@@ -79,7 +81,7 @@ Backend errors from the forwarded `/api/v1/*` routes keep the backend's own `{"d
   | `DEMO_BUDGET_DAILY_USD` (UTC days) | 6 | 10 |
   | `DEMO_SESSION_BUDGET_USD` | 1.5 | 3 |
 
-  Each session also has per-endpoint call quotas.
+  Each session also has per-endpoint call quotas, and at most six model calls in flight on an instance; more wait their turn. A used-up quota answers `429 call_limit` from the gateway itself, without asking Upstash again.
 - **Not live** when any check fails:
   - `DEMO_ENABLED` isn't `on`;
   - a Nebius, TypeSafe or Tavily key is missing, or a Turnstile key is missing;
@@ -98,7 +100,7 @@ Backend errors from the forwarded `/api/v1/*` routes keep the backend's own `{"d
 
 ## Deploy on Vercel (about 25 minutes)
 
-The repository must include `apps/web/public/seed.json` (see [Run it locally](#run-it-locally)). Deploy only through Vercel's Git integration. **Never run the Vercel CLI from a working copy that has `backend/.env` or `.data/`**: the CLI uploads files that Git ignores.
+The repository must include `apps/web/public/seed.json` (see [Run it locally](#run-it-locally)); the Vercel build fails without it, and so does CI's `npm test`. Deploy only through Vercel's Git integration. **Never run the Vercel CLI from a working copy that has `backend/.env` or `.data/`**: the CLI uploads files that Git ignores.
 
 1. **Import the project.** At vercel.com, choose **Add New → Project** and import the public GitHub repository. Leave the build settings alone; `vercel.json` sets them. The first deployment isn't live yet, which is expected: `/api/demo/config` reports `live: false`, and the page offers fixture mode.
 2. **Counters.** Choose **Storage → Marketplace → Upstash for Redis**. Create a free database in `us-east-1` and connect it to the project, all environments, with no custom prefix. This adds `KV_REST_API_URL` and `KV_REST_API_TOKEN`.

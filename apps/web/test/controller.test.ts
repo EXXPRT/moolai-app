@@ -29,7 +29,7 @@ function harness(options: Partial<VoiceControllerOptions> = {}, hooks: {
 } = {}) {
   const log: string[] = [], segments: Segment[] = [], requests: Request[] = [];
   const errors: { stage: string; message: string }[] = [], activity: { onset?: true; pending: number; rms?: number }[] = [];
-  const speechGate = { audible: false, quietSince: -Infinity, heldPaused: false };
+  const speechGate = { audible: false, quietSince: -Infinity, heldPaused: false, busy: false };
   let ids = 0, time = 0;
   const sink: VoiceSink = {
     async speechStarted(hold) { log.push(hold?.paused ? "hold paused" : "hold"); },
@@ -206,9 +206,44 @@ test("one transcription in flight and two queued; the next is rejected without a
   assert.deepEqual(h.errors, [{ stage: "transcribe", message: "Error: Speech recognition is behind. Please say that again." }]);
   for (let i = 0; i < 3; i++) { h.requests[i]!.resolve(`Line ${i + 1}.`); await settle(); }
   assert.equal(h.requests.length, 3);
+  // The fourth was refused unheard, so no words can come from it: id6's turn keeps its own release.
   assert.deepEqual(h.log, ["hold", "hold", "hold", "hold",
     'final id2 r1 "Line 1."', "settle id2", "hold", 'final id4 r1 "Line 2."', "settle id4", "hold",
-    'final id6 r1 "Line 3."', "settle id6", "hold", "rejected"]);
+    'final id6 r1 "Line 3."', "settle id6", "rejected"]);
+});
+
+test("a cough after an utterance, over before its turn settles, doesn't take the hold again, so its offer stands", async () => {
+  const h = harness();
+  h.feed(said(800)); // id2: a stated doubt, still being transcribed
+  await settle();
+  h.feed(said(160)); // id4: a cough, over and refused without a request
+  await settle();
+  assert.deepEqual(h.log, ["hold", 'preview id2 r1 "…"', "hold"]);
+  assert.equal(h.requests.length, 1, "The cough is never sent");
+  h.requests[0]!.resolve("I don't get how to find V2.");
+  await settle();
+  // Taking the hold again here would make id2's routing see new speech and drop Moo's offer to help.
+  assert.deepEqual(h.log.slice(3), ['final id2 r2 "I don\'t get how to find V2."', "settle id2", "rejected"]);
+  const queued = harness();
+  queued.feed(said(800)); // id2
+  await settle();
+  queued.feed(said(400)); // id4: real words, waiting for their transcription
+  await settle();
+  queued.requests[0]!.resolve("I don't get how to find V2.");
+  await settle();
+  assert.deepEqual(queued.log.slice(3), ['final id2 r2 "I don\'t get how to find V2."', "settle id2", "hold"], "Words still to come keep Moo waiting");
+});
+
+test("half-duplex also ignores input while a line of Moo's is still downloading", async () => {
+  const h = harness();
+  h.speechGate.busy = true;
+  h.feed(said(500));
+  await settle();
+  assert.deepEqual(h.log, [], "A sound before the line is audible would otherwise cut it, with nothing held to resume");
+  h.speechGate.busy = false;
+  h.feed(said(500));
+  await settle();
+  assert.deepEqual(h.log, ["hold"]);
 });
 
 test("a transcription past its timeout is aborted and its utterance rejected", async () => {

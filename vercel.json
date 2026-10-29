@@ -2,13 +2,13 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci --no-audit --no-fund",
-  "buildCommand": "npm run build:web",
+  "buildCommand": "test -s apps/web/public/seed.json && npm run build:web",
   "outputDirectory": "apps/web/dist",
   "functions": {
     "api/index.py": {
       "maxDuration": 300,
       "includeFiles": "backend/moolai_backend/**",
-      "excludeFiles": "{apps/**,packages/**,native/**,scripts/**,experiments/**,docs/**,backend/tests/**,backend/Dockerfile,**/.env,**/.env.*,runtime.env,.data/**,**/*.sqlite*,obsidian-notes/**}"
+      "excludeFiles": "{apps/**,packages/**,native/**,scripts/**,experiments/**,docs/**,backend/tests/**,backend/Dockerfile,**/.env,**/.env.*,runtime.env,.data/**,**/*.sqlite*,obsidian-notes/**,.claude/**}"
     }
   },
   "rewrites": [{ "source": "/api/(.*)", "destination": "/api?__path=$1" }],
