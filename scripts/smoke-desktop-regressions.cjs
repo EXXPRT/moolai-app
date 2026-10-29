@@ -24,6 +24,8 @@ app.whenReady().then(async()=>{
   await evaluate('window.fixture.releaseFetch()');await pause(100);
   assert.equal(await evaluate("document.querySelector('.note strong').textContent"),'Newer event title');
   await until("!!document.querySelector('.brain-graph')?._cyreg?.cy");
+  // Opening the note panned the graph once, to bring it out from under the inspector: let that pan finish.
+  for(let n=0;n<25&&await evaluate("document.querySelector('.brain-graph')._cyreg.cy.animated()");n++)await pause(40);
   const graphBefore=await evaluate("(()=>{const cy=document.querySelector('.brain-graph')._cyreg.cy;cy.getElementById('fixture-note').position({x:73,y:119});return {position:cy.getElementById('fixture-note').position(),pan:cy.pan(),zoom:cy.zoom()};})()");
   await evaluate('window.fixture.addNote()');
   await until("document.querySelector('.brain-graph')._cyreg.cy.nodes().length===2");

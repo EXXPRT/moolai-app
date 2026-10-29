@@ -11,6 +11,9 @@ export default function BrainGraph({ record, records, onSelect, overview = false
 }) {
   const container = useRef<HTMLDivElement>(null);
   const graph = useRef<cytoscape.Core | null>(null);
+  // The last place of each note that left the graph, such as one a search hid, for when it returns.
+  const places = useRef(new Map<string, cytoscape.Position>());
+  const revealed = useRef<string | undefined>(undefined);
   const select = useRef(onSelect);
   select.current = onSelect;
   const available = records.filter(item => item.kind !== "session" && !item.sourceOnly && !item.archived && !item.suppressed);
@@ -31,7 +34,8 @@ export default function BrainGraph({ record, records, onSelect, overview = false
     const cy = graph.current;
     if (!cy) return;
     cy.stop();
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    // A hidden page draws no frames, so an animation would wait and play whenever the page is next shown.
+    if (document.hidden || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       if (viewport.fit) cy.fit(viewport.fit.eles, viewport.fit.padding);
       else { if (viewport.zoom !== undefined) cy.zoom(viewport.zoom); if (viewport.pan) cy.pan(viewport.pan); }
     } else cy.animate(viewport, { duration: 220, easing: "ease-out" });
@@ -109,7 +113,9 @@ export default function BrainGraph({ record, records, onSelect, overview = false
     const desired = new Set(elements.map(element => element.data.id!));
     const incoming: cytoscape.NodeSingular[] = [];
     cy.batch(() => {
-      cy.elements().filter(element => !desired.has(element.id())).remove();
+      const leaving = cy.elements().filter(element => !desired.has(element.id()));
+      leaving.nodes().forEach(node => { places.current.set(node.id(), { ...node.position() }); });
+      leaving.remove();
       for (const item of elements) {
         const existing = cy.getElementById(item.data.id!);
         if (existing.length) existing.data(item.data);
@@ -119,19 +125,32 @@ export default function BrainGraph({ record, records, onSelect, overview = false
         }
       }
     });
-    if (before && incoming.length) {
+    // A search typed letter by letter matches nothing until a word is whole, so notes can return to an empty graph too.
+    const returning = incoming.filter(node => places.current.has(node.id()));
+    if ((before || returning.length) && incoming.length) {
       const incomingIds = new Set(incoming.map(node => node.id()));
       // Measured afresh (useCache, which Cytoscape's types omit): a cached read would keep the old size of a label changed
       // in this update, and draw it squashed.
       const occupied = cy.nodes().filter(node => !incomingIds.has(node.id()))
         .map(node => node.boundingBox({ includeLabels: true, useCache: false } as cytoscape.BoundingBoxOptions));
+      const free = (box: cytoscape.BoundingBox12) =>
+        !occupied.some(other => box.x1 < other.x2 + 20 && box.x2 > other.x1 - 20 && box.y1 < other.y2 + 20 && box.y2 > other.y1 - 20);
+      // Returning notes take back their own places, where still free, before any note is placed anew.
+      const restored = new Set<string>();
+      for (const node of returning) {
+        node.position({ ...places.current.get(node.id())! });
+        const box = node.boundingBox();
+        if (free(box)) { occupied.push(box); restored.add(node.id()); }
+      }
       for (const node of incoming) {
+        places.current.delete(node.id());
+        if (restored.has(node.id())) continue;
         // Search outward for a free label-sized space; never move existing notes.
         for (let attempt = 0; attempt <= occupied.length * 16 + 32; attempt++) {
           const distance = 70 * Math.sqrt(attempt), angle = attempt * 2.4;
           node.position({ x: center.x + Math.cos(angle) * distance, y: center.y + Math.sin(angle) * distance });
           const box = node.boundingBox();
-          if (!occupied.some(other => box.x1 < other.x2 + 20 && box.x2 > other.x1 - 20 && box.y1 < other.y2 + 20 && box.y2 > other.y1 - 20)) break;
+          if (free(box)) break;
           if (attempt === occupied.length * 16 + 32) {
             const edge = Math.max(...occupied.map(other => other.x2));
             node.position({ x: edge + box.w / 2 + 32, y: center.y });
@@ -140,7 +159,7 @@ export default function BrainGraph({ record, records, onSelect, overview = false
         occupied.push(node.boundingBox());
       }
     }
-    if (!before && count) {
+    if (!before && !returning.length && count) {
       // A sparse brain needs balanced space for titles, not force-layout component packing.
       // Node labels stay readable as larger brains grow beyond the current viewport.
       const sparse = cy.edges().length < count / 2;
@@ -159,12 +178,34 @@ export default function BrainGraph({ record, records, onSelect, overview = false
       }
       cy.zoom(Math.max(.9, Math.min(1, cy.zoom()))); cy.center();
     }
-    // Existing positions are part of the user's workspace. New notes are placed
-    // around the viewport above; label and link updates must not rearrange them.
+    // Existing positions are part of the user's workspace. Returning notes go back to their places and new notes are
+    // placed around the viewport above; label and link updates must not rearrange them.
   }, [signature]);
   useEffect(() => {
-    graph.current?.nodes().removeClass("selected");
-    if (record) graph.current?.getElementById(record.id).addClass("selected");
+    const cy = graph.current, node = record && cy?.getElementById(record.id), element = container.current;
+    cy?.nodes().removeClass("selected");
+    if (!cy || !element || !node?.length) { revealed.current = undefined; return; }
+    node.addClass("selected");
+    // Once per opened note, or when its node first appears: later updates leave the user's own panning alone.
+    if (revealed.current === node.id()) return;
+    revealed.current = node.id();
+    let frame = 0;
+    const reveal = () => {
+      // animateViewport stops a running animation where it is, so a zoom, Fit or pan under way finishes first.
+      if (cy.animated()) { frame = requestAnimationFrame(reveal); return; }
+      frame = 0;
+      // The note inspector covers the graph's right side. Its offset, unlike its bounding rect, leaves out its slide-in.
+      const view = element.getBoundingClientRect(), inspector = document.querySelector<HTMLElement>(".brain-document");
+      const width = Math.min(view.width, inspector?.offsetParent
+        ? inspector.offsetParent.getBoundingClientRect().left + inspector.offsetLeft - view.left : view.width);
+      const box = node.renderedBoundingBox({ includeLabels: true, useCache: false } as cytoscape.BoundingBoxOptions), pan = cy.pan();
+      // Pan, without zooming, to centre a note the inspector hides, or one out of view, in the part beside it.
+      if (width > 0 && (box.x1 < 0 || box.y1 < 0 || box.x2 > width || box.y2 > view.height))
+        animateViewport({ pan: { x: pan.x + (width - box.x1 - box.x2) / 2, y: pan.y + (view.height - box.y1 - box.y2) / 2 } });
+    };
+    reveal();
+    // Cancel a reveal still waiting; if only the graph changed, the rerun for the same note starts it again.
+    return () => { if (frame) { cancelAnimationFrame(frame); revealed.current = undefined; } };
   }, [record?.id, signature]);
 
   return <div className="graph-panel">

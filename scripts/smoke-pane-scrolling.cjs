@@ -75,7 +75,8 @@ app.whenReady().then(async()=>{
     const after=await run(`document.querySelector('.transcript').scrollTop`);
     console.log(JSON.stringify({check:'table-to-chat-wheel',before,after}));
     assert.ok(after>before+300,'Vertical wheel over a table must continue scrolling chat');
-    const graph=await run(`(()=>{const cy=document.querySelector('.brain-graph')._cyreg.cy;return{pan:cy.pan(),zoom:cy.zoom()};})()`);
+    const view=()=>run(`(()=>{const cy=document.querySelector('.brain-graph')._cyreg.cy;return{pan:cy.pan(),zoom:cy.zoom()};})()`);
+    let graph=await view();
     async function position(pane,target){
       await run(`(()=>{const p=document.querySelector(${JSON.stringify(pane)}),t=document.querySelector(${JSON.stringify(target)});p.scrollTop+=t.getBoundingClientRect().top-p.getBoundingClientRect().top-35;})()`);
       await delay(80);
@@ -87,7 +88,11 @@ app.whenReady().then(async()=>{
       assert.ok(await run(`document.querySelector(${JSON.stringify(pane)}).scrollTop`) > start+400,`${pane} continues over ${target} with live updates`);
     }
     await moves('.transcript','.transcript pre',true);
+    assert.deepEqual(await view(),graph,'Chat wheel input never zooms or pans the graph');
     await run(`Array.from(document.querySelectorAll('.note')).find(e=>e.textContent.includes('Scroll note 0')).click()`);await delay(200);
+    // Opening a note pans the graph once, to bring the note out from under the inspector.
+    for(let i=0;i<20 && await run(`document.querySelector('.brain-graph')._cyreg.cy.animated()`);i++)await delay(50);
+    graph=await view();
     await moves('.inspector-content','.inspector-content .markdown-table',true);
     await moves('.inspector-content','.inspector-content pre',true);
     await run(`document.querySelector('#note-tab-recorded').click()`);await delay(80);
@@ -95,7 +100,7 @@ app.whenReady().then(async()=>{
     await run(`document.querySelector('#note-tab-connections').click()`);await delay(80);
     await wheel('.inspector-content',-60,0,15,true);
     assert.ok(await run(`document.querySelector('.inspector-content').scrollTop>250`),'Connections view scrolls under state updates');
-    assert.deepEqual(await run(`(()=>{const cy=document.querySelector('.brain-graph')._cyreg.cy;return{pan:cy.pan(),zoom:cy.zoom()};})()`),graph,'Pane wheel input never zooms or pans the graph');
+    assert.deepEqual(await view(),graph,'Pane wheel input never zooms or pans the graph');
     assert.equal(await run(`document.scrollingElement.scrollTop`),0,'Only the owning pane scrolls');
 
     const state=await run(`window.moolai.request('GET','/api/state')`);
