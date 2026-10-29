@@ -112,6 +112,8 @@ export interface WebSpeechPort extends SpeechGate {
   /** Pauses audible playback; true only when audio really was playing. */
   pause(): boolean;
   readonly heldPaused: boolean;
+  /** The host merges this into its status; the speech port never emits `voice` events itself. */
+  onAudibleChange(listener: (audible: boolean) => void): () => void;
   close(): void;
 }
 
