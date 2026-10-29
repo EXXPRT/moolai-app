@@ -10,6 +10,17 @@ A stateless, voice-first version of Moolai that runs in the browser:
 - Speech uses OpenAI (speech-to-text and Moo's voice) instead of on-device Whisper/Qwen and Kokoro.
 - Listening is half-duplex: Moo doesn't listen while it speaks, and **Stop speech** interrupts it.
 - Screen help reads a sample worksheet instead of your screen.
+- Nothing is saved: a refresh starts again from the two sample sessions.
+- Moo speaks only while the microphone is on, so a visitor who starts with typing gets answers on screen only.
+
+## The page
+
+`apps/web/src/main.ts` boots in this order:
+1. **Capability check.** The Agent and its host need `AbortSignal.any`, `crypto.subtle`, `crypto.randomUUID` and regex lookbehind. Without them the page asks for a recent Chrome, Edge, Firefox or Safari 17.4+. Everything that needs them loads only after the check, so an older browser still gets that message.
+2. **Intro.** It loads `GET /api/demo/config` and the sample sessions (`public/seed.json`), then says what the demo sends where. When live, it shows the Turnstile check, then **Start with voice** (if voice is available) and **Start with typing**. When not live, it gives the reason and offers **Explore in fixture mode**: simulated replies, typing only, and nothing the visitor types leaves the page.
+3. **Start.** In the click, a live page creates the AudioContext and unlocks its one audio element, then opens a session with the Turnstile token. The page loads the sample sessions into an in-memory Brain, with their times moved so that the later session started at 16:00 yesterday in the visitor's time zone. A live page then installs the fetch wrapper. Last, the page starts the host, the bridge (`window.moolai`) and a study session, imports the desktop renderer (`apps/desktop/src/main.tsx`) and, for **Start with voice**, turns the microphone on.
+
+Above the renderer, a demo bar names the models and opens the sample worksheet and a **Try saying** card. Each user turn shows how Jev routed it, for example **Saved as a thought**. Limits show as lasting banners. Once voice can't work, the microphone button is hidden, because the renderer would describe any voice failure as a microphone problem.
 
 ## HTTP contract
 
@@ -18,8 +29,8 @@ All paths are same-origin. Every error is JSON `{"detail": "<code>"}`.
 | Method and path | Request | Success |
 | --- | --- | --- |
 | `GET /api/health` | — | `{"status":"ok","service":"moolai-demo-gateway"}` |
-| `GET /api/demo/config` | — | `{live, voice, reason?, turnstileSiteKey, budget: "ok"\|"low"\|"exhausted"}` |
-| `GET /api/demo/selftest` | — | `{ok, checks: {name: boolean}, pathMode}` (booleans only) |
+| `GET /api/demo/config` | — | `{live, voice, reason?, turnstileSiteKey, budget: "ok"\|"low"\|"exhausted"}`; `reason` comes only when not live |
+| `GET /api/demo/selftest` | — | `{ok, checks: {configured, counters, reserveSettle, inner, voice}, pathMode: "original"\|"rewrite"}` (booleans only) |
 | `POST /api/demo/session` | `{"turnstileToken": string}` | `{token, expiresAt}`; the token lasts 2 h |
 | `POST /api/v1/{route,tag,connect,summarize,consolidate,respond,vision,search,extract}` | the backend's JSON body; `Authorization: Bearer <session token>` | the backend's JSON response |
 | `POST /api/v1/transcribe` | raw `audio/wav` (16 kHz mono PCM16, 0.2–34 s, ≤ 1.1 MB); header `X-Moolai-Prompt` = URI-encoded prompt (≤ 400 characters); `Authorization` | `{"text": string}` |
@@ -37,14 +48,18 @@ All paths are same-origin. Every error is JSON `{"detail": "<code>"}`.
 | 415 | `unsupported_media_type` |
 | 422 | `invalid_json`, `invalid_audio` |
 | 429 | `session_limit`, `session_rate_limited` |
-| 502 / 504 | `provider_failed` / `provider_timeout` (speech endpoints) |
+| 500 | `internal_error` |
+| 502 | `provider_failed` (speech, or a backend call that ended without a response) |
 | 503 | `demo_budget_exhausted`, `demo_unavailable`, `voice_unavailable` |
+| 504 | `provider_timeout` (speech) |
 
 Backend errors from the forwarded `/api/v1/*` routes keep the backend's own `{"detail": ...}` and status.
 
+`reason` in config is one of `disabled`, `off`, `ended`, `budget_exhausted`, `counters_unavailable`, `not_production`, or a configuration problem such as `provider_keys_missing` or `counters_unconfigured`. The page shows it in plain words; when it can't reach config at all it uses `unreachable`.
+
 **Browser rules:**
 - `BackendProviders` builds `new URL("/v1/…", origin)`. The page's fetch wrapper rewrites same-origin `/v1/*` to `/api/v1/*`, swaps in the session token, and answers `/health` itself.
-- On 401, 429 or 503 the page stops voice once and shows a lasting banner. It never retries a model call by itself.
+- These refusals end live calls for the page: 401 `invalid_session` or `session_expired`, 429 `session_limit` or `session_rate_limited`, and 503 `demo_budget_exhausted`, `demo_unavailable` or `voice_unavailable`. The page stops voice for the rest of the session and shows a lasting banner. Except for `voice_unavailable`, it also reports processing as unavailable. It never retries a model call by itself, and it never renews a session silently.
 
 **Caching:** every response is `Cache-Control: no-store`, except config (`s-maxage=15`) and selftest (`s-maxage=60`).
 
@@ -65,7 +80,16 @@ Backend errors from the forwarded `/api/v1/*` routes keep the backend's own `{"d
   | `DEMO_SESSION_BUDGET_USD` | 1.5 | 3 |
 
   Each session also has per-endpoint call quotas.
-- **Not live** when any check fails: a missing key, Turnstile test keys, a short session secret, a non-production deployment, a cap above its ceiling, no Upstash, or past `DEMO_END_AT` (default `2026-12-16T00:00:00Z`). The page then offers fixture mode, with simulated responses and typing only.
+- **Not live** when any check fails:
+  - `DEMO_ENABLED` isn't `on`;
+  - a Nebius, TypeSafe or Tavily key is missing, or a Turnstile key is missing;
+  - the session secret is under 32 bytes;
+  - a cap is unparsable or above its ceiling;
+  - there is no allowed hostname, or no Upstash;
+  - it is past `DEMO_END_AT` (default `2026-12-16T00:00:00Z`);
+  - on Vercel, the deployment isn't production, or a Turnstile key is one of Cloudflare's test keys.
+
+  The page then offers fixture mode, with simulated responses and typing only. Without `OPENAI_API_KEY` the demo is live but typing only.
 - **Kill switches:**
   - in the Upstash console, `SET moolai:demo:production:off 1`, which is instant;
   - or set `DEMO_ENABLED=off` and redeploy.
@@ -74,9 +98,9 @@ Backend errors from the forwarded `/api/v1/*` routes keep the backend's own `{"d
 
 ## Deploy on Vercel (about 25 minutes)
 
-Deploy only through Vercel's Git integration. **Never run the Vercel CLI from a working copy that has `backend/.env` or `.data/`**: the CLI uploads files that Git ignores.
+The repository must include `apps/web/public/seed.json` (see [Run it locally](#run-it-locally)). Deploy only through Vercel's Git integration. **Never run the Vercel CLI from a working copy that has `backend/.env` or `.data/`**: the CLI uploads files that Git ignores.
 
-1. **Import the project.** At vercel.com, choose **Add New → Project** and import the public GitHub repository. Leave the build settings alone; `vercel.json` sets them. The first deployment reports "live demo not configured", which is expected.
+1. **Import the project.** At vercel.com, choose **Add New → Project** and import the public GitHub repository. Leave the build settings alone; `vercel.json` sets them. The first deployment isn't live yet, which is expected: `/api/demo/config` reports `live: false`, and the page offers fixture mode.
 2. **Counters.** Choose **Storage → Marketplace → Upstash for Redis**. Create a free database in `us-east-1` and connect it to the project, all environments, with no custom prefix. This adds `KV_REST_API_URL` and `KV_REST_API_TOKEN`.
 3. **Bot check.** In the Cloudflare dashboard, choose **Turnstile → Add widget**, mode **Managed**, and set the hostname to your production domain, for example `moolai-app.vercel.app`. Copy the site key and the secret key.
 4. **Environment variables.** Under **Settings → Environment Variables**, set these for the **Production** environment only:
@@ -99,14 +123,19 @@ Deploy only through Vercel's Git integration. **Never run the Vercel CLI from a 
 
 ## Run it locally
 
+The gateway needs the backend's virtual environment from [backend setup](../backend/README.md#start-locally), and the provider keys in `backend/.env` (`OPENAI_API_KEY` too, for voice).
+
 ```sh
 npm ci
-npm run build:web
-npm run demo:api      # gateway on 127.0.0.1:8787, keys from backend/.env, Turnstile test keys, in-memory counters, US$2 caps
+npm run demo:api      # gateway on 127.0.0.1:8787; Turnstile test keys, in-memory counters, US$2 total and daily caps, US$1 per session
 npm run dev:web       # page on http://127.0.0.1:5174, /api proxied to the gateway
 ```
 
-The local gateway refuses to start on Vercel. `?debug=1` shows the microphone level and onsets.
+`npm run build:web` then `npm run preview:web` serves the built page on http://127.0.0.1:4174 with the same proxy. The local gateway refuses to start on Vercel.
+
+The page needs `apps/web/public/seed.json`, the two sample sessions; without it, the intro says the sample notes are missing. `apps/web/scripts/generate-seed.ts` writes it by speaking both sessions to the real Agent against a running backend. That run makes paid calls (about US$0.50), so run it only on purpose.
+
+`?debug=1` shows the voice pipeline's last onset, its queue and the level it measured. On `localhost` or `127.0.0.1` only, `?e2e=1` replaces the microphone with `window.__moolaiE2E.feed(samples, sampleRate)` for automated voice tests.
 
 ## Smoke test (5 minutes)
 

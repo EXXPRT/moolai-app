@@ -42,7 +42,9 @@ Send = Callable[[dict[str, Any]], Awaitable[None]]
 ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
 GUARDED = ('route', 'tag', 'connect', 'summarize', 'consolidate', 'respond', 'vision', 'search', 'extract')
-BODY_CAPS = {'route': 128_000, 'tag': 64_000, 'connect': 160_000, 'summarize': 40_000, 'consolidate': 40_000,
+# The Agent lets a J1 route state reach 178,000 JSON characters (ROUTE_STATE_LIMIT in packages/agent/src/index.ts),
+# and a tag call carries a whole note with its source. Inside, the backend's 180,000-character state bound still applies.
+BODY_CAPS = {'route': 220_000, 'tag': 128_000, 'connect': 160_000, 'summarize': 40_000, 'consolidate': 40_000,
              'respond': 200_000, 'vision': 128_000, 'search': 4_000, 'extract': 8_000, 'transcribe': 1_100_000,
              'speech': 4_000, 'session': 4_000}
 QUOTAS = {'route': 150, 'tag': 60, 'connect': 60, 'consolidate': 30, 'summarize': 40, 'respond': 60, 'vision': 4,

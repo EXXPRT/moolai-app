@@ -41,3 +41,6 @@ obsidian-notes/
 .vercel/
 .wrangler/
 .dev.vars
+
+# Agent worktrees made for parallel work.
+.claude/worktrees/

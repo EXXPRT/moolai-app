@@ -26,8 +26,17 @@ Moolai is entered in the **Best Apps and Agents** track.
 | Whisper large-v3-turbo | OpenAI | Speech recognition (default) | Your Mac, whisper.cpp | `asr-config.json` |
 | Qwen3-ASR 1.7B | Qwen (Alibaba) | Optional speech recognition with live captions | Your Mac, MLX | [Qwen option](docs/whisper-integration.md#optional-local-qwen-trial) |
 | Kokoro (`af_heart`) | hexgrad | Moo's voice | Your Mac, MLX | `tts-config.json` |
+| `gpt-transcribe` in, `gpt-4o-mini-tts` out | OpenAI | Speech recognition and Moo's voice, **web demo only** | OpenAI API, through the web demo's gateway | `OPENAI_TRANSCRIBE_MODEL`, `OPENAI_TTS_MODEL` |
 
 [Tavily](https://tavily.com) supplies web search and page extraction. Model IDs are pinned in `backend/moolai_backend/settings.py`; set the override variables in `backend/.env` if an ID changes.
+
+### Try it in your browser
+
+A live web version runs the same Agent in the browser, against the same backend models, with two sample study sessions already in its Brain. Talk or type to Moo: it saves what you say as notes, connects them to the sample sessions and answers. See the [web demo guide](docs/web-demo.md). It differs from the desktop app in four ways:
+- speech uses OpenAI instead of on-device models;
+- listening is half-duplex, so press **Stop speech** to interrupt Moo;
+- screen help reads a sample worksheet instead of your screen;
+- nothing is saved, so a refresh starts over.
 
 ### Try it
 

@@ -586,6 +586,21 @@ async def test_jev_price_follows_its_variable():
     assert demo.spend() == 2_000
 
 
+async def test_route_and_tag_caps_admit_the_largest_route_the_agent_sends():
+    # The Agent lets a J1 route state reach 178,000 JSON characters (ROUTE_STATE_LIMIT in packages/agent/src/index.ts);
+    # RouteInput allows 150,000 of them as recent context and the rest as the utterance.
+    context = 'x' * 150_000
+    filler = 178_000 - len(json.dumps({**ROUTE, 'recentContext': context, 'text': ''}, separators=(',', ':')))
+    largest = {**ROUTE, 'recentContext': context, 'text': 'y' * filler}
+    async with Demo() as demo:
+        routed = await demo.call('route', largest)
+        route_over = await demo.call('route', {**ROUTE, 'recentContext': 'x' * 220_000})
+        tag_over = await demo.call('tag', {'record': {'id': 'x' * 128_000}, 'topicCandidates': []})
+    assert routed.status_code == 200 and len(routed.request.content) > 128_000
+    assert len(demo.upstream.to('api.typesafe.ai')) == 1
+    assert [(r.status_code, r.json()) for r in (route_over, tag_over)] == [(413, {'detail': 'body_too_large'})] * 2
+
+
 async def test_an_overrun_raises_the_counters_past_the_reservation(record):
     upstream = Upstream(lambda request, payload: completion(payload['model'], SUMMARY, usage=(200_000, 8_000)))
     async with Demo(upstream=upstream) as demo:

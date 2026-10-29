@@ -1,6 +1,6 @@
 import type { Segment } from "../../../../packages/contracts/src/index.js";
 import { safeEnd } from "../../../../packages/contracts/src/records.js";
-import type { SpeechGate, VoiceController, VoiceControllerOptions } from "../types.js";
+import type { VoiceController, VoiceControllerOptions } from "../types.js";
 import { Endpointer, WEB_ENDPOINTER, type EndpointerEvent } from "./endpointer.js";
 import { Downsampler, encodeWav, hintEcho, repetitiveOutput } from "./pcm.js";
 
@@ -150,7 +150,7 @@ class WebVoiceController implements VoiceController {
       .catch(error => this.p.onError("route", error));
   }
   private hold() {
-    const paused = (this.p.speech as SpeechGate & { readonly heldPaused?: boolean }).heldPaused === true;
+    const paused = this.p.speech.heldPaused === true;
     try { void this.p.sink.speechStarted({ paused }).catch(error => this.p.onError("route", error)); }
     catch (error) { this.p.onError("route", error); }
   }

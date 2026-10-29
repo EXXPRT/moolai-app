@@ -1,0 +1,91 @@
+/* The web demo's page around the desktop renderer. It keeps the renderer's palette (apps/desktop/src/style.css :root),
+   and overrides the renderer only where body.web-demo outranks it. */
+
+/* The demo bar and banners sit above the renderer, whose .shell would otherwise take the whole 100dvh. */
+body.web-demo { display: flex; flex-direction: column; }
+body.web-demo #demo { flex: none; position: relative; z-index: 10; }
+body.web-demo #root { flex: 1 1 0; min-height: 0; height: auto; display: flex; flex-direction: column; }
+body.web-demo .shell { flex: 1 1 0; min-height: 0; height: auto; width: 100%; }
+body.web-demo.demo-intro #demo { flex: 1 1 0; min-height: 0; overflow-y: auto; }
+body.web-demo.demo-intro #root,
+body.web-demo.demo-intro .demo-bar,
+body.web-demo.demo-intro .demo-banners,
+body.web-demo.demo-intro .demo-panel { display: none; }
+
+/* What the demo adds to the renderer: each user turn's intent, and no microphone button once voice can't work. */
+body.web-demo .utterance .intent-chip {
+  display: inline-block; margin-left: 8px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--surface); color: var(--accent); font-size: 10px; font-style: normal; font-weight: 600;
+  letter-spacing: .2px; line-height: 1.6; vertical-align: 1px;
+}
+body.voice-off .mic-toggle { display: none; }
+
+/* Intro, and the whole-page messages. */
+.demo-intro { min-height: 100%; display: grid; place-items: center; padding: 32px 16px; }
+.demo-card {
+  width: min(620px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: 18px;
+  padding: 28px 30px; box-shadow: 0 8px 30px #35462c12;
+}
+.demo-card .brand { margin-bottom: 20px; }
+.demo-lead { font-size: 16px; line-height: 1.65; margin: 0 0 14px; }
+.demo-consent, .demo-reason { font-size: 14px; line-height: 1.6; background: var(--sage); border-radius: 11px; padding: 12px 14px; margin: 0 0 10px; }
+/* Room for the Turnstile widget before it renders. */
+.demo-check { min-height: 65px; margin: 16px 0 4px; }
+.demo-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 14px; }
+.demo-status { min-height: 1.5em; font-size: 13px; line-height: 1.5; color: var(--muted); margin: 12px 0 0; }
+.demo-status.is-error { color: #824e35; }
+.demo-message { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 32px 16px; background: var(--paper); overflow-y: auto; }
+
+/* The demo bar and its banners. */
+.demo-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 7px 28px;
+  background: var(--sage); border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.4;
+}
+.demo-mode { white-space: nowrap; }
+.demo-models { flex: 1 1 200px; min-width: 0; display: flex; gap: 6px; margin: 0; padding: 0; list-style: none; overflow-x: auto; scrollbar-width: none; }
+.demo-models li { flex: none; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 11px; white-space: nowrap; }
+.demo-links { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: none; }
+.demo-links > button, .demo-links > a {
+  padding: 4px 9px; border: 1px solid transparent; border-radius: 8px; background: transparent;
+  color: var(--accent); font-size: 12px; text-decoration: none;
+}
+.demo-links > button:hover, .demo-links > a:hover { background: #e0e8d7; }
+.demo-links > button[aria-expanded="true"] { background: var(--surface); border-color: var(--line); }
+.demo-links > a:focus-visible { outline: 2px solid #6c8b5f; outline-offset: 3px; }
+.demo-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 28px;
+  background: #f6e9de; color: #824e35; font-size: 13px; line-height: 1.45;
+}
+.demo-banner button { flex: none; color: inherit; }
+
+/* The worksheet drawer and the "Try saying" card. */
+.demo-panel {
+  display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 16px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 17px; box-shadow: -9px 8px 34px #33482a1f; overflow-y: auto;
+}
+.demo-panel[hidden] { display: none; }
+.demo-panel > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.demo-panel > header strong { font-size: 14px; font-weight: 600; }
+.demo-panel p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.demo-drawer { position: fixed; z-index: 20; top: 12px; right: 12px; bottom: 12px; width: min(560px, calc(100vw - 24px)); }
+.demo-drawer img { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 10px; }
+.demo-try { position: absolute; z-index: 19; top: calc(100% + 8px); right: 16px; width: min(390px, calc(100vw - 32px)); max-height: calc(100dvh - 90px); }
+.demo-try ol { margin: 0; padding-left: 20px; display: grid; gap: 10px; font-size: 13px; line-height: 1.5; }
+.demo-try small { display: block; margin-top: 2px; font-size: 11px; }
+
+/* Under 900 px the renderer's two panes don't fit; the notice says so once. */
+.demo-narrow { display: none; }
+@media (max-width: 899px) {
+  .demo-narrow { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 16px; background: #2c3c3259; }
+  .demo-narrow .demo-card { width: min(420px, 100%); padding: 22px; }
+  .demo-narrow p { margin: 0 0 16px; font-size: 15px; line-height: 1.6; }
+}
+@media (max-width: 1050px) {
+  .demo-bar, .demo-banner { padding-left: 22px; padding-right: 22px; }
+}
+
+/* ?debug=1 */
+.demo-debug {
+  position: fixed; left: 12px; bottom: 12px; z-index: 30; padding: 5px 9px; border-radius: 8px; pointer-events: none;
+  background: #2c3c32e6; color: #fffef9; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+}

@@ -13,9 +13,11 @@ The Agent saves source text before deciding what to do with it. A Brain implemen
 | `packages/local-files` | Read-only local-folder search and reads for granted folders (off in the submitted build). |
 | `apps/runtime` | Independently runnable Node host and authenticated loopback HTTP/SSE API. It wires the implementations together through `createAgentHost` in `packages/agent-host`. |
 | `apps/desktop` | Electron/React chat, persistent graph and a three-tab note reader. It communicates with the runtime rather than owning the Agent. |
+| `apps/web` | The [web demo](web-demo.md): the Agent runs in the browser tab with an in-memory Brain seeded with two sample sessions, and the desktop renderer talks to it through an in-page `window.moolai` that ports the runtime's routes. Speech goes through the demo gateway to OpenAI. Nothing is saved. |
 | `native` | Swift microphone capture, the local ASR protocol, PCM playback, explicit Apple speech fallback and requested screen capture. A host-owned pinned Kokoro worker supplies default speech. |
 | `scripts` speech adapter | Pinned resident whisper.cpp runtime and a bounded local PCM/utterance bridge; model choice comes from `asr-config.json`. |
 | `backend` | One FastAPI service for Jev, Nebius and Tavily calls plus accepted Postgres snapshots. Provider credentials stay in this process. |
+| Demo gateway (`backend/moolai_backend/demo_*.py`, `api/index.py`) | The web demo's Vercel function: it wraps the unchanged backend app, checks Turnstile-backed session tokens, meters every provider call against spending caps kept in Upstash, and adds OpenAI transcription and speech. It stores nothing a visitor says, and record acceptance is not exposed. |
 
 There is no plugin registry or service per Jev gate. Replacing the Brain means supplying another `BrainPort` and changing host wiring. The standalone runtime and native companion remain usable without the custom desktop UI.
 

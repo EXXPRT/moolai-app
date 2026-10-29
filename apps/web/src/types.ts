@@ -20,8 +20,9 @@ export interface MoolaiApi {
 /** `{"detail": code}` from the demo gateway. */
 export type DemoErrorCode =
   | "invalid_session" | "session_expired" | "turnstile_failed" | "extract_not_allowed" | "image_not_allowed"
-  | "not_found" | "body_too_large" | "unsupported_media_type" | "invalid_json" | "invalid_audio"
-  | "session_limit" | "session_rate_limited" | "demo_budget_exhausted" | "demo_unavailable" | "voice_unavailable";
+  | "not_found" | "method_not_allowed" | "body_too_large" | "unsupported_media_type" | "invalid_json" | "invalid_audio"
+  | "session_limit" | "session_rate_limited" | "demo_budget_exhausted" | "demo_unavailable" | "voice_unavailable"
+  | "provider_failed" | "provider_timeout" | "internal_error";
 
 /** GET /api/demo/config */
 export interface DemoConfig {
@@ -67,7 +68,8 @@ export interface SpeechGate { readonly audible: boolean; readonly quietSince: nu
 export interface VoiceControllerOptions {
   sink: VoiceSink;
   transcribe: Transcriber;
-  speech: SpeechGate;
+  /** `heldPaused`, where the port has it, keeps a paused answer paused when the controller takes the hold again. */
+  speech: SpeechGate & { readonly heldPaused?: boolean };
   id(): string;
   now(): string;
   /** Milliseconds, monotonic. Defaults to performance.now. */

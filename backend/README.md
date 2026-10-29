@@ -30,6 +30,10 @@ cd backend
 
 Exact OCR uses `NEBIUS_OCR_MODEL=zai-org/GLM-5.3-Flash` and `NEBIUS_OCR_REASONING_EFFORT=low`. General visual scene analysis retains `NEBIUS_VISION_MODEL=openbmb/MiniCPM-V-4_5`. Both keep the 1,600-token output cap; model availability is checked independently and an unavailable OCR model never falls back to the scene model. Existing installations can add these OCR settings to their ignored `backend/.env`, then recreate the backend. `/v1/models` reports both roles.
 
+## Web demo gateway
+
+`demo_gateway.py` wraps this app, unchanged, for the browser demo, which Vercel serves through `api/index.py`. It exposes only the `/api/v1/*` routes the in-browser Agent calls, and checks each call's Turnstile-backed session token. Each call reserves its worst-case cost against spending caps kept in Upstash before it is forwarded, then settles to what was actually sent to a provider. `demo_audio.py` adds OpenAI transcription and speech. Nothing a visitor says is stored, and `/v1/records/accept` is not exposed. `.venv/bin/python -m moolai_backend.demo_local`, run from `backend/` (or `npm run demo:api` from the repository root), serves it on 127.0.0.1:8787, by default with Cloudflare's test Turnstile keys and in-memory counters. The `tests/test_demo_*.py` suites run offline with the rest. The HTTP contract, the caps and the deploy steps are in the [web demo guide](../docs/web-demo.md).
+
 ## Small API boundary
 
 JSON field names match `packages/contracts/src/index.ts`. All requests and model outputs are validated. The response adapter can decode a singly JSON-encoded `spokenOutline` into its object form, with a content-free diagnostic; it cannot rewrite the answer or invent missing fields. Invalid output still fails validation. A missing spoken summary can use the entire short plain-prose answer (at most 1,200 characters and 120 words). This preserves every qualification without another provider call; structured/long answers are never clipped into a substitute summary.
