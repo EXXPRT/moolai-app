@@ -1,0 +1,1578 @@
+{
+  "version": 1,
+  "generatedAt": "2026-10-29T02:19:31.289Z",
+  "records": [
+    {
+      "id": "cd5bbbff-2a6f-43a4-916b-fc2f9a4807ac",
+      "kind": "session",
+      "createdAt": "2026-10-28T02:16:33.474Z",
+      "revision": 18,
+      "sourceRevision": 18,
+      "updatedAt": "2026-10-28T02:17:46.198Z",
+      "segments": [
+        {
+          "id": "2cf9920c-2d32-4e0c-b073-2d893c736406",
+          "turnId": "6529565d-a5ba-4576-8a2e-aa8ff81c8505",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Chemistry revision. Concentration is the moles of solute divided by the volume of the solution in litres, so the unit is mol per litre.",
+          "final": true,
+          "createdAt": "2026-10-28T02:16:33.474Z"
+        },
+        {
+          "id": "c17ddd7f-dc55-449c-a534-31e2f816f5d9",
+          "turnId": "492fbf11-d9a7-4b95-99f8-8b2bddc85bcc",
+          "revision": 1,
+          "speaker": "user",
+          "text": "So 0.25 moles of sodium chloride made up to 500 millilitres gives 0.5 mol per litre, because 500 millilitres is half a litre.",
+          "final": true,
+          "createdAt": "2026-10-28T02:16:33.858Z"
+        },
+        {
+          "id": "3243f5e9-a972-4228-b41e-b31a6fcdd7e1",
+          "turnId": "e7fe644b-71f7-4dc2-8d0b-5e2600a71ce3",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Diluting a solution means adding more solvent. The moles of solute stay the same, only the volume goes up.",
+          "final": true,
+          "createdAt": "2026-10-28T02:16:50.334Z"
+        },
+        {
+          "id": "1eb8e446-8710-4970-b0a3-fa61cde1bb34",
+          "turnId": "37ad4659-d98d-440a-8ee1-c754fe62dcb1",
+          "revision": 1,
+          "speaker": "user",
+          "text": "That's where c1 V1 equals c2 V2 comes from. Both sides are just the number of moles of solute.",
+          "final": true,
+          "createdAt": "2026-10-28T02:16:50.584Z"
+        },
+        {
+          "id": "f86b3d1f-3292-406b-899c-ba5c63e5eb15",
+          "turnId": "1c774105-de67-45ef-858d-51e7b3ae81f7",
+          "revision": 1,
+          "speaker": "user",
+          "text": "The usual mistake is treating V2 as the water added. V2 is the total final volume, so the water to add is V2 minus V1.",
+          "final": true,
+          "createdAt": "2026-10-28T02:16:50.872Z"
+        },
+        {
+          "id": "3c1daa90-916f-40e2-84e0-56e6d39a3c70",
+          "turnId": "7758e1b9-b545-472f-96a8-afe15999ed35",
+          "revision": 1,
+          "speaker": "user",
+          "text": "In the lab you pipette the stock into a volumetric flask and add water up to the mark, rather than adding a measured volume of water.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:03.667Z"
+        },
+        {
+          "id": "da4a63ac-8725-4e94-a061-17ea0a2aada6",
+          "turnId": "7e53352a-9879-4d87-bc05-ad79726e92fd",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Filling to the mark matters because volumes don't always simply add up when solutions mix.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:03.922Z"
+        },
+        {
+          "id": "fbf679a3-c884-4a76-905d-5a7793d742ce",
+          "turnId": "a06baa05-827d-4002-906d-1045ef869f27",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Serial dilution repeats the dilution step, so the dilution factors multiply. Two tenfold dilutions in a row make a hundredfold dilution.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:16.182Z"
+        },
+        {
+          "id": "b5140b53-fc60-4a69-8bab-0576fac62517",
+          "turnId": "5633a979-5172-4bac-9c8d-ffb8a9dd047b",
+          "revision": 1,
+          "speaker": "user",
+          "text": "So a 1 mol per litre stock becomes 0.01 mol per litre after two tenfold steps.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:16.451Z"
+        },
+        {
+          "id": "20edadb4-3095-4500-9565-1ef283e06931",
+          "turnId": "c45bac05-4207-4430-9ad0-55ce3c80ce54",
+          "revision": 1,
+          "speaker": "user",
+          "text": "I'm stuck on trial B on this worksheet. I don't get how to use c1, V1 and c2 to find the final volume.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:31.533Z"
+        },
+        {
+          "id": "ffdbce96-b72a-4cf0-81ea-a48605e7ff90",
+          "turnId": "4ff7014a-c3de-488d-b9fa-8e8d95a33cf6",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "I saved your thought. Would you like me to look at your screen to help with it?",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:31.798Z"
+        },
+        {
+          "id": "8bf4dbab-faac-403b-81ea-41336ffb817e",
+          "turnId": "4fbbdc13-29b7-4908-90ea-545f5d264e24",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Yes, please.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:31.799Z"
+        },
+        {
+          "id": "81fc1d5a-70eb-46fe-a1ae-f5f12ee2bf18",
+          "turnId": "0ab211f9-7451-4a84-8eff-6f23a62e8353",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "I'm listening. Say ‘Moo, finish conversation’ when you're done.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:32.068Z"
+        },
+        {
+          "id": "698fab5d-5cb2-4bb1-82bb-a485da19796a",
+          "turnId": "94ba0bf6-5172-47ec-8cf4-3289285f24e8",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "For Trial B, you have:\n- c₁ = 1.20 mol/L (stock concentration)\n- V₁ = 25.0 mL (volume of stock pipetted into the flask)\n- c₂ = 0.50 mol/L (target concentration)\n\nUse the dilution formula **c₁V₁ = c₂V₂** (moles of solute stay the same). Solve for the final volume V₂:\n\nV₂ = (c₁ × V₁) / c₂ = (1.20 mol/L × 25.0 mL) / 0.50 mol/L = **60.0 mL**\n\nSo you pipette 25.0 mL of the 1.20 mol/L stock into the volumetric flask, then add water **up to the 60.0 mL mark**. You don't add 35.0 mL of water because volumes aren't strictly additive when solutions mix — that's why you fill to the calibration mark instead of measuring a water volume.",
+          "references": [],
+          "final": true,
+          "createdAt": "2026-10-28T02:17:39.378Z"
+        },
+        {
+          "id": "8e8dd151-7625-4f5b-a741-0cc320005c12",
+          "turnId": "3d87ee17-00c5-4ac7-aaf2-d48640d613ad",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Moo, for trial B, how much water do I actually need to add?",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:39.393Z"
+        },
+        {
+          "id": "eeed3301-f8cc-4e44-a420-14e18fc1833d",
+          "turnId": "31ce7294-05ea-426d-9d86-6ce6044429bf",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "For Trial B, the worksheet gives:\n- **c₁ = 1.20 mol/L** (stock concentration)\n- **V₁ = 25.0 mL** (volume of stock solution pipetted into the volumetric flask)\n- **c₂ = 0.50 mol/L** (target concentration)\n\nUse the dilution formula **c₁V₁ = c₂V₂** (moles of solute are conserved). Solve for the final volume V₂:\n\n**V₂ = (c₁ × V₁) / c₂ = (1.20 mol/L × 25.0 mL) / 0.50 mol/L = 60.0 mL**\n\n**Procedure:** Pipette **25.0 mL** of the 1.20 mol/L stock solution into the 60.0 mL volumetric flask, then add distilled water **up to the calibration mark (the 60.0 mL line)**. You do **not** measure and add 35.0 mL of water separately, because solution volumes are not strictly additive when mixed — filling to the mark ensures the correct final volume and concentration.",
+          "references": [],
+          "final": true,
+          "createdAt": "2026-10-28T02:17:45.924Z"
+        },
+        {
+          "id": "d6e9b9b7-8ce3-4ddf-97bf-e34f5b71da3d",
+          "turnId": "697eace6-d194-4fb6-908b-ebb30f7de745",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Moo, finish conversation.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:45.933Z"
+        },
+        {
+          "id": "cb72a47f-8502-4e99-8522-8507e02d65d2",
+          "turnId": "febf2d8c-c6d4-4476-8632-e7c809808800",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "Conversation closed. Your transcript is saved.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:46.198Z"
+        }
+      ],
+      "title": "",
+      "summary": "",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [],
+      "quality": "pending",
+      "qualityReasons": [
+        "Source changed; enrichment needs review."
+      ],
+      "doubt": false,
+      "links": [],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0
+    },
+    {
+      "id": "thought-37530b3b6fc357e74bd381ebdf6fa369230d524242db8e571ccc740069fb6d26",
+      "kind": "dictation",
+      "createdAt": "2026-10-28T02:16:33.474Z",
+      "revision": 5,
+      "sourceRevision": 2,
+      "updatedAt": "2026-10-28T02:16:50.334Z",
+      "segments": [
+        {
+          "id": "2cf9920c-2d32-4e0c-b073-2d893c736406:part:0",
+          "turnId": "6529565d-a5ba-4576-8a2e-aa8ff81c8505",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Chemistry revision. Concentration is the moles of solute divided by the volume of the solution in litres, so the unit is mol per litre.",
+          "final": true,
+          "createdAt": "2026-10-28T02:16:33.474Z"
+        },
+        {
+          "id": "c17ddd7f-dc55-449c-a534-31e2f816f5d9:part:1",
+          "turnId": "492fbf11-d9a7-4b95-99f8-8b2bddc85bcc",
+          "revision": 1,
+          "speaker": "user",
+          "text": "So 0.25 moles of sodium chloride made up to 500 millilitres gives 0.5 mol per litre, because 500 millilitres is half a litre.",
+          "final": true,
+          "createdAt": "2026-10-28T02:16:33.858Z"
+        }
+      ],
+      "title": "Chemistry concentration fundamentals",
+      "summary": "Chemistry revision. Concentration is defined as moles of solute divided by volume of solution in litres, with unit mol per litre. Example: 0.25 moles of sodium chloride made up to 500 millilitres yields 0.5 mol per litre, since 500 millilitres equals half a litre.",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [
+        "Mole-volume calculations",
+        "Dilution and concentration adjustments",
+        "Practice problems with varied solutes and volumes"
+      ],
+      "quality": "ready",
+      "qualityReasons": [],
+      "doubt": false,
+      "links": [
+        {
+          "targetId": "cd5bbbff-2a6f-43a4-916b-fc2f9a4807ac",
+          "provenance": "source"
+        }
+      ],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "thoughtStatus": "settled",
+      "sources": [
+        {
+          "recordId": "cd5bbbff-2a6f-43a4-916b-fc2f9a4807ac",
+          "spans": [
+            {
+              "segmentId": "2cf9920c-2d32-4e0c-b073-2d893c736406",
+              "revision": 1,
+              "start": 0,
+              "end": 135
+            },
+            {
+              "segmentId": "c17ddd7f-dc55-449c-a534-31e2f816f5d9",
+              "revision": 1,
+              "start": 0,
+              "end": 125
+            }
+          ]
+        }
+      ],
+      "sourceContext": "[]",
+      "summarySourceRevision": 2,
+      "connectionStatus": "no_match",
+      "purpose": "Reference"
+    },
+    {
+      "id": "thought-44800d89a33d429940f6f263e58717298dfbe84182875e483564516402ceca3d",
+      "kind": "dictation",
+      "createdAt": "2026-10-28T02:16:50.334Z",
+      "revision": 6,
+      "sourceRevision": 3,
+      "updatedAt": "2026-10-28T02:17:03.667Z",
+      "segments": [
+        {
+          "id": "3243f5e9-a972-4228-b41e-b31a6fcdd7e1:part:0",
+          "turnId": "e7fe644b-71f7-4dc2-8d0b-5e2600a71ce3",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Diluting a solution means adding more solvent. The moles of solute stay the same, only the volume goes up.",
+          "final": true,
+          "createdAt": "2026-10-28T02:16:50.334Z"
+        },
+        {
+          "id": "1eb8e446-8710-4970-b0a3-fa61cde1bb34:part:1",
+          "turnId": "37ad4659-d98d-440a-8ee1-c754fe62dcb1",
+          "revision": 1,
+          "speaker": "user",
+          "text": "That's where c1 V1 equals c2 V2 comes from. Both sides are just the number of moles of solute.",
+          "final": true,
+          "createdAt": "2026-10-28T02:16:50.584Z"
+        },
+        {
+          "id": "f86b3d1f-3292-406b-899c-ba5c63e5eb15:part:2",
+          "turnId": "1c774105-de67-45ef-858d-51e7b3ae81f7",
+          "revision": 1,
+          "speaker": "user",
+          "text": "The usual mistake is treating V2 as the water added. V2 is the total final volume, so the water to add is V2 minus V1.",
+          "final": true,
+          "createdAt": "2026-10-28T02:16:50.872Z"
+        }
+      ],
+      "title": "Dilution principles and calculations",
+      "summary": "Diluting a solution means adding more solvent while keeping the moles of solute constant. The formula c1V1 = c2V2 arises because both sides represent the number of moles of solute. V2 is the total final volume, not just the water added; the volume of water to add is V2 minus V1. A common mistake is treating V2 as the water added rather than the final total volume.",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [
+        "Molarity and dilution",
+        "Calculating final volume",
+        "Common dilution errors"
+      ],
+      "quality": "ready",
+      "qualityReasons": [],
+      "doubt": false,
+      "links": [
+        {
+          "targetId": "cd5bbbff-2a6f-43a4-916b-fc2f9a4807ac",
+          "provenance": "source"
+        },
+        {
+          "targetId": "thought-37530b3b6fc357e74bd381ebdf6fa369230d524242db8e571ccc740069fb6d26",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.83,
+          "sourceRevision": 3,
+          "targetRevision": 5
+        }
+      ],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "thoughtStatus": "settled",
+      "sources": [
+        {
+          "recordId": "cd5bbbff-2a6f-43a4-916b-fc2f9a4807ac",
+          "spans": [
+            {
+              "segmentId": "3243f5e9-a972-4228-b41e-b31a6fcdd7e1",
+              "revision": 1,
+              "start": 0,
+              "end": 106
+            },
+            {
+              "segmentId": "1eb8e446-8710-4970-b0a3-fa61cde1bb34",
+              "revision": 1,
+              "start": 0,
+              "end": 94
+            },
+            {
+              "segmentId": "f86b3d1f-3292-406b-899c-ba5c63e5eb15",
+              "revision": 1,
+              "start": 0,
+              "end": 118
+            }
+          ]
+        }
+      ],
+      "sourceContext": "[]",
+      "summarySourceRevision": 3,
+      "connectionStatus": "connected",
+      "purpose": "Reference"
+    },
+    {
+      "id": "thought-d7bf29f8cba1a30bfe9d0a5434aa585bcf62d3dd824feccc1fe13d93821a0b1b",
+      "kind": "dictation",
+      "createdAt": "2026-10-28T02:17:03.667Z",
+      "revision": 5,
+      "sourceRevision": 2,
+      "updatedAt": "2026-10-28T02:17:16.181Z",
+      "segments": [
+        {
+          "id": "3c1daa90-916f-40e2-84e0-56e6d39a3c70:part:0",
+          "turnId": "7758e1b9-b545-472f-96a8-afe15999ed35",
+          "revision": 1,
+          "speaker": "user",
+          "text": "In the lab you pipette the stock into a volumetric flask and add water up to the mark, rather than adding a measured volume of water.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:03.667Z"
+        },
+        {
+          "id": "da4a63ac-8725-4e94-a061-17ea0a2aada6:part:1",
+          "turnId": "7e53352a-9879-4d87-bc05-ad79726e92fd",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Filling to the mark matters because volumes don't always simply add up when solutions mix.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:03.922Z"
+        }
+      ],
+      "title": "Volumetric flask preparation and volume additivity",
+      "summary": "When preparing a solution, the stock is pipetted into a volumetric flask and water is added up to the mark rather than adding a measured volume of water. This matters because volumes do not always simply add up when solutions mix.",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [
+        "Volume additivity in solution preparation",
+        "Proper use of volumetric flasks",
+        "Impact of mixing on final volume"
+      ],
+      "quality": "ready",
+      "qualityReasons": [],
+      "doubt": false,
+      "links": [
+        {
+          "targetId": "cd5bbbff-2a6f-43a4-916b-fc2f9a4807ac",
+          "provenance": "source"
+        },
+        {
+          "targetId": "thought-44800d89a33d429940f6f263e58717298dfbe84182875e483564516402ceca3d",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.87,
+          "sourceRevision": 2,
+          "targetRevision": 6
+        }
+      ],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "thoughtStatus": "settled",
+      "sources": [
+        {
+          "recordId": "cd5bbbff-2a6f-43a4-916b-fc2f9a4807ac",
+          "spans": [
+            {
+              "segmentId": "3c1daa90-916f-40e2-84e0-56e6d39a3c70",
+              "revision": 1,
+              "start": 0,
+              "end": 133
+            },
+            {
+              "segmentId": "da4a63ac-8725-4e94-a061-17ea0a2aada6",
+              "revision": 1,
+              "start": 0,
+              "end": 90
+            }
+          ]
+        }
+      ],
+      "sourceContext": "[]",
+      "summarySourceRevision": 2,
+      "connectionStatus": "connected",
+      "purpose": "Reference"
+    },
+    {
+      "id": "thought-91deae2dfafd30b8feeaa56c284e5c7999b290bb5bf33d09ce013a8fb055f643",
+      "kind": "dictation",
+      "createdAt": "2026-10-28T02:17:16.182Z",
+      "revision": 5,
+      "sourceRevision": 2,
+      "updatedAt": "2026-10-28T02:17:31.533Z",
+      "segments": [
+        {
+          "id": "fbf679a3-c884-4a76-905d-5a7793d742ce:part:0",
+          "turnId": "a06baa05-827d-4002-906d-1045ef869f27",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Serial dilution repeats the dilution step, so the dilution factors multiply. Two tenfold dilutions in a row make a hundredfold dilution.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:16.182Z"
+        },
+        {
+          "id": "b5140b53-fc60-4a69-8bab-0576fac62517:part:1",
+          "turnId": "5633a979-5172-4bac-9c8d-ffb8a9dd047b",
+          "revision": 1,
+          "speaker": "user",
+          "text": "So a 1 mol per litre stock becomes 0.01 mol per litre after two tenfold steps.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:16.451Z"
+        }
+      ],
+      "title": "Serial Dilution Mathematics",
+      "summary": "Serial dilution involves repeating the dilution step, causing dilution factors to multiply. Two sequential tenfold dilutions produce a hundredfold dilution, reducing a 1 mol per litre stock to 0.01 mol per litre.",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [
+        "Dilution factor multiplication",
+        "Concentration changes in serial dilutions",
+        "Tenfold dilution steps"
+      ],
+      "quality": "ready",
+      "qualityReasons": [],
+      "doubt": false,
+      "links": [
+        {
+          "targetId": "cd5bbbff-2a6f-43a4-916b-fc2f9a4807ac",
+          "provenance": "source"
+        },
+        {
+          "targetId": "thought-44800d89a33d429940f6f263e58717298dfbe84182875e483564516402ceca3d",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.86,
+          "sourceRevision": 2,
+          "targetRevision": 6
+        },
+        {
+          "targetId": "thought-d7bf29f8cba1a30bfe9d0a5434aa585bcf62d3dd824feccc1fe13d93821a0b1b",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.81,
+          "sourceRevision": 2,
+          "targetRevision": 5
+        }
+      ],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "thoughtStatus": "settled",
+      "sources": [
+        {
+          "recordId": "cd5bbbff-2a6f-43a4-916b-fc2f9a4807ac",
+          "spans": [
+            {
+              "segmentId": "fbf679a3-c884-4a76-905d-5a7793d742ce",
+              "revision": 1,
+              "start": 0,
+              "end": 136
+            },
+            {
+              "segmentId": "b5140b53-fc60-4a69-8bab-0576fac62517",
+              "revision": 1,
+              "start": 0,
+              "end": 78
+            }
+          ]
+        }
+      ],
+      "sourceContext": "[]",
+      "summarySourceRevision": 2,
+      "connectionStatus": "connected",
+      "purpose": "Reference"
+    },
+    {
+      "id": "thought-e08b3bc3b4f7f91834959eb5ff9d057b007ee70a77c0aa01687009dd2aecc8a5",
+      "kind": "dictation",
+      "createdAt": "2026-10-28T02:17:31.533Z",
+      "revision": 9,
+      "sourceRevision": 5,
+      "updatedAt": "2026-10-28T02:18:06.465Z",
+      "segments": [
+        {
+          "id": "20edadb4-3095-4500-9565-1ef283e06931:part:0",
+          "turnId": "c45bac05-4207-4430-9ad0-55ce3c80ce54",
+          "revision": 1,
+          "speaker": "user",
+          "text": "I'm stuck on trial B on this worksheet. I don't get how to use c1, V1 and c2 to find the final volume.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:31.533Z"
+        },
+        {
+          "id": "8bf4dbab-faac-403b-81ea-41336ffb817e:part:1",
+          "turnId": "4fbbdc13-29b7-4908-90ea-545f5d264e24",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Yes, please.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:31.799Z"
+        },
+        {
+          "id": "698fab5d-5cb2-4bb1-82bb-a485da19796a:part:2",
+          "turnId": "94ba0bf6-5172-47ec-8cf4-3289285f24e8",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "For Trial B, you have:\n- c₁ = 1.20 mol/L (stock concentration)\n- V₁ = 25.0 mL (volume of stock pipetted into the flask)\n- c₂ = 0.50 mol/L (target concentration)\n\nUse the dilution formula **c₁V₁ = c₂V₂** (moles of solute stay the same). Solve for the final volume V₂:\n\nV₂ = (c₁ × V₁) / c₂ = (1.20 mol/L × 25.0 mL) / 0.50 mol/L = **60.0 mL**\n\nSo you pipette 25.0 mL of the 1.20 mol/L stock into the volumetric flask, then add water **up to the 60.0 mL mark**. You don't add 35.0 mL of water because volumes aren't strictly additive when solutions mix — that's why you fill to the calibration mark instead of measuring a water volume.",
+          "references": [],
+          "final": true,
+          "createdAt": "2026-10-28T02:17:39.378Z"
+        },
+        {
+          "id": "8e8dd151-7625-4f5b-a741-0cc320005c12:part:3",
+          "turnId": "3d87ee17-00c5-4ac7-aaf2-d48640d613ad",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Moo, for trial B, how much water do I actually need to add?",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:39.393Z"
+        },
+        {
+          "id": "eeed3301-f8cc-4e44-a420-14e18fc1833d:part:4",
+          "turnId": "31ce7294-05ea-426d-9d86-6ce6044429bf",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "For Trial B, the worksheet gives:\n- **c₁ = 1.20 mol/L** (stock concentration)\n- **V₁ = 25.0 mL** (volume of stock solution pipetted into the volumetric flask)\n- **c₂ = 0.50 mol/L** (target concentration)\n\nUse the dilution formula **c₁V₁ = c₂V₂** (moles of solute are conserved). Solve for the final volume V₂:\n\n**V₂ = (c₁ × V₁) / c₂ = (1.20 mol/L × 25.0 mL) / 0.50 mol/L = 60.0 mL**\n\n**Procedure:** Pipette **25.0 mL** of the 1.20 mol/L stock solution into the 60.0 mL volumetric flask, then add distilled water **up to the calibration mark (the 60.0 mL line)**. You do **not** measure and add 35.0 mL of water separately, because solution volumes are not strictly additive when mixed — filling to the mark ensures the correct final volume and concentration.",
+          "references": [],
+          "final": true,
+          "createdAt": "2026-10-28T02:17:45.924Z"
+        }
+      ],
+      "title": "Trial B Dilution Problem",
+      "summary": "User states they are stuck on trial B of a worksheet and does not understand how to use c1, V1, and c2 to find the final volume. Assistant provides the given values: c1 = 1.20 mol/L (stock concentration), V1 = 25.0 mL (volume pipetted into the flask), c2 = 0.50 mol/L (target concentration). Assistant applies the dilution formula c1V1 = c2V2 and solves for final volume V2 = (1.20 × 25.0) / 0.50 = 60.0 mL. Explains the procedure: pipette 25.0 mL of stock solution into a 60.0 mL volumetric flask, then add distilled water up to the 60.0 mL calibration mark. Clarifies that one should not measure and add 35.0 mL of water separately because solution volumes are not strictly additive when mixed. User later asks how much water needs to be added; assistant reiterates the procedure and the reason for filling to the calibration mark rather than measuring a water volume.",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [
+        "Using the dilution formula c1V1 = c2V2 to calculate unknown final volumes",
+        "Correct technique for preparing solutions in a volumetric flask (filling to the校",
+        "Why solution volumes are not strictly additive and how to account for it in dil"
+      ],
+      "quality": "needs_review",
+      "qualityReasons": [
+        "missing context"
+      ],
+      "doubt": false,
+      "links": [
+        {
+          "targetId": "cd5bbbff-2a6f-43a4-916b-fc2f9a4807ac",
+          "provenance": "source"
+        },
+        {
+          "targetId": "993d5f7c-5a7e-4263-a8b6-a5cba86ec3b1",
+          "provenance": "source"
+        },
+        {
+          "targetId": "9d7620ef-f04d-4875-b374-23b57b3bcffc",
+          "provenance": "source"
+        },
+        {
+          "targetId": "thought-d7bf29f8cba1a30bfe9d0a5434aa585bcf62d3dd824feccc1fe13d93821a0b1b",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.85,
+          "sourceRevision": 5,
+          "targetRevision": 5
+        },
+        {
+          "targetId": "thought-44800d89a33d429940f6f263e58717298dfbe84182875e483564516402ceca3d",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.88,
+          "sourceRevision": 5,
+          "targetRevision": 6
+        }
+      ],
+      "attachmentIds": [
+        "460c9889-b1fa-4689-ab00-72adb424e0c3"
+      ],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "thoughtStatus": "settled",
+      "sources": [
+        {
+          "recordId": "cd5bbbff-2a6f-43a4-916b-fc2f9a4807ac",
+          "spans": [
+            {
+              "segmentId": "20edadb4-3095-4500-9565-1ef283e06931",
+              "revision": 1,
+              "start": 0,
+              "end": 102
+            },
+            {
+              "segmentId": "8bf4dbab-faac-403b-81ea-41336ffb817e",
+              "revision": 1,
+              "start": 0,
+              "end": 12
+            },
+            {
+              "segmentId": "698fab5d-5cb2-4bb1-82bb-a485da19796a",
+              "revision": 1,
+              "start": 0,
+              "end": 631
+            },
+            {
+              "segmentId": "8e8dd151-7625-4f5b-a741-0cc320005c12",
+              "revision": 1,
+              "start": 0,
+              "end": 59
+            },
+            {
+              "segmentId": "eeed3301-f8cc-4e44-a420-14e18fc1833d",
+              "revision": 1,
+              "start": 0,
+              "end": 758
+            }
+          ]
+        }
+      ],
+      "sourceContext": "[{\"conversationId\":\"9d7620ef-f04d-4875-b374-23b57b3bcffc\",\"requests\":[{\"id\":\"993d5f7c-5a7e-4263-a8b6-a5cba86ec3b1\",\"sourceRevision\":1,\"source\":\"user: I'm stuck on trial B on this worksheet. I don't get how to use c1, V1 and c2 to find the final volume.\"}],\"outcomes\":[{\"tool\":\"capture_screen\",\"callId\":\"help:9d7620ef-f04d-4875-b374-23b57b3bcffc\",\"status\":\"success\",\"executed\":true,\"references\":[{\"attachmentId\":\"460c9889-b1fa-4689-ab00-72adb424e0c3\"}],\"rawResultRetained\":true,\"scope\":\"Tool outcomes establish execution only. Retrieval matches do not establish the entire Brain inventory.\"}],\"scope\":\"Only confirmed outcomes establish completed work. Requests without outcomes remain unresolved.\"}]",
+      "summarySourceRevision": 5,
+      "connectionStatus": "connected"
+    },
+    {
+      "id": "993d5f7c-5a7e-4263-a8b6-a5cba86ec3b1",
+      "kind": "dictation",
+      "createdAt": "2026-10-28T02:17:31.798Z",
+      "revision": 2,
+      "sourceRevision": 1,
+      "updatedAt": "2026-10-28T02:17:31.798Z",
+      "segments": [
+        {
+          "id": "20edadb4-3095-4500-9565-1ef283e06931",
+          "turnId": "c45bac05-4207-4430-9ad0-55ce3c80ce54",
+          "revision": 1,
+          "speaker": "user",
+          "text": "I'm stuck on trial B on this worksheet. I don't get how to use c1, V1 and c2 to find the final volume.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:31.533Z"
+        }
+      ],
+      "title": "",
+      "summary": "",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [],
+      "quality": "pending",
+      "qualityReasons": [
+        "Source changed; enrichment needs review."
+      ],
+      "doubt": false,
+      "links": [],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "sourceOnly": true
+    },
+    {
+      "id": "9d7620ef-f04d-4875-b374-23b57b3bcffc",
+      "kind": "conversation",
+      "createdAt": "2026-10-28T02:17:32.068Z",
+      "revision": 9,
+      "sourceRevision": 6,
+      "updatedAt": "2026-10-28T02:17:45.933Z",
+      "segments": [
+        {
+          "id": "8bf4dbab-faac-403b-81ea-41336ffb817e",
+          "turnId": "4fbbdc13-29b7-4908-90ea-545f5d264e24",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Yes, please.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:31.799Z"
+        },
+        {
+          "id": "81fc1d5a-70eb-46fe-a1ae-f5f12ee2bf18",
+          "turnId": "0ab211f9-7451-4a84-8eff-6f23a62e8353",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "I'm listening. Say ‘Moo, finish conversation’ when you're done.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:32.068Z"
+        },
+        {
+          "id": "698fab5d-5cb2-4bb1-82bb-a485da19796a",
+          "turnId": "94ba0bf6-5172-47ec-8cf4-3289285f24e8",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "For Trial B, you have:\n- c₁ = 1.20 mol/L (stock concentration)\n- V₁ = 25.0 mL (volume of stock pipetted into the flask)\n- c₂ = 0.50 mol/L (target concentration)\n\nUse the dilution formula **c₁V₁ = c₂V₂** (moles of solute stay the same). Solve for the final volume V₂:\n\nV₂ = (c₁ × V₁) / c₂ = (1.20 mol/L × 25.0 mL) / 0.50 mol/L = **60.0 mL**\n\nSo you pipette 25.0 mL of the 1.20 mol/L stock into the volumetric flask, then add water **up to the 60.0 mL mark**. You don't add 35.0 mL of water because volumes aren't strictly additive when solutions mix — that's why you fill to the calibration mark instead of measuring a water volume.",
+          "references": [],
+          "final": true,
+          "createdAt": "2026-10-28T02:17:39.378Z"
+        },
+        {
+          "id": "8e8dd151-7625-4f5b-a741-0cc320005c12",
+          "turnId": "3d87ee17-00c5-4ac7-aaf2-d48640d613ad",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Moo, for trial B, how much water do I actually need to add?",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:39.393Z"
+        },
+        {
+          "id": "eeed3301-f8cc-4e44-a420-14e18fc1833d",
+          "turnId": "31ce7294-05ea-426d-9d86-6ce6044429bf",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "For Trial B, the worksheet gives:\n- **c₁ = 1.20 mol/L** (stock concentration)\n- **V₁ = 25.0 mL** (volume of stock solution pipetted into the volumetric flask)\n- **c₂ = 0.50 mol/L** (target concentration)\n\nUse the dilution formula **c₁V₁ = c₂V₂** (moles of solute are conserved). Solve for the final volume V₂:\n\n**V₂ = (c₁ × V₁) / c₂ = (1.20 mol/L × 25.0 mL) / 0.50 mol/L = 60.0 mL**\n\n**Procedure:** Pipette **25.0 mL** of the 1.20 mol/L stock solution into the 60.0 mL volumetric flask, then add distilled water **up to the calibration mark (the 60.0 mL line)**. You do **not** measure and add 35.0 mL of water separately, because solution volumes are not strictly additive when mixed — filling to the mark ensures the correct final volume and concentration.",
+          "references": [],
+          "final": true,
+          "createdAt": "2026-10-28T02:17:45.924Z"
+        },
+        {
+          "id": "d6e9b9b7-8ce3-4ddf-97bf-e34f5b71da3d",
+          "turnId": "697eace6-d194-4fb6-908b-ebb30f7de745",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Moo, finish conversation.",
+          "final": true,
+          "createdAt": "2026-10-28T02:17:45.933Z"
+        }
+      ],
+      "title": "",
+      "summary": "",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [],
+      "quality": "pending",
+      "qualityReasons": [
+        "Source changed; enrichment needs review."
+      ],
+      "doubt": false,
+      "links": [
+        {
+          "targetId": "993d5f7c-5a7e-4263-a8b6-a5cba86ec3b1",
+          "provenance": "reply"
+        }
+      ],
+      "attachmentIds": [
+        "460c9889-b1fa-4689-ab00-72adb424e0c3"
+      ],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "sourceOnly": true
+    },
+    {
+      "id": "40cae886-6f55-4f47-ace1-93f36f432d82",
+      "kind": "session",
+      "createdAt": "2026-10-29T02:18:07.467Z",
+      "revision": 14,
+      "sourceRevision": 14,
+      "updatedAt": "2026-10-29T02:19:10.023Z",
+      "segments": [
+        {
+          "id": "edc36444-2137-4435-a2c0-8f6f486c1313",
+          "turnId": "2483b2bf-8af9-4e2f-ac42-717dc83738f6",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Osmosis is the movement of water across a partially permeable membrane, from the dilute side to the more concentrated side.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:07.467Z"
+        },
+        {
+          "id": "b2f8f22f-1537-4051-97e9-8fb69b29a072",
+          "turnId": "dfb7a00f-0ba1-4510-a19e-a8bde02f91aa",
+          "revision": 1,
+          "speaker": "user",
+          "text": "It's the same concentration idea as dilution in chemistry. The water moving across dilutes the stronger solution.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:07.716Z"
+        },
+        {
+          "id": "052a5125-e76b-499f-a3da-7fe5a18bab98",
+          "turnId": "060edb1c-98e9-45d5-9ecf-fc7503795537",
+          "revision": 1,
+          "speaker": "user",
+          "text": "A hypotonic solution has a lower solute concentration than the cell, so water moves into the cell.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:17.663Z"
+        },
+        {
+          "id": "1cc19f00-0d07-4bc6-9fd7-e5a6b8dceb77",
+          "turnId": "38d5dafa-e019-4c1d-9413-87bcff1216c4",
+          "revision": 1,
+          "speaker": "user",
+          "text": "A hypertonic solution has a higher solute concentration, so water moves out. In an isotonic solution there's no net movement.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:17.899Z"
+        },
+        {
+          "id": "dda53081-66b8-4543-ac21-6c0e5043ef6a",
+          "turnId": "f6ceab7e-a314-4552-a276-c4be8c943835",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Red blood cells only have a cell membrane, so in pure water they swell and can burst. That's haemolysis.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:31.178Z"
+        },
+        {
+          "id": "0b42c177-dd70-4438-91a5-1d54ba83fc72",
+          "turnId": "527663bd-5102-4156-bc54-0aef894c235a",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Plant cells have a cellulose cell wall, so they swell against it and become turgid instead of bursting.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:31.440Z"
+        },
+        {
+          "id": "b2236dc0-73e4-4c85-80b1-b0652f102821",
+          "turnId": "dc337721-804c-4974-965e-6fadd7610bde",
+          "revision": 1,
+          "speaker": "user",
+          "text": "In a hypertonic solution a plant cell loses water and the membrane pulls away from the wall. That's plasmolysis.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:31.682Z"
+        },
+        {
+          "id": "14a070df-8d80-480e-97d5-d84cea8cd731",
+          "turnId": "cd094bb8-a6c6-4c6e-998f-b8e05d0a3100",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Pure water has the highest water potential, and adding solute lowers it.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:52.678Z"
+        },
+        {
+          "id": "d2145c97-ba20-446f-aafa-6b044ca08bfd",
+          "turnId": "2e7ebf5c-5b54-4bdc-b86c-8df8cccacbcc",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Water moves from higher to lower water potential, which is osmosis described with a number.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:53.149Z"
+        },
+        {
+          "id": "7c0a5874-3e20-4184-8119-1f628a0a708a",
+          "turnId": "27c6cfa9-77a3-4ad3-a958-6f438d462208",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Moo, why would a red blood cell burst in pure water but a plant cell not?",
+          "final": true,
+          "createdAt": "2026-10-29T02:19:03.810Z"
+        },
+        {
+          "id": "22777c25-384e-422c-8e05-e59d541186d3",
+          "turnId": "178ce4b6-a9e6-45c4-a23a-e0e0aa63027c",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "I'm listening. Say ‘Moo, finish conversation’ when you're done.",
+          "final": true,
+          "createdAt": "2026-10-29T02:19:04.100Z"
+        },
+        {
+          "id": "f016e545-0444-4ada-a9eb-f17a116db736",
+          "turnId": "471db8ea-b7df-42aa-bce5-7b28acabb4eb",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "Red blood cells lack a cell wall and only have a flexible plasma membrane. In pure water (which has the highest water potential, 0 kPa), water enters the cell by osmosis, causing it to swell and eventually burst – a process called haemolysis. Plant cells, by contrast, possess a rigid cellulose cell wall. When water enters by osmosis, the membrane presses against this wall and the cell becomes turgid (turgor pressure) instead of bursting. In a hypertonic solution, plant cells lose water and the membrane pulls away from the wall, which is plasmolysis. Water always moves from higher to lower water potential; adding solute lowers water potential (makes it more negative).",
+          "references": [],
+          "final": true,
+          "createdAt": "2026-10-29T02:19:09.697Z"
+        },
+        {
+          "id": "b11aa09b-fc9b-4853-880b-8f7f95f7eadf",
+          "turnId": "b0aa9140-c78a-4164-badc-8feab5f1a596",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Moo, finish conversation.",
+          "final": true,
+          "createdAt": "2026-10-29T02:19:09.702Z"
+        },
+        {
+          "id": "70bc9d49-de89-4a42-b9d3-d735b03f8016",
+          "turnId": "e3c92da8-4586-4bac-b52e-5af57e5363d7",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "Conversation closed. Your transcript is saved.",
+          "final": true,
+          "createdAt": "2026-10-29T02:19:10.023Z"
+        }
+      ],
+      "title": "",
+      "summary": "",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [],
+      "quality": "pending",
+      "qualityReasons": [
+        "Source changed; enrichment needs review."
+      ],
+      "doubt": false,
+      "links": [],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0
+    },
+    {
+      "id": "thought-fdb00c71def4db43813fde62b4066129b95d45cdb09f7cc6b5e0bb2c8ee5c872",
+      "kind": "dictation",
+      "createdAt": "2026-10-29T02:18:07.467Z",
+      "revision": 5,
+      "sourceRevision": 2,
+      "updatedAt": "2026-10-29T02:18:17.663Z",
+      "segments": [
+        {
+          "id": "edc36444-2137-4435-a2c0-8f6f486c1313:part:0",
+          "turnId": "2483b2bf-8af9-4e2f-ac42-717dc83738f6",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Osmosis is the movement of water across a partially permeable membrane, from the dilute side to the more concentrated side.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:07.467Z"
+        },
+        {
+          "id": "b2f8f22f-1537-4051-97e9-8fb69b29a072:part:1",
+          "turnId": "dfb7a00f-0ba1-4510-a19e-a8bde02f91aa",
+          "revision": 1,
+          "speaker": "user",
+          "text": "It's the same concentration idea as dilution in chemistry. The water moving across dilutes the stronger solution.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:07.716Z"
+        }
+      ],
+      "title": "Osmosis and concentration dynamics",
+      "summary": "User explains osmosis as water movement across a partially permeable membrane from dilute to concentrated side, equates the concept to dilution in chemistry, and notes that water movement dilutes the stronger solution.",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [
+        "Cell membrane transport",
+        "Solution chemistry",
+        "Diffusion and osmosis"
+      ],
+      "quality": "ready",
+      "qualityReasons": [],
+      "doubt": false,
+      "links": [
+        {
+          "targetId": "40cae886-6f55-4f47-ace1-93f36f432d82",
+          "provenance": "source"
+        }
+      ],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "thoughtStatus": "settled",
+      "sources": [
+        {
+          "recordId": "40cae886-6f55-4f47-ace1-93f36f432d82",
+          "spans": [
+            {
+              "segmentId": "edc36444-2137-4435-a2c0-8f6f486c1313",
+              "revision": 1,
+              "start": 0,
+              "end": 123
+            },
+            {
+              "segmentId": "b2f8f22f-1537-4051-97e9-8fb69b29a072",
+              "revision": 1,
+              "start": 0,
+              "end": 113
+            }
+          ]
+        }
+      ],
+      "sourceContext": "[]",
+      "summarySourceRevision": 2,
+      "connectionStatus": "no_match",
+      "purpose": "Reference"
+    },
+    {
+      "id": "thought-66161ec183f656ae14a2693f7f5a90ba010d9e6df421526b9257387e47d12763",
+      "kind": "dictation",
+      "createdAt": "2026-10-29T02:18:17.663Z",
+      "revision": 5,
+      "sourceRevision": 2,
+      "updatedAt": "2026-10-29T02:18:31.178Z",
+      "segments": [
+        {
+          "id": "052a5125-e76b-499f-a3da-7fe5a18bab98:part:0",
+          "turnId": "060edb1c-98e9-45d5-9ecf-fc7503795537",
+          "revision": 1,
+          "speaker": "user",
+          "text": "A hypotonic solution has a lower solute concentration than the cell, so water moves into the cell.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:17.663Z"
+        },
+        {
+          "id": "1cc19f00-0d07-4bc6-9fd7-e5a6b8dceb77:part:1",
+          "turnId": "38d5dafa-e019-4c1d-9413-87bcff1216c4",
+          "revision": 1,
+          "speaker": "user",
+          "text": "A hypertonic solution has a higher solute concentration, so water moves out. In an isotonic solution there's no net movement.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:17.899Z"
+        }
+      ],
+      "title": "Tonicity and Water Movement",
+      "summary": "User explains that in a hypotonic solution, lower solute concentration causes water to move into the cell; in a hypertonic solution, higher solute concentration causes water to move out; and in an isotonic solution, there is no net movement of water.",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [
+        "Osmotic pressure",
+        "Cell volume regulation",
+        "Medical implications of tonicity"
+      ],
+      "quality": "ready",
+      "qualityReasons": [],
+      "doubt": false,
+      "links": [
+        {
+          "targetId": "40cae886-6f55-4f47-ace1-93f36f432d82",
+          "provenance": "source"
+        },
+        {
+          "targetId": "thought-fdb00c71def4db43813fde62b4066129b95d45cdb09f7cc6b5e0bb2c8ee5c872",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.81,
+          "sourceRevision": 2,
+          "targetRevision": 5
+        }
+      ],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "thoughtStatus": "settled",
+      "sources": [
+        {
+          "recordId": "40cae886-6f55-4f47-ace1-93f36f432d82",
+          "spans": [
+            {
+              "segmentId": "052a5125-e76b-499f-a3da-7fe5a18bab98",
+              "revision": 1,
+              "start": 0,
+              "end": 98
+            },
+            {
+              "segmentId": "1cc19f00-0d07-4bc6-9fd7-e5a6b8dceb77",
+              "revision": 1,
+              "start": 0,
+              "end": 125
+            }
+          ]
+        }
+      ],
+      "sourceContext": "[]",
+      "summarySourceRevision": 2,
+      "connectionStatus": "connected",
+      "purpose": "Reference"
+    },
+    {
+      "id": "thought-b3ba7d28ddc8358919535a4887923f28cf1274eaff46c29b156c955b6e4dc36a",
+      "kind": "dictation",
+      "createdAt": "2026-10-29T02:18:31.178Z",
+      "revision": 6,
+      "sourceRevision": 4,
+      "updatedAt": "2026-10-29T02:18:52.677Z",
+      "segments": [
+        {
+          "id": "dda53081-66b8-4543-ac21-6c0e5043ef6a:part:0",
+          "turnId": "f6ceab7e-a314-4552-a276-c4be8c943835",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Red blood cells only have a cell membrane, so in pure water they swell and can burst. That's haemolysis.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:31.178Z"
+        }
+      ],
+      "title": "Red blood cell swelling and haemolysis",
+      "summary": "Red blood cells, which have only a cell membrane, swell and can burst in pure water; this process is identified as haemolysis.",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [
+        "osmotic swelling",
+        "haemolysis",
+        "cell membrane limitation"
+      ],
+      "quality": "ready",
+      "qualityReasons": [],
+      "doubt": false,
+      "links": [
+        {
+          "targetId": "40cae886-6f55-4f47-ace1-93f36f432d82",
+          "provenance": "source"
+        },
+        {
+          "targetId": "thought-677cbc281e8cbd61fb666872f8b16e1741899f0d626b942c12b68f7a2efa8005",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.83,
+          "sourceRevision": 4,
+          "targetRevision": 2
+        },
+        {
+          "targetId": "thought-fdb00c71def4db43813fde62b4066129b95d45cdb09f7cc6b5e0bb2c8ee5c872",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.83,
+          "sourceRevision": 4,
+          "targetRevision": 5
+        },
+        {
+          "targetId": "thought-66161ec183f656ae14a2693f7f5a90ba010d9e6df421526b9257387e47d12763",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.85,
+          "sourceRevision": 4,
+          "targetRevision": 5
+        }
+      ],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "thoughtStatus": "settled",
+      "sources": [
+        {
+          "recordId": "40cae886-6f55-4f47-ace1-93f36f432d82",
+          "spans": [
+            {
+              "segmentId": "dda53081-66b8-4543-ac21-6c0e5043ef6a",
+              "revision": 1,
+              "start": 0,
+              "end": 104
+            }
+          ]
+        }
+      ],
+      "sourceContext": "[]",
+      "summarySourceRevision": 4,
+      "connectionStatus": "connected",
+      "purpose": "Reference"
+    },
+    {
+      "id": "thought-677cbc281e8cbd61fb666872f8b16e1741899f0d626b942c12b68f7a2efa8005",
+      "kind": "dictation",
+      "createdAt": "2026-10-29T02:18:31.440Z",
+      "revision": 3,
+      "sourceRevision": 1,
+      "updatedAt": "2026-10-29T02:18:52.668Z",
+      "segments": [
+        {
+          "id": "0b42c177-dd70-4438-91a5-1d54ba83fc72:part:0",
+          "turnId": "527663bd-5102-4156-bc54-0aef894c235a",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Plant cells have a cellulose cell wall, so they swell against it and become turgid instead of bursting.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:31.440Z"
+        },
+        {
+          "id": "b2236dc0-73e4-4c85-80b1-b0652f102821:part:1",
+          "turnId": "dc337721-804c-4974-965e-6fadd7610bde",
+          "revision": 1,
+          "speaker": "user",
+          "text": "In a hypertonic solution a plant cell loses water and the membrane pulls away from the wall. That's plasmolysis.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:31.682Z"
+        }
+      ],
+      "title": "Plant cell turgor and plasmolysis",
+      "summary": "Plant cells, possessing a cellulose cell wall, swell against it to become turgid in hypotonic conditions; in hypertonic solutions they lose water and the membrane pulls away from the wall, a process identified as plasmolysis.",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [
+        "cell wall function",
+        "turgor pressure",
+        "plasmolysis"
+      ],
+      "quality": "ready",
+      "qualityReasons": [],
+      "doubt": false,
+      "links": [
+        {
+          "targetId": "40cae886-6f55-4f47-ace1-93f36f432d82",
+          "provenance": "source"
+        },
+        {
+          "targetId": "thought-b3ba7d28ddc8358919535a4887923f28cf1274eaff46c29b156c955b6e4dc36a",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.8,
+          "sourceRevision": 1,
+          "targetRevision": 4
+        },
+        {
+          "targetId": "thought-fdb00c71def4db43813fde62b4066129b95d45cdb09f7cc6b5e0bb2c8ee5c872",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.83,
+          "sourceRevision": 1,
+          "targetRevision": 5
+        },
+        {
+          "targetId": "thought-66161ec183f656ae14a2693f7f5a90ba010d9e6df421526b9257387e47d12763",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.87,
+          "sourceRevision": 1,
+          "targetRevision": 5
+        }
+      ],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "thoughtStatus": "settled",
+      "sources": [
+        {
+          "recordId": "40cae886-6f55-4f47-ace1-93f36f432d82",
+          "spans": [
+            {
+              "segmentId": "0b42c177-dd70-4438-91a5-1d54ba83fc72",
+              "revision": 1,
+              "start": 0,
+              "end": 103
+            },
+            {
+              "segmentId": "b2236dc0-73e4-4c85-80b1-b0652f102821",
+              "revision": 1,
+              "start": 0,
+              "end": 112
+            }
+          ]
+        }
+      ],
+      "sourceContext": "[]",
+      "summarySourceRevision": 1,
+      "connectionStatus": "connected",
+      "purpose": "Reference"
+    },
+    {
+      "id": "thought-cb04855b8063dda3602f16b56201a47e1c5305a6848795b0b7938be9d516af92",
+      "kind": "dictation",
+      "createdAt": "2026-10-29T02:18:52.678Z",
+      "revision": 5,
+      "sourceRevision": 2,
+      "updatedAt": "2026-10-29T02:19:03.810Z",
+      "segments": [
+        {
+          "id": "14a070df-8d80-480e-97d5-d84cea8cd731:part:0",
+          "turnId": "cd094bb8-a6c6-4c6e-998f-b8e05d0a3100",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Pure water has the highest water potential, and adding solute lowers it.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:52.678Z"
+        },
+        {
+          "id": "d2145c97-ba20-446f-aafa-6b044ca08bfd:part:1",
+          "turnId": "2e7ebf5c-5b54-4bdc-b86c-8df8cccacbcc",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Water moves from higher to lower water potential, which is osmosis described with a number.",
+          "final": true,
+          "createdAt": "2026-10-29T02:18:53.149Z"
+        }
+      ],
+      "title": "Water Potential and Osmosis",
+      "summary": "Pure water has the highest water potential, and adding solute lowers it. Water moves from higher to lower water potential, which is osmosis described with a number.",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [
+        "Water potential and solute concentration",
+        "Osmosis in biological systems",
+        "Quantitative water movement"
+      ],
+      "quality": "ready",
+      "qualityReasons": [],
+      "doubt": false,
+      "links": [
+        {
+          "targetId": "40cae886-6f55-4f47-ace1-93f36f432d82",
+          "provenance": "source"
+        },
+        {
+          "targetId": "thought-fdb00c71def4db43813fde62b4066129b95d45cdb09f7cc6b5e0bb2c8ee5c872",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.84,
+          "sourceRevision": 2,
+          "targetRevision": 5
+        },
+        {
+          "targetId": "thought-66161ec183f656ae14a2693f7f5a90ba010d9e6df421526b9257387e47d12763",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.84,
+          "sourceRevision": 2,
+          "targetRevision": 5
+        }
+      ],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "thoughtStatus": "settled",
+      "sources": [
+        {
+          "recordId": "40cae886-6f55-4f47-ace1-93f36f432d82",
+          "spans": [
+            {
+              "segmentId": "14a070df-8d80-480e-97d5-d84cea8cd731",
+              "revision": 1,
+              "start": 0,
+              "end": 72
+            },
+            {
+              "segmentId": "d2145c97-ba20-446f-aafa-6b044ca08bfd",
+              "revision": 1,
+              "start": 0,
+              "end": 91
+            }
+          ]
+        }
+      ],
+      "sourceContext": "[]",
+      "summarySourceRevision": 2,
+      "connectionStatus": "connected",
+      "purpose": "Reference"
+    },
+    {
+      "id": "thought-882518293a086e49c7e96166a9c94db734ec3d2358a55ef31bf0d6d39e1ecd62",
+      "kind": "dictation",
+      "createdAt": "2026-10-29T02:19:03.810Z",
+      "revision": 6,
+      "sourceRevision": 2,
+      "updatedAt": "2026-10-29T02:19:31.287Z",
+      "segments": [
+        {
+          "id": "7c0a5874-3e20-4184-8119-1f628a0a708a:part:0",
+          "turnId": "27c6cfa9-77a3-4ad3-a958-6f438d462208",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Moo, why would a red blood cell burst in pure water but a plant cell not?",
+          "final": true,
+          "createdAt": "2026-10-29T02:19:03.810Z"
+        },
+        {
+          "id": "f016e545-0444-4ada-a9eb-f17a116db736:part:1",
+          "turnId": "471db8ea-b7df-42aa-bce5-7b28acabb4eb",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "Red blood cells lack a cell wall and only have a flexible plasma membrane. In pure water (which has the highest water potential, 0 kPa), water enters the cell by osmosis, causing it to swell and eventually burst – a process called haemolysis. Plant cells, by contrast, possess a rigid cellulose cell wall. When water enters by osmosis, the membrane presses against this wall and the cell becomes turgid (turgor pressure) instead of bursting. In a hypertonic solution, plant cells lose water and the membrane pulls away from the wall, which is plasmolysis. Water always moves from higher to lower water potential; adding solute lowers water potential (makes it more negative).",
+          "references": [],
+          "final": true,
+          "createdAt": "2026-10-29T02:19:09.697Z"
+        }
+      ],
+      "title": "Osmotic bursting of red blood cells versus turgor in plant cells",
+      "summary": "A user asked why red blood cells burst in pure water while plant cells do not. Red blood cells lack a cell wall and possess only a flexible plasma membrane; in pure water (0 kPa water potential), water enters by osmosis causing the cell to swell and burst (haemolysis). Plant cells have a rigid cellulose cell wall; when water enters, the membrane presses against the wall generating turgor pressure instead of bursting. In hypertonic solutions, plant cells lose water and the membrane retracts from the wall, a process called plasmolysis. Water moves from higher to lower water potential, and adding solute lowers water potential (makes it more negative).",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [
+        "Osmotic pressure and cell integrity",
+        "Turgor pressure and plasmolysis in plant cells",
+        "Water potential gradients and solute effects"
+      ],
+      "quality": "ready",
+      "qualityReasons": [],
+      "doubt": false,
+      "links": [
+        {
+          "targetId": "40cae886-6f55-4f47-ace1-93f36f432d82",
+          "provenance": "source"
+        },
+        {
+          "targetId": "77d4bd4b-1e42-4a19-b118-2f61ce2e3c8c",
+          "provenance": "source"
+        },
+        {
+          "targetId": "thought-677cbc281e8cbd61fb666872f8b16e1741899f0d626b942c12b68f7a2efa8005",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.87,
+          "sourceRevision": 2,
+          "targetRevision": 3
+        },
+        {
+          "targetId": "thought-b3ba7d28ddc8358919535a4887923f28cf1274eaff46c29b156c955b6e4dc36a",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.86,
+          "sourceRevision": 2,
+          "targetRevision": 6
+        },
+        {
+          "targetId": "thought-cb04855b8063dda3602f16b56201a47e1c5305a6848795b0b7938be9d516af92",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.83,
+          "sourceRevision": 2,
+          "targetRevision": 5
+        },
+        {
+          "targetId": "thought-fdb00c71def4db43813fde62b4066129b95d45cdb09f7cc6b5e0bb2c8ee5c872",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.8,
+          "sourceRevision": 2,
+          "targetRevision": 5
+        },
+        {
+          "targetId": "thought-66161ec183f656ae14a2693f7f5a90ba010d9e6df421526b9257387e47d12763",
+          "provenance": "suggested",
+          "decision": "accepted",
+          "confidence": 0.85,
+          "sourceRevision": 2,
+          "targetRevision": 5
+        }
+      ],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "thoughtStatus": "settled",
+      "sources": [
+        {
+          "recordId": "40cae886-6f55-4f47-ace1-93f36f432d82",
+          "spans": [
+            {
+              "segmentId": "7c0a5874-3e20-4184-8119-1f628a0a708a",
+              "revision": 1,
+              "start": 0,
+              "end": 73
+            },
+            {
+              "segmentId": "f016e545-0444-4ada-a9eb-f17a116db736",
+              "revision": 1,
+              "start": 0,
+              "end": 675
+            }
+          ]
+        }
+      ],
+      "sourceContext": "[{\"conversationId\":\"77d4bd4b-1e42-4a19-b118-2f61ce2e3c8c\",\"requests\":[],\"outcomes\":[],\"scope\":\"Only confirmed outcomes establish completed work. Requests without outcomes remain unresolved.\"}]",
+      "summarySourceRevision": 2,
+      "connectionStatus": "connected",
+      "purpose": "Reference"
+    },
+    {
+      "id": "77d4bd4b-1e42-4a19-b118-2f61ce2e3c8c",
+      "kind": "conversation",
+      "createdAt": "2026-10-29T02:19:04.100Z",
+      "revision": 5,
+      "sourceRevision": 4,
+      "updatedAt": "2026-10-29T02:19:09.702Z",
+      "segments": [
+        {
+          "id": "7c0a5874-3e20-4184-8119-1f628a0a708a",
+          "turnId": "27c6cfa9-77a3-4ad3-a958-6f438d462208",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Moo, why would a red blood cell burst in pure water but a plant cell not?",
+          "final": true,
+          "createdAt": "2026-10-29T02:19:03.810Z"
+        },
+        {
+          "id": "22777c25-384e-422c-8e05-e59d541186d3",
+          "turnId": "178ce4b6-a9e6-45c4-a23a-e0e0aa63027c",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "I'm listening. Say ‘Moo, finish conversation’ when you're done.",
+          "final": true,
+          "createdAt": "2026-10-29T02:19:04.100Z"
+        },
+        {
+          "id": "f016e545-0444-4ada-a9eb-f17a116db736",
+          "turnId": "471db8ea-b7df-42aa-bce5-7b28acabb4eb",
+          "revision": 1,
+          "speaker": "assistant",
+          "text": "Red blood cells lack a cell wall and only have a flexible plasma membrane. In pure water (which has the highest water potential, 0 kPa), water enters the cell by osmosis, causing it to swell and eventually burst – a process called haemolysis. Plant cells, by contrast, possess a rigid cellulose cell wall. When water enters by osmosis, the membrane presses against this wall and the cell becomes turgid (turgor pressure) instead of bursting. In a hypertonic solution, plant cells lose water and the membrane pulls away from the wall, which is plasmolysis. Water always moves from higher to lower water potential; adding solute lowers water potential (makes it more negative).",
+          "references": [],
+          "final": true,
+          "createdAt": "2026-10-29T02:19:09.697Z"
+        },
+        {
+          "id": "b11aa09b-fc9b-4853-880b-8f7f95f7eadf",
+          "turnId": "b0aa9140-c78a-4164-badc-8feab5f1a596",
+          "revision": 1,
+          "speaker": "user",
+          "text": "Moo, finish conversation.",
+          "final": true,
+          "createdAt": "2026-10-29T02:19:09.702Z"
+        }
+      ],
+      "title": "",
+      "summary": "",
+      "body": "",
+      "resolution": "open",
+      "archived": false,
+      "topics": [],
+      "quality": "pending",
+      "qualityReasons": [
+        "Source changed; enrichment needs review."
+      ],
+      "doubt": false,
+      "links": [],
+      "attachmentIds": [],
+      "manualFields": [],
+      "acceptedRevision": 0,
+      "sourceOnly": true
+    }
+  ],
+  "attachments": [
+    {
+      "id": "460c9889-b1fa-4689-ab00-72adb424e0c3",
+      "mimeType": "image/png",
+      "base64": "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"
+    }
+  ]
+}

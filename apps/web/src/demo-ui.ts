@@ -19,7 +19,7 @@ const VOICE_MODEL = "Voice · OpenAI (AI-generated)";
 const TRY: { say: string[]; shows: string }[] = [
   { say: ["Osmosis is water moving across a membrane toward the side with more solute."], shows: "A thought: saved, then organized into a note" },
   { say: ["Moo, how does dilution connect to osmosis?"], shows: "A question: Moo answers from the sample notes" },
-  { say: ["I don't get how to find V2 on this worksheet.", "Yes, please."], shows: "A doubt: Moo offers to help, then reads the sample worksheet" },
+  { say: ["I'm stuck on trial B on this worksheet. I don't get how to use c1, V1 and c2 to find the final volume.", "Yes, please."], shows: "A doubt: Moo offers to help, then reads the sample worksheet" },
   { say: ["Moo, search the web for why red blood cells burst in pure water."], shows: "A web search" },
   { say: ["Moo, finish conversation."], shows: "Ends the conversation" },
 ];
@@ -150,7 +150,7 @@ export interface DemoChrome {
 export function renderChrome(root: HTMLElement, options: { live: boolean; voice: boolean }): DemoChrome {
   const worksheet = panel("demo-worksheet", "Sample worksheet", "demo-drawer",
     h("p", {}, "In this web demo, 'your screen' is this sample worksheet."),
-    h("img", { src: "/sample-worksheet.png", loading: "lazy", alt: "Dilution worksheet: c1V1 = c2V2 with a target concentration c2 of 0.50 mol/L, and a table of c1 and V1 for trial A (2.50 mol/L, 40.0 mL) and trial B (1.20 mol/L, 25.0 mL). V2 is not given." }));
+    h("img", { src: "/sample-worksheet.png", loading: "lazy", alt: "Dilution worksheet: use c1 V1 = c2 V2 to find the final volume V2. Trial A: c1 2.50 mol/L, V1 40.0 mL, c2 0.50 mol/L. Trial B: c1 1.20 mol/L, V1 25.0 mL, c2 0.50 mol/L. Water to add = V2 - V1." }));
   const tryCard = panel("demo-try", "Try saying", "demo-try",
     h("ol", {}, ...TRY.map(item => h("li", {},
       ...item.say.flatMap((line, index) => [index ? " then " : "", h("q", {}, line)]), h("small", {}, item.shows)))),

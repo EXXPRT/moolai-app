@@ -144,5 +144,5 @@ The page needs `apps/web/public/seed.json`, the two sample sessions; without it,
 1. Open the page, pass the bot check, and choose **Start with voice**. Allow the microphone.
 2. Say: "Osmosis is water moving across a membrane toward the side with more solute." The line appears with the chip **Saved as a thought**. A growing note forms within about a minute.
 3. Say: "Moo, how does dilution connect to osmosis?" Moo answers on screen with note references, then speaks a summary.
-4. Say: "I don't get how to find V2 on this worksheet." Moo saves the doubt and offers to look. Say "yes". The worksheet drawer opens, and the answer quotes 0.50 mol/L.
+4. Say: "I'm stuck on trial B on this worksheet. I don't get how to use c1, V1 and c2 to find the final volume." Moo saves the doubt and offers to look. Say "yes". The worksheet drawer opens, and the answer uses trial B's values (1.20 mol/L, 25.0 mL, 0.50 mol/L) to reach V2 = 60.0 mL. Screen reading releases a value only when the doubt names its row and column, so keep "trial B", "c1", "V1" and "c2" in the sentence.
 5. Press **Stop speech** while Moo talks; it stops at once. Refresh; the sample notes are back, and your new lines are gone.

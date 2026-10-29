@@ -32,7 +32,7 @@ from moolai_backend.settings import Settings
 NOW = datetime(2026, 10, 29, 12, 30, tzinfo=timezone.utc).timestamp()
 DAY = utc_day(NOW)
 FIXTURES = Path(__file__).resolve().parents[2] / 'experiments' / 'fixtures' / 'full-workflow-ocr'
-WORKSHEET = (FIXTURES / '02-math-table.png').read_bytes()
+WORKSHEET = (Path(__file__).resolve().parents[2] / 'apps' / 'web' / 'public' / 'sample-worksheet.png').read_bytes()
 FOREIGN = (FIXTURES / '01-clear-text.png').read_bytes()
 SECRET = 'demo-session-secret-' + 'x' * 44
 TURNSTILE_SECRET = '0x4AAAAAAA-turnstile-secret-value'
@@ -1020,7 +1020,7 @@ def test_url_keys_ignore_scheme_and_host_case_default_ports_and_fragments():
     assert len(key) == 16 and 'example' not in key
 
 
-def test_the_worksheet_pin_is_the_sample_fixture():
+def test_the_worksheet_pin_is_the_web_demos_sample_worksheet():
     assert hashlib.sha256(WORKSHEET).hexdigest() == WORKSHEET_SHA256
 
 

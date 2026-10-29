@@ -81,7 +81,7 @@ CEILINGS_USD = {'total': 60, 'day': 10, 'session': 3}
 DEFAULT_CAPS_USD = {'total': '45', 'day': '6', 'session': '1.5'}
 JEV_RANGE_MICRO = (1_000, 50_000)
 DEFAULT_END_AT = '2026-12-16T00:00:00Z'
-WORKSHEET_SHA256 = '9e7b162771b014554d4d3ad1ab22616371eec73f987a45770505ffc63ae03544'
+WORKSHEET_SHA256 = 'b55175bed635f56ac200e1a53d9654a74a03874e7f5fddb88e0ec8a2a6927311'
 TURNSTILE_ACTION = 'moolai-demo'
 SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify'
 TURNSTILE_TIMEOUT = httpx.Timeout(8.0, connect=3.0)

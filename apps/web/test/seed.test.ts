@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { Agent } from "../../../packages/agent/src/index.js";
 import { FixtureProviders } from "../../../packages/agent-host/src/providers.js";
 import { MemoryBrain } from "../../../packages/brain/src/memory.js";
-import type { BrainRecord, Segment, ThoughtInput, ThoughtResult } from "../../../packages/contracts/src/index.js";
+import type { BrainRecord, RouteInput, Segment, ThoughtInput, ThoughtResult } from "../../../packages/contracts/src/index.js";
 import { checkSeed, decodeBase64, encodeBase64, importSeed, parseSeed, seedOffsetMs, shiftIsoTimestamps } from "../src/seed.js";
 import type { SeedFile } from "../src/types.js";
 import { callTotal, countCalls, generateSeed, shiftBefore } from "../scripts/generate-seed.js";
@@ -216,16 +216,24 @@ test("the committed seed loads, passes checkSeed, and a fresh Agent on it makes 
     assert.equal((await brain.listRecords()).length, shifted.records.length + 1, "the seed plus the visitor's new session");
   });
 
+/** The stock fixtures count only "don't understand why" as a stated doubt; Jev also reads the seed's "I'm stuck on trial B…" as one. */
+class SeedFixtures extends FixtureProviders {
+  override async route(input: RouteInput) {
+    const decision = await super.route(input);
+    return decision.route === "dictate" && /^I[’']m stuck on\b/i.test(input.text) ? { ...decision, doubt: 1 } : decision;
+  }
+}
+
 /** Fixtures that file each spoken line as its own settled note, so both sessions grow the two notes a hub needs. */
-class LineFixtures extends FixtureProviders {
+class LineFixtures extends SeedFixtures {
   override async consolidate(input: ThoughtInput): Promise<ThoughtResult> {
     return { remainder: [], groups: input.segments.map(item => ({ title: item.text.trim().slice(0, 60) || "Saved thought", summary: item.text.trim() || "Saved thought",
       spans: [{ segmentId: item.id, revision: item.revision, start: 0, end: item.text.length }] })) };
   }
 }
 
-// The stock fixtures grow one note per session, too few for a hub; LineFixtures make a seed checkSeed passes.
-for (const [name, fixtures, problems] of [["FixtureProviders", FixtureProviders, ["The Brain shows 0 session hubs, not 2"]], ["LineFixtures", LineFixtures, []]] as const) {
+// Settling between topics gives each session at least two notes, so even the stock fixtures make a seed checkSeed passes.
+for (const [name, fixtures, problems] of [["SeedFixtures", SeedFixtures, []], ["LineFixtures", LineFixtures, []]] as const) {
   test(`a seed generated with ${name} loads, and a fresh Agent on it makes no provider call`, async () => {
     const worksheet = new Uint8Array(await readFile(new URL("../public/sample-worksheet.png", import.meta.url)));
     const generated = await generateSeed({ providers: new fixtures(), worksheet, limit: Infinity, pauseMs: 5 });
